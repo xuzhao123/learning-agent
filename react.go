@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 )
 
 type Message struct {
@@ -27,23 +28,27 @@ type ToolCall struct {
 }
 
 type Observation struct {
-	ID     string `json:"id"`
-	Tool   string `json:"tool"`
-	Result any    `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
+	ID       string `json:"id"`
+	Tool     string `json:"tool"`
+	Result   any    `json:"result,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Attempts int    `json:"attempts"`
 }
 
 // 主线：请求模型 → 读取 tool_calls → 执行工具 → 保存结果 → 下一轮。
-func runAgent(ctx context.Context, config modelConfig, question string, parallel int) error {
+func runAgent(ctx context.Context, config modelConfig, question string, parallel, maxSteps, retries int) error {
 	history := []Message{{Role: "system", Content: systemPrompt()}, {Role: "user", Content: question}}
-	for step := 1; step <= 8; step++ {
+	summary := []string{}
+	lastAction, repeated := "", 0
+	fmt.Printf("Limits: max_steps=%d retries=%d repeat_limit=3 parallel=%d lab_tools=%t\n", maxSteps, retries, parallel, labToolsEnabled)
+	for step := 1; step <= maxSteps; step++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return stopRun("cancelled", err.Error(), summary)
 		}
 		fmt.Printf("\nRound %d\n", step)
 		reply, err := callModel(ctx, config, history)
 		if err != nil {
-			return err
+			return stopRun("model_error", err.Error(), summary)
 		}
 		history = append(history, reply)
 		if reply.Content != "" {
@@ -54,34 +59,54 @@ func runAgent(ctx context.Context, config modelConfig, question string, parallel
 			return nil
 		}
 		if len(reply.ToolCalls) > 16 {
-			return errors.New("每轮最多执行16项工具调用")
+			return stopRun("invalid_tool_calls", "每轮最多执行16项工具调用", summary)
 		}
 		ids := map[string]bool{}
 		for _, call := range reply.ToolCalls {
 			if call.ID == "" || ids[call.ID] || call.Type != "function" || call.Function.Name == "" {
-				return errors.New("模型返回了无效的工具调用")
+				return stopRun("invalid_tool_calls", "模型返回了无效的工具调用", summary)
 			}
 			ids[call.ID] = true
+			key := actionKey(call)
+			if key == lastAction {
+				repeated++
+			} else {
+				lastAction, repeated = key, 1
+			}
+			// 按模型顺序计数，工具内部重试不算新动作；第三次请求到来就拦下整批，避免继续副作用。
+			if repeated >= 3 {
+				return stopRun("repeated_action", "疑似死循环：连续3次相同工具与参数，已拦下本轮批次："+key, summary)
+			}
+		}
+		for _, call := range reply.ToolCalls {
 			fmt.Printf("Action [%s]: %s\nAction Input: %s\n", call.ID, call.Function.Name, call.Function.Arguments)
 		}
-		observations := executeBatch(ctx, reply.ToolCalls, parallel)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		for _, observation := range observations {
+		observations := executeBatch(ctx, reply.ToolCalls, parallel, retries)
+		for i, observation := range observations {
 			data, err := json.Marshal(observation)
 			if err != nil {
-				return err
+				return stopRun("encoding_error", err.Error(), summary)
+			}
+			if observation.Attempts > 0 {
+				status := "成功"
+				if observation.Error != "" {
+					status = "失败：" + observation.Error
+				}
+				summary = append(summary, fmt.Sprintf("- 第%d轮 %s(%s)，尝试%d次，%s", step, observation.Tool, reply.ToolCalls[i].Function.Arguments, observation.Attempts, status))
 			}
 			fmt.Printf("Observation [%s]: %s\n", observation.ID, data)
 			history = append(history, Message{Role: "tool", ToolCallID: observation.ID, Content: string(data)})
 		}
+		if err := ctx.Err(); err != nil {
+			return stopRun("cancelled", err.Error(), summary)
+		}
 	}
-	return errors.New("达到 8 轮上限，任务未完成")
+	// 预算包含最终回答轮；耗尽后用本地记录生成摘要，不再请求模型，以免突破预算。
+	return stopRun("max_steps", fmt.Sprintf("已达到 %d 轮模型请求上限", maxSteps), summary)
 }
 
 // 每个 goroutine 只写自己的结果；历史由主循环在整批结束后追加。
-func executeBatch(ctx context.Context, calls []ToolCall, parallel int) []Observation {
+func executeBatch(ctx context.Context, calls []ToolCall, parallel, retries int) []Observation {
 	results := make([]Observation, len(calls))
 	slots := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
@@ -93,12 +118,7 @@ func executeBatch(ctx context.Context, calls []ToolCall, parallel int) []Observa
 			select {
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
-				value, err := runTool(ctx, call)
-				if err != nil {
-					result.Error = err.Error()
-				} else {
-					result.Result = value
-				}
+				result = runWithRetry(ctx, call, retries)
 			case <-ctx.Done():
 				result.Error = ctx.Err().Error()
 			}
@@ -107,6 +127,61 @@ func executeBatch(ctx context.Context, calls []ToolCall, parallel int) []Observa
 	}
 	wg.Wait()
 	return results
+}
+
+// 一个逻辑调用最多尝试 1+k 次；课程统一重试工具错误，生产中应区分瞬时错误、参数错误与幂等性。
+func runWithRetry(ctx context.Context, call ToolCall, retries int) Observation {
+	result := Observation{ID: call.ID, Tool: call.Function.Name}
+	for attempt := 0; attempt <= retries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			result.Error = err.Error()
+			return result
+		}
+		result.Attempts++
+		value, err := runTool(ctx, call)
+		if err == nil {
+			result.Result, result.Error = value, ""
+			return result
+		}
+		result.Error = err.Error()
+		if ctx.Err() != nil || attempt == retries {
+			break
+		}
+		// 从200ms开始翻倍：学习时能看清退避，又不会等待太久；取消可打断等待。
+		delay := 200 * time.Millisecond * time.Duration(1<<attempt)
+		fmt.Printf("Retry [%s]: attempt %d/%d failed: %s; wait %s\n", call.ID, result.Attempts, retries+1, err, delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			result.Error = ctx.Err().Error()
+			return result
+		}
+	}
+	fmt.Printf("Retry exhausted [%s]: attempts=%d error=%s\n", call.ID, result.Attempts, result.Error)
+	return result // 耗尽后仍返回 Observation，由主循环回填，让模型决定修正、换工具或结束。
+}
+
+// 忽略 JSON 空白与键顺序，不忽略参数值；UseNumber 避免大整数被 float64 舍入后误判相同。
+func actionKey(call ToolCall) string {
+	arguments := call.Function.Arguments
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(arguments))
+	decoder.UseNumber()
+	if json.Valid([]byte(arguments)) && decoder.Decode(&value) == nil {
+		normalized, _ := json.Marshal(value)
+		arguments = string(normalized)
+	}
+	return call.Function.Name + ":" + arguments
+}
+
+func stopRun(reason, detail string, summary []string) error {
+	fmt.Println("Termination:", reason)
+	if len(summary) == 0 {
+		summary = []string{"- 尚未执行工具"}
+	}
+	return fmt.Errorf("未完成：%s\n已执行步骤摘要：\n%s", detail, strings.Join(summary, "\n"))
 }
 
 func systemPrompt() string {

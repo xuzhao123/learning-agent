@@ -21,6 +21,13 @@ var toolDefinitions = []map[string]any{
 	{"name": "search_notes", "description": "在项目实际学习笔记中检索关键词，返回最多5条匹配内容及来源。", "parameters": parameters("query")},
 }
 
+// 仅在显式 -lab-tools 时注册；故障行为是 Day 2 实验，模型调用仍由真实 API 生成。
+var labToolsEnabled bool
+var labToolDefinitions = []map[string]any{
+	{"name": "always_fail", "description": "Day 2 故障实验：执行一次故障操作，可能返回错误，无需参数。", "parameters": parameters("")},
+	{"name": "check_task_status", "description": "查询任务状态；pending 表示还未完成，需要使用相同 task_id 继续查询。", "parameters": parameters("task_id")},
+}
+
 func parameters(name string) map[string]any {
 	properties := map[string]any{}
 	required := []string{}
@@ -31,7 +38,13 @@ func parameters(name string) map[string]any {
 	return map[string]any{"type": "object", "properties": properties, "required": required}
 }
 
-func runTool(ctx context.Context, call ToolCall) (any, error) {
+func runTool(ctx context.Context, call ToolCall) (result any, err error) {
+	// Go 的 panic 也在单次工具执行边界转为 error，交给重试与 Observation 处理。
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result, err = nil, fmt.Errorf("工具 panic：%v", recovered)
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -39,6 +52,21 @@ func runTool(ctx context.Context, call ToolCall) (any, error) {
 		return nil, errors.New("工具参数需要是有效 JSON 对象")
 	}
 	switch call.Function.Name {
+	case "always_fail", "check_task_status":
+		if !labToolsEnabled {
+			return nil, errors.New("故障实验工具未启用")
+		}
+		if call.Function.Name == "always_fail" {
+			panic("Day 2 故障注入：工具始终失败")
+		}
+		var args struct {
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil || strings.TrimSpace(args.TaskID) == "" {
+			return nil, errors.New("task_id 需要是非空字符串")
+		}
+		// 捣乱工具故意永远 pending，用来观察真实模型重复调用时，循环是否强制熔断。
+		return map[string]string{"task_id": args.TaskID, "status": "pending", "message": "尚未完成，请用相同 task_id 再次查询。"}, nil
 	case "calculator":
 		var args struct {
 			Expression string `json:"expression"`

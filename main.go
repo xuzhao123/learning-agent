@@ -23,9 +23,18 @@ func main() {
 func run() error {
 	question := flag.String("question", "", "要交给 agent 的问题")
 	parallel := flag.Int("parallel", 4, "同时执行的工具数，1 到 16")
+	maxSteps := flag.Int("max-steps", 10, "最多请求模型的轮数，包含最终回答轮")
+	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
+	flag.BoolVar(&labToolsEnabled, "lab-tools", false, "启用 Day 2 故障实验工具")
 	flag.Parse()
 	if flag.NArg() != 0 || *parallel < 1 || *parallel > 16 {
 		return errors.New("使用 -question 提供问题，-parallel 范围为 1 到 16")
+	}
+	if *maxSteps < 1 || *retries < 0 || *retries > 5 {
+		return errors.New("max-steps 至少为1，retries 范围为0到5")
+	}
+	if labToolsEnabled {
+		toolDefinitions = append(toolDefinitions, labToolDefinitions...)
 	}
 	if strings.TrimSpace(*question) == "" {
 		fmt.Print("请输入任务： ")
@@ -41,7 +50,7 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return runAgent(ctx, config, *question, *parallel)
+	return runAgent(ctx, config, *question, *parallel, *maxSteps, *retries)
 }
 
 // 环境变量优先，其次是本地 .env，最后是地址与模型的默认值。

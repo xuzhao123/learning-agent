@@ -1,6 +1,6 @@
-# 学习 agent：Day 1
+# 学习 agent：Day 1 → Day 2
 
-从 [Day 1 学习笔记](docs/day-01/day-01-notes.md) 开始，理解工具定义、消息历史、循环和并行执行。
+每天只读一篇笔记：先学 [Day 1 工具调用与循环](docs/day-01/day-01-notes.md)，再学 [Day 2 循环护栏](docs/day-02/day-02-notes.md)。每篇包含原理、例子、关键代码和自己动手的练习。
 
 用 Go 手写最小 ReAct loop，重点是看懂流程：
 
@@ -29,8 +29,11 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | --- | --- | --- |
 | `-question` | 交互输入 | 交给模型的任务 |
 | `-parallel` | 4 | 工具执行并发，1到16 |
+| `-max-steps` | 10 | 模型轮数预算，包含最终回答轮 |
+| `-retries` | 2 | 工具额外重试次数，0到5 |
+| `-lab-tools` | false | 显式开启 Day 2 故障工具 |
 
-循环最多8轮。工具结果作为 tool 消息回填；模型没有工具调用且有回答时结束。
+工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。
 
 ## 四个源码文件
 
@@ -41,7 +44,7 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | [react.go](react.go) | 原生调用结构、并行调度、tool 结果回流、终止 |
 | [tools.go](tools.go) | 工具 Schema、实际执行、实际笔记检索 |
 
-三个工具是 calculator、get_current_datetime、search_notes。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
+默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail 和 check_task_status 两个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
 
 
 ## 配置与学习
