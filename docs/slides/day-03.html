@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Day 3 上下文管理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700;900&display=swap">
+<link rel="stylesheet" href="deck.css">
+<style>
+  .seg { position: absolute; height: 40px; border-radius: 6px; display: grid; place-items: center; font: 600 13px/1 var(--font-mono); color: var(--stage); white-space: nowrap; overflow: hidden; }
+  .s-sys { background: var(--muted); }
+  .s-user { background: var(--user); }
+  .s-asst { background: var(--model); }
+  .s-tool { background: var(--go); }
+  .s-sum { background: var(--warn); }
+  .s-txt { background: var(--err); }
+  .s-ghost { background: none; border: 2px dashed var(--line); color: var(--muted); }
+  .cache { position: absolute; height: 12px; border-radius: 4px; background: var(--go-soft); border: 2px solid var(--go); }
+  .vline { position: absolute; width: 0; border-left: 2px dashed; }
+  .group { position: absolute; top: 0; height: 64px; border-radius: 8px; border: 2px solid var(--line); background: var(--card); display: grid; place-items: center; font-size: 15px; font-weight: 600; text-align: center; line-height: 1.25; }
+  /* Codex 动画：复用逐步播放器，消息的移动、划除和高亮都由 data-step / data-mark 驱动。 */
+  .cx-panel { position: absolute; border: 1.5px solid var(--line); border-radius: 14px; background: var(--card); padding: 16px; }
+  .cx-panel h3 { font-size: 21px; margin-bottom: 12px; }
+  .cx-panel .msg { font-size: 16px; min-height: 38px; }
+  .cx-panel .msg .r { width: 64px; font-size: 12px; }
+  .cx-note { font-size: 16px; line-height: 1.55; color: var(--muted); }
+  .cx-source { position: absolute; left: 0; bottom: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+  .cx-source a { color: inherit; text-underline-offset: 3px; }
+  .cx-pill { display: inline-block; padding: 5px 10px; border-radius: 20px; font-size: 14px; font-weight: 700; background: var(--go-soft); color: var(--go); }
+  .cx-cut.marked { color: var(--err); background: var(--err-soft); border-color: var(--err); text-decoration: line-through; opacity: .45; }
+  .cx-meter { position: relative; height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); overflow: hidden; }
+  .cx-meter > span { display: block; height: 100%; border-radius: 5px; background: var(--user); }
+  .cx-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .cx-key { color: var(--user); font-weight: 700; }
+  .cx-encrypted { background: var(--model-soft); border: 2px dashed var(--model); color: var(--model); border-radius: 10px; padding: 16px; font: 600 17px/1.6 var(--font-mono); text-align: center; }
+  /* 一页一个问题；图表与解释分区，避免卡片遮挡曲线。 */
+  .hd { display: block; height: 80px; }
+  .hd .kicker { display: block; font-size: 13px; margin-bottom: 9px; }
+  .hd h2 { font-size: 34px; line-height: 1.2; }
+  .canvas { top: 136px; height: 454px; }
+  .says { top: 626px; }
+  .cx-source { bottom: -10px; }
+  .lesson-grid { display: grid; gap: 22px; align-content: start; }
+  .lesson-grid.three { grid-template-columns: repeat(3, 1fr); }
+  .lesson-grid.two { grid-template-columns: repeat(2, 1fr); }
+  .lesson-card { background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 23px; }
+  .lesson-card h3 { font-size: 23px; line-height: 1.4; margin: 15px 0 12px; }
+  .lesson-card p { font-size: 18px; line-height: 1.6; }
+  .lesson-card .footnote { font-size: 15px; color: var(--muted); margin-top: 18px; }
+  .lesson-key { font-size: 28px; font-weight: 700; line-height: 1.45; }
+  .component-bar { display: flex; gap: 5px; height: 62px; }
+  .component-bar > div { display: grid; place-items: center; border-radius: 7px; font-size: 17px; font-weight: 600; padding: 8px; text-align: center; }
+  .component-base { background: var(--code); color: var(--muted); border: 1px solid var(--line); }
+  .component-user { background: var(--user-soft); color: var(--user); border: 1px solid var(--user); }
+  .component-summary { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+  .lesson-callout { border-left: 4px solid var(--model); padding: 15px 20px; background: var(--model-soft); border-radius: 0 9px 9px 0; font-size: 19px; line-height: 1.6; }
+  .mini-blocks { display: flex; gap: 5px; margin: 22px 0; }
+  .mini-blocks span { flex: 1; padding: 12px 3px; border-radius: 5px; text-align: center; font-size: 16px; background: var(--code); color: var(--muted); }
+  .review-grid .lesson-card { padding: 17px 20px; min-height: 133px; }
+  .review-grid h3 { font-size: 20px; margin: 0 0 10px; }
+  .review-grid p { font-size: 16px; line-height: 1.5; }
+  .lesson-sources { font-size: 14px; color: var(--muted); line-height: 1.6; }
+  .lesson-sources a { color: var(--model); text-underline-offset: 3px; }
+</style>
+</head>
+<body>
+<div class="progress"></div>
+<main class="deck"><div class="stage">
+
+<!-- 01 学习路线 -->
+<section class="slide cover" data-title="学习路线">
+  <p class="day">DAY 03 · CONTEXT ENGINEERING</p>
+  <h1>让下一步<br>读到必要的信息</h1>
+  <p class="lead">从一份历史怎样变成下一次输入，理解截断、裁剪与压缩。再用 Codex 和 allo 的例子，看清原话与摘要各自负责什么。</p>
+  <div class="legend"><span class="tag t-user">01 基本概念</span><span class="tag t-model">02 Codex 动画</span><span class="tag t-warn">03 案例与代码现状</span></div>
+  <p class="muted small">→ 逐步播放 · ← 回看 · P 自动播放 · 目录跳页</p>
+</section>
+
+<!-- 02 三种材料 -->
+<section class="slide" data-title="三种材料，各有职责">
+  <header class="hd"><span class="kicker">01 · 基本概念</span><h2>保存过，不等于这次发给了模型</h2></header>
+  <div class="canvas">
+    <div class="lesson-grid three">
+      <div class="lesson-card" style="height:330px">
+        <span class="tag t-go">完整记录</span><h3>程序保留的原文</h3>
+        <p>用户输入、模型输出、工具结果。用于回看、恢复与排查。</p>
+        <p class="footnote">Codex 将记录写入 rollout。保存原文，不代表每次重发全部原文。</p>
+      </div>
+      <div class="lesson-card" data-step="1" data-fx="rise" style="height:330px;border-color:var(--user)">
+        <span class="tag t-user">活动上下文</span><h3>本次模型能读到的内容</h3>
+        <p>初始指令、保留原话、近期消息，以及已有的压缩产物。</p>
+        <p class="footnote">本项目中叫 View。模型只能基于本次实际收到的内容继续。</p>
+      </div>
+      <div class="lesson-card" data-step="2" data-fx="rise" style="height:330px;border-color:var(--warn)">
+        <span class="tag t-warn">临时摘要请求</span><h3>为压缩准备的一份副本</h3>
+        <p>复制待处理的历史，再追加摘要指令；必要时在副本上腾空间。</p>
+        <p class="footnote">这是 Codex 本地压缩中的材料，不是程序仅剩的唯一历史。</p>
+      </div>
+    </div>
+    <div class="lesson-callout abs" data-step="3" data-fx="rise" style="left:0;right:0;top:356px">问“这条消息还在吗”时，先确定：在原始记录、活动上下文，还是摘要请求副本里？</div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">记录是程序保存的材料；模型不会自动读取存档。</p>
+    <p class="say" data-step="1" data-until="1">某条原文没有放进本次输入，模型就不能直接使用它。</p>
+    <p class="say" data-step="2" data-until="2">临时请求可以裁剪，但要区分它和原会话历史。</p>
+    <p class="say" data-step="3">后面“副本删了姓名，原话仍能保留”的动画，就建立在这个区别上。</p>
+  </div>
+</section>
+
+<!-- 03 区分动作 -->
+<section class="slide" data-title="截断、裁剪和压缩">
+  <header class="hd"><span class="kicker">02 · 基本概念</span><h2>三种缩短输入的方法，损失发生在不同位置</h2></header>
+  <div class="canvas">
+    <div class="lesson-grid three">
+      <div class="lesson-card" style="height:340px">
+        <span class="tag t-go">截断一条内容</span><h3>保留头尾，省略中间</h3>
+        <div class="mini-blocks"><span style="background:var(--go-soft);color:var(--go)">开头</span><span data-mark="1" class="strike">中间</span><span style="background:var(--go-soft);color:var(--go)">结尾</span></div>
+        <p data-step="1">常用于很大的工具输出。标明省略范围，避免把片段当完整结果。</p>
+      </div>
+      <div class="lesson-card" style="height:340px">
+        <span class="tag t-err">裁剪消息</span><h3>一些条目不再发送</h3>
+        <div class="mini-blocks"><span data-mark="2" class="strike">旧消息</span><span>后续消息</span></div>
+        <p data-step="2">按规则删除条目。涉及工具时，调用和结果必须保持配对。</p>
+      </div>
+      <div class="lesson-card" style="height:340px">
+        <span class="tag t-warn">模型压缩</span><h3>把历史变成交接材料</h3>
+        <div class="mini-blocks"><span data-mark="3" class="dim">多条历史</span><span data-step="3" data-fx="pop" style="background:var(--warn-soft);color:var(--warn)">压缩产物</span></div>
+        <p data-step="3">保留进度、约束、关键数据和下一步，用更少内容继续任务。</p>
+      </div>
+    </div>
+    <p class="cx-source">这里讲动作含义。具体先做哪一步、处理哪些消息，取决于所选实现。</p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">它们都让输入变短，但不是同一种操作。</p>
+    <p class="say" data-step="1" data-until="1">截断发生在一条内容内部，例如保留工具输出的开头和结尾。</p>
+    <p class="say" data-step="2" data-until="2">裁剪直接移除条目；它不承诺把被移除的事实搬到别处。</p>
+    <p class="say" data-step="3">压缩让模型生成交接材料，但材料之外的细节仍可能丢失。</p>
+  </div>
+</section>
+
+<!-- 04 压后大小 -->
+<section class="slide" data-title="压到多小，由组成决定">
+  <header class="hd"><span class="kicker">03 · 核心结论</span><h2>压缩后的大小，由留下的内容决定</h2></header>
+  <div class="canvas">
+    <p class="lesson-key" style="max-width:1000px">目标是用精简的上下文继续任务，<br>同时保留必要状态和用户原话。</p>
+    <div class="component-bar abs" style="left:0;top:116px;width:1136px">
+      <div class="component-base" data-step="1" data-fx="fly" style="--fy:-22px;width:258px">稳定指令 / 工具定义</div>
+      <div class="component-user" data-step="2" data-fx="fly" style="--fy:-22px;width:410px">按预算保留的用户原话</div>
+      <div class="component-summary" data-step="3" data-fx="fly" style="--fy:-22px;width:300px">摘要 / compaction 条目</div>
+    </div>
+    <div class="lesson-grid two abs" style="left:0;right:0;top:214px">
+      <div class="lesson-card" data-step="3" data-fx="rise" style="height:164px"><h3 style="margin-top:0">多少原话，多少状态</h3><p>较长的用户要求、项目规则、未完成的工作，都会影响重建后的大小。</p></div>
+      <div class="lesson-card" data-step="4" data-fx="rise" style="height:164px;border-color:var(--warn)"><h3 style="margin-top:0">Codex 不设固定压后百分比</h3><p>不是压到某条目标线就停，也没有反复压到“绝对最小”的循环。</p></div>
+    </div>
+    <p class="cx-source">组成示意，块宽不代表真实 token 数。<a href="https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/compact.rs#L656" target="_blank" rel="noopener noreferrer">Codex 本地重建源码 ↗</a> · <a href="https://developers.openai.com/api/docs/guides/compaction" target="_blank" rel="noopener noreferrer">官方压缩说明 ↗</a></p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">“尽可能精简”包含一个前提：下一步仍有足够的信息继续工作。</p>
+    <p class="say" data-step="1" data-until="1">稳定指令和工具定义有固定开销；它们不会因为生成摘要就消失。</p>
+    <p class="say" data-step="2" data-until="2">用户原话有独立的保留预算。预算是上限，不要求一定用满。</p>
+    <p class="say" data-step="3" data-until="3">再加上压缩产物，才是压缩后真正要发送的上下文。</p>
+    <p class="say" data-step="4">判断压缩是否有用，要同时看任务能否继续、信息是否保留，以及省出了多少空间。</p>
+  </div>
+</section>
+
+<!-- 05 更正后的用量曲线 -->
+<section class="slide" data-title="锯齿的谷底，每次可以不同">
+  <header class="hd"><span class="kicker">04 · 用量变化</span><h2>上下文变短，但没有固定的谷底</h2></header>
+  <div class="canvas">
+    <svg class="wires" viewBox="0 0 1136 454" role="img" aria-label="用量示意：逐步增长，到阈值后压缩；两次压缩后的剩余量不同，没有固定目标百分比。">
+      <line x1="62" y1="42" x2="1098" y2="42" stroke="var(--err)" stroke-width="2" stroke-dasharray="8 7"/>
+      <line x1="62" y1="16" x2="62" y2="310" stroke="var(--line)" stroke-width="2"/>
+      <line x1="62" y1="310" x2="1098" y2="310" stroke="var(--line)" stroke-width="2"/>
+      <path data-step="1" data-fx="draw" pathLength="1" d="M62 281 L114 265 L180 232 L232 219 L294 160 L346 123 L396 38" stroke="var(--model)" stroke-width="4" fill="none"/>
+      <path data-step="2" data-fx="draw" pathLength="1" d="M396 38 V258" stroke="var(--warn)" stroke-width="4" fill="none"/>
+      <circle data-step="2" cx="396" cy="38" r="7" fill="var(--warn)"/>
+      <circle data-step="2" cx="396" cy="258" r="6" fill="var(--warn)"/>
+      <path data-step="3" data-fx="draw" pathLength="1" d="M396 258 L468 236 L542 177 L610 149 L672 96 L742 38" stroke="var(--model)" stroke-width="4" fill="none"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M742 38 V283" stroke="var(--warn)" stroke-width="4" fill="none"/>
+      <circle data-step="4" cx="742" cy="38" r="7" fill="var(--warn)"/>
+      <circle data-step="4" cx="742" cy="283" r="6" fill="var(--warn)"/>
+      <path data-step="5" data-fx="draw" pathLength="1" d="M742 283 L819 256 L880 239 L953 207 L1030 159 L1098 122" stroke="var(--model)" stroke-width="4" fill="none"/>
+      <text x="0" y="12" fill="var(--muted)" font-size="14">输入用量</text>
+      <text x="748" y="24" fill="var(--err)" font-size="15">触发阈值 · 由模型与配置决定</text>
+      <text data-step="2" x="414" y="276" fill="var(--warn)" font-size="15">第一次重建</text>
+      <text data-step="4" x="760" y="301" fill="var(--warn)" font-size="15">第二次重建：剩余量不同</text>
+      <text x="945" y="336" fill="var(--muted)" font-size="14">模型请求推进 →</text>
+    </svg>
+    <div class="lesson-grid two abs" style="left:62px;right:38px;top:354px;gap:20px">
+      <div class="lesson-card" data-step="2" data-fx="rise" style="padding:14px 18px"><p style="font-size:17px"><b>下降多少：</b>取决于稳定指令、保留原文和压缩产物的总量。</p></div>
+      <div class="lesson-card" data-step="4" data-fx="rise" style="padding:14px 18px;border-color:var(--warn)"><p style="font-size:17px"><b>下一段：</b>从新上下文继续追加，而非围绕固定目标线反复微调。</p></div>
+    </div>
+    <p class="cx-source">机制示意，不是实际 token 监控曲线；真实用量不保证每一步都单调增长。</p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">图里只保留触发阈值，去掉固定压后目标线。</p>
+    <p class="say" data-step="1" data-until="1">问题、回答和工具结果不断进入活动历史，用量通常逐步增加。</p>
+    <p class="say" data-step="2" data-until="2">第一次压缩后，剩下的是新上下文本身的大小。</p>
+    <p class="say" data-step="3" data-until="3">后续请求从这份新上下文继续，不需要每一步都重新摘要。</p>
+    <p class="say" data-step="4" data-until="4">第二次保留的内容不同，谷底也不同；没有固定比例要求。</p>
+    <p class="say" data-step="5">目标是为后续工作腾出空间，并让必要信息仍可使用。</p>
+  </div>
+</section>
+
+<!-- 06 缓存边界 -->
+<section class="slide" data-title="缓存看复用范围与实际 usage">
+  <header class="hd"><span class="kicker">05 · 请求成本</span><h2>共同前缀提供复用机会，命中要看实测</h2></header>
+  <div class="canvas">
+    <p class="colhead abs" style="left:0;top:0">普通请求 A</p>
+    <div class="component-bar abs" style="left:0;top:28px;width:840px;height:48px"><div class="component-base" style="width:200px">稳定指令与定义</div><div class="component-user" style="width:480px">已有历史</div></div>
+    <p class="colhead abs" data-step="1" style="left:0;top:102px">普通请求 B：末尾追加</p>
+    <div class="component-bar abs" data-step="1" style="left:0;top:130px;width:1136px;height:48px"><div class="component-base" style="width:200px">稳定指令与定义</div><div class="component-user" style="width:480px">相同的已有历史</div><div class="component-user" data-fx="fly" data-step="1" style="--fx:70px;width:215px">新增消息</div></div>
+    <div class="cache" data-step="2" data-fx="grow" style="left:0;top:189px;width:685px"></div>
+    <div class="lbl go" data-step="2" style="left:220px;top:209px">这一段具备前缀复用条件</div>
+    <p class="colhead abs" data-step="3" style="left:0;top:261px">压缩后请求：重新组装历史</p>
+    <div class="component-bar abs" data-step="3" style="left:0;top:289px;width:1136px;height:48px"><div class="component-base" style="width:200px">稳定指令与定义</div><div class="component-user" style="width:250px">保留原话</div><div class="component-summary" style="width:240px">压缩产物</div></div>
+    <div class="lesson-callout abs" data-step="4" data-fx="rise" style="left:0;right:0;top:372px;font-size:18px">历史改写可能使变更点之后的缓存失效；未变的前缀仍可能复用。以 <b>cached_tokens</b> 等实际 usage 为准。</div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">缓存与信息保留是两个问题：信息仍在输入里，也不代表这次会命中缓存。</p>
+    <p class="say" data-step="1" data-until="1">普通请求尽量只追加，可以保持前面的内容相同。</p>
+    <p class="say" data-step="2" data-until="2">共同前缀只是条件；模型、请求配置和服务端策略也会影响缓存。</p>
+    <p class="say" data-step="3" data-until="3">压缩会重建历史，复用范围可能随之改变。</p>
+    <p class="say" data-step="4">因此不能说“每次都命中”，也不能说“压缩后所有缓存必然失效”。</p>
+  </div>
+</section>
+<section class="slide" data-title="Codex ① 触发与分流">
+  <header class="hd"><span class="kicker">CODEX 01 · 入口</span><h2>到达阈值，选择压缩路径</h2></header>
+  <div class="canvas">
+    <div class="cx-panel" style="left:0;top:0;width:1136px;height:112px">
+      <p class="colhead">活动上下文：上次真实 usage + 新增条目估算</p>
+      <div class="cx-meter" style="width:840px;margin-top:14px">
+        <span data-step="0" data-until="0" style="width:55%"></span>
+        <span data-step="1" data-fx="grow" style="position:absolute;inset:0;width:90%;background:var(--warn)"></span>
+      </div>
+      <span class="cx-pill abs" data-step="1" style="right:16px;top:45px;background:var(--warn-soft);color:var(--warn)">达到自动阈值</span>
+      <p class="cx-note" style="margin-top:8px">示意：普通 total 模式，阈值最多为窗口的 90%；模型配置可以更低。</p>
+    </div>
+    <svg class="wires" viewBox="0 0 1136 454" aria-hidden="true">
+      <path data-step="2" data-fx="draw" pathLength="1" d="M568 112 V147 H266 V181 M568 147 H870 V181" fill="none" stroke="var(--muted)" stroke-width="3"/>
+    </svg>
+    <div class="cx-panel" data-step="2" data-fx="rise" style="left:0;top:180px;width:532px;height:230px;border-color:var(--user)">
+      <span class="tag t-user">不支持远端压缩</span>
+      <h3 style="margin-top:14px">本地路径：客户端请模型写摘要</h3>
+      <p class="cx-note">一份临时摘要请求 + 一条独立的原话保留路径。</p>
+      <div class="msg sum" data-step="3" data-fx="fly" style="--fy:24px;margin-top:16px"><span class="r">产物</span>用户原话 ≤ 20k + 文本摘要</div>
+    </div>
+    <div class="cx-panel" data-step="2" data-fx="rise" style="left:604px;top:180px;width:532px;height:230px;border-color:var(--model)">
+      <span class="tag t-model">支持 remote_compaction: V2</span>
+      <h3 style="margin-top:14px">远端路径：服务端生成压缩条目</h3>
+      <p class="cx-note">历史附加 CompactionTrigger，由服务端处理。</p>
+      <div class="msg asst" data-step="3" data-fx="fly" style="--fy:24px;margin-top:16px"><span class="r">产物</span>保留消息 ≤ 64k + 加密条目</div>
+    </div>
+    <p class="cx-source">核对版本：2026-10-04 · afb436d · 本节展示两条摘要路径，不含实验性 TokenBudget。<a href="https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/session/turn.rs#L1482" target="_blank" rel="noopener noreferrer">查看分流源码 ↗</a></p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">下面进入 Codex 源码中的两条压缩路径；它们生成的压缩产物不同。</p>
+    <p class="say" data-step="1" data-until="1">达到阈值后，暂停普通推理，先准备更短的上下文。</p>
+    <p class="say" data-step="2" data-until="2">两条路径按能力选择；“本地”仍然要调用模型 API。</p>
+    <p class="say" data-step="3">接下来先看本地路径：最关键的是，摘要和原话分别准备。</p>
+  </div>
+</section>
+
+<section class="slide" data-title="Codex ② 只裁剪摘要请求副本">
+  <header class="hd"><span class="kicker">CODEX 02 · 本地</span><h2>超窗时，删的是临时请求里的旧消息</h2></header>
+  <div class="canvas">
+    <div class="cx-panel" style="left:0;top:0;width:510px;height:376px">
+      <h3>会话历史 <span class="cx-pill" style="float:right">本次裁剪不改它</span></h3>
+      <div class="stack">
+        <div class="msg user"><span class="r">user</span>hello</div>
+        <div class="msg asst"><span class="r">assistant</span>你好，有什么可以帮你？</div>
+        <div class="msg user hl" data-mark="5"><span class="r">user</span><b class="cx-key">我叫 allo</b></div>
+        <div class="msg asst"><span class="r">assistant</span>你好，allo</div>
+        <div class="msg user"><span class="r">user</span>后续大量任务材料……</div>
+        <div class="msg asst"><span class="r">assistant</span>当前工作与执行进度……</div>
+      </div>
+      <p class="cx-note" style="margin-top:12px">这里是本次压缩前的活动历史。</p>
+    </div>
+    <div class="cx-panel" data-step="1" data-fx="fly" style="--fx:-626px;left:626px;top:0;width:510px;height:376px;border-style:dashed;border-color:var(--warn)">
+      <h3>摘要请求副本 <span class="tag t-warn" style="float:right">临时材料</span></h3>
+      <div class="stack">
+        <div class="msg user cx-cut" data-mark="3"><span class="r">user</span>hello</div>
+        <div class="msg asst cx-cut" data-mark="4"><span class="r">assistant</span>你好，有什么可以帮你？</div>
+        <div class="msg user cx-cut" data-mark="5"><span class="r">user</span>我叫 allo</div>
+        <div class="msg asst cx-cut" data-mark="6"><span class="r">assistant</span>你好，allo</div>
+        <div class="msg user"><span class="r">user</span>后续大量任务材料……</div>
+        <div class="msg asst"><span class="r">assistant</span>当前工作与执行进度……</div>
+        <div class="msg sum"><span class="r">追加</span>请写一份交接摘要</div>
+      </div>
+    </div>
+    <div class="abs cx-pill" data-step="1" data-until="1" style="left:533px;top:140px;background:var(--warn-soft);color:var(--warn)">复制 →</div>
+    <div class="msg err abs" data-step="2" data-until="2" data-fx="pop" style="left:590px;top:122px;width:546px;z-index:2"><span class="r">服务端</span>ContextWindowExceeded：摘要请求超窗</div>
+    <div class="card abs" data-step="3" style="left:0;top:393px;width:1136px;padding:12px 18px;border-color:var(--warn)">
+      <p class="small"><b>超窗分支示意：</b>从最旧条目开始删，每次重试；划掉的内容不再发送。若条目参与工具调用，配对结果一起处理。</p>
+    </div>
+    <p class="cx-source">删到哪一条由实际超窗反馈决定；本页不是 allo 对话的 Codex 实测记录。<a href="https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/compact.rs#L262" target="_blank" rel="noopener noreferrer">compact.rs ↗</a></p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">这页专门演示摘要请求超窗的情况。左边的原会话历史一直保留。</p>
+    <p class="say" data-step="1" data-until="1">先复制历史，再把摘要指令追加到副本末尾，交给模型。</p>
+    <p class="say" data-step="2" data-until="2">只有服务端明确报超窗，本地压缩才进入删除旧条目的重试分支。</p>
+    <p class="say" data-step="3" data-until="3">先删最旧的一条 hello，再请求摘要。</p>
+    <p class="say" data-step="4" data-until="4">如果仍超窗，再删下一条问候回答。普通一问一答不是绑定的一组。</p>
+    <p class="say" data-step="5" data-until="5">若仍需删除，“我叫 allo”也会从副本消失；左边的原句仍在。</p>
+    <p class="say" data-step="6">这个示意分支里，两句姓名都已从摘要请求删除。下一页看独立的原话保留路径。</p>
+  </div>
+</section>
+
+<section class="slide" data-title="Codex ③ 独立保留原话，再重建">
+  <header class="hd"><span class="kicker">CODEX 03 · 重建</span><h2>原话从会话历史取，摘要走另一条路</h2></header>
+  <div class="canvas">
+    <svg class="wires" viewBox="0 0 1136 454" aria-hidden="true">
+      <path data-step="1" data-fx="draw" pathLength="1" d="M324 155 H398" fill="none" stroke="var(--user)" stroke-width="3"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M720 153 H800" fill="none" stroke="var(--user)" stroke-width="3"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M720 361 H800" fill="none" stroke="var(--warn)" stroke-width="3"/>
+    </svg>
+    <div class="cx-panel" style="left:0;top:0;width:324px;height:384px">
+      <h3>① 原会话历史</h3>
+      <div class="stack">
+        <div class="msg user"><span class="r">user</span>hello</div>
+        <div class="msg asst dim" data-mark="1"><span class="r">assistant</span>你好，有什么可以帮你？</div>
+        <div class="msg user hl" data-mark="1"><span class="r">user</span><b class="cx-key">我叫 allo</b></div>
+        <div class="msg asst dim" data-mark="1"><span class="r">assistant</span>你好，allo</div>
+        <div class="msg user"><span class="r">user</span>后续任务材料……</div>
+        <div class="msg asst dim" data-mark="1"><span class="r">assistant</span>任务执行进度……</div>
+      </div>
+      <p class="cx-note" style="margin-top:12px">重新取历史，不读取刚裁过的副本。</p>
+    </div>
+    <div class="cx-panel" data-step="1" data-fx="fly" style="--fx:-398px;left:398px;top:0;width:322px;height:260px;border-color:var(--user)">
+      <h3>② 单独保留 user</h3>
+      <div class="stack">
+        <div class="msg user"><span class="r">user</span>hello</div>
+        <div class="msg user"><span class="r">user</span><b class="cx-key">我叫 allo</b></div>
+        <div class="msg user"><span class="r">user</span>后续任务材料……</div>
+      </div>
+      <p class="cx-note" data-step="2" style="margin-top:12px">从新往旧收集，最多 <b class="cx-key">20,000 token</b>；按时间顺序放回。</p>
+    </div>
+    <div class="cx-panel" data-step="3" data-fx="rise" style="left:398px;top:288px;width:322px;height:128px;border-color:var(--warn)">
+      <h3 style="color:var(--warn)">③ 模型的交接摘要</h3>
+      <p class="cx-note">进展、决定、约束、下一步。<br>可能不再包含姓名。</p>
+    </div>
+    <div class="cx-panel" style="left:800px;top:0;width:336px;height:416px">
+      <h3>④ 新活动历史</h3>
+      <div class="msg sys" data-step="5" data-fx="fly" style="--fy:-35px;min-height:64px;white-space:normal"><span class="r">初始上下文</span>系统指令、项目规则、环境</div>
+      <div class="stack" data-step="4" data-fx="fly" style="--fx:-402px;margin-top:16px">
+        <div class="msg user"><span class="r">user</span>hello</div>
+        <div class="msg user"><span class="r">user</span><b class="cx-key">我叫 allo</b></div>
+        <div class="msg user"><span class="r">user</span>后续任务材料……</div>
+      </div>
+      <div class="msg sum" data-step="4" data-fx="fly" style="--fx:-402px;--fy:30px;margin-top:18px;min-height:76px;white-space:normal"><span class="r">摘要</span>历史交接材料，继续工作</div>
+    </div>
+    <p class="cx-source">按组成展示；初始上下文的实际插入位置随压缩阶段变化。<a href="https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/compact.rs#L349" target="_blank" rel="noopener noreferrer">原话来源与重建源码 ↗</a></p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">摘要生成以后，Codex 会重新读取原会话历史。</p>
+    <p class="say" data-step="1" data-until="1">挑出用户原话。它们不用经过模型改写，也不受刚才副本裁剪的直接影响。</p>
+    <p class="say" data-step="2" data-until="2">原话有独立的 20k 预算；到边界时截断，不能保证无限保留。</p>
+    <p class="say" data-step="3" data-until="3">摘要负责承接其余进展。就算摘要没写姓名，原句仍可能留下。</p>
+    <p class="say" data-step="4" data-until="4">把保留的原话和交接摘要合并，替换活动历史。</p>
+    <p class="say" data-step="5">稳定指令从来源重新注入。新请求仍可直接读到“我叫 allo”。</p>
+  </div>
+</section>
+
+<section class="slide" data-title="Codex ④ 远端加密压缩">
+  <header class="hd"><span class="kicker">CODEX 04 · 远端</span><h2>远端 v2：保留原文 + 加密压缩条目</h2></header>
+  <div class="canvas">
+    <svg class="wires" viewBox="0 0 1136 454" aria-hidden="true">
+      <path data-step="2" data-fx="draw" pathLength="1" d="M330 168 H414" fill="none" stroke="var(--warn)" stroke-width="3"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M684 200 H782" fill="none" stroke="var(--model)" stroke-width="3"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M166 345 V421 H748 V136 H782" fill="none" stroke="var(--user)" stroke-width="3"/>
+    </svg>
+    <div class="cx-panel" style="left:0;top:0;width:330px;height:345px">
+      <h3>① 压缩请求</h3>
+      <div class="stack">
+        <div class="msg user"><span class="r">user</span>我叫 allo / 用户任务……</div>
+        <div class="msg asst"><span class="r">assistant</span>推理、回答、工具调用</div>
+        <div class="msg tool" style="height:86px;position:relative;white-space:normal">
+          <span class="r">tool</span>
+          <span data-step="0" data-until="0">末尾刚返回的大工具结果……</span>
+          <span data-step="1" class="abs" style="left:92px;right:10px;color:var(--warn)">[输出超出可用上下文，已截断]</span>
+        </div>
+        <div class="msg sum" data-step="2" data-fx="fly" style="--fy:25px;white-space:normal"><span class="r">追加</span>CompactionTrigger</div>
+      </div>
+      <p class="cx-note" data-step="1" style="margin-top:12px;font-size:14px">若估算超窗，只从末尾连续工具输出腾空间；遇非工具输出就停。</p>
+    </div>
+    <div class="cx-panel" data-step="2" data-fx="pop" style="left:414px;top:60px;width:270px;height:270px;border-color:var(--model)">
+      <h3>② OpenAI 服务端</h3>
+      <p class="cx-note">模型原生压缩</p>
+      <div class="cx-encrypted" data-step="3" data-fx="pop" style="margin-top:20px">compaction<br><span style="font-size:14px">encrypted_content</span></div>
+      <p class="cx-note" data-step="3" style="font-size:14px;margin-top:10px">内部内容不透明，不能解释为无损摘要。</p>
+    </div>
+    <div class="cx-panel" style="left:782px;top:0;width:354px;height:386px">
+      <h3>③ 下一窗口</h3>
+      <div class="msg sys" data-step="5" data-fx="fly" style="--fy:-24px;white-space:normal;min-height:60px"><span class="r">初始上下文</span>重新注入稳定指令与环境</div>
+      <div class="msg user" data-step="4" data-fx="fly" style="--fx:-170px;min-height:104px;white-space:normal;margin-top:14px"><span class="r">保留原文</span><span>“我叫 allo” / 用户任务……<br><b>符合条件的消息共享 64k 预算</b></span></div>
+      <div class="cx-encrypted" data-step="4" data-fx="fly" style="--fx:-368px;margin-top:14px;font-size:16px">加密 compaction 条目</div>
+      <p class="cx-note" data-step="5" style="margin-top:12px;font-size:14px">替换历史后，继续普通请求。</p>
+    </div>
+    <p class="cx-source">这里只展示公开客户端行为。<a href="https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/compact_remote_v2.rs#L506" target="_blank" rel="noopener noreferrer">远端 v2 重建源码 ↗</a> · <a href="https://developers.openai.com/api/docs/guides/compaction" target="_blank" rel="noopener noreferrer">官方压缩说明 ↗</a></p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">远端 v2 不要求模型返回一段人类可读的摘要。</p>
+    <p class="say" data-step="1" data-until="1">超窗预处理针对末尾工具输出；不套用本地路径“删最早条目”的规则。</p>
+    <p class="say" data-step="2" data-until="2">带上历史和 CompactionTrigger，把压缩交给服务端。</p>
+    <p class="say" data-step="3" data-until="3">服务端返回不透明的加密条目。公开源码不能告诉我们内部究竟保留了哪些事实。</p>
+    <p class="say" data-step="4" data-until="4">客户端独立挑选保留消息，再把加密条目接在后面。</p>
+    <p class="say" data-step="5">64k 是保留消息的共享预算；它也有边界，不代表关键事实永久存在。</p>
+  </div>
+</section>
+
+<section class="slide" data-title="Codex ⑤ allo 为什么能留下">
+  <header class="hd"><span class="kicker">CODEX 05 · 对照</span><h2>同一批用户原话，两种保留预算</h2></header>
+  <div class="canvas">
+    <div class="cx-panel" style="left:0;top:0;width:390px;height:424px">
+      <h3>真实对话里的 7 条 user</h3>
+      <div class="stack">
+        <div class="msg user"><span class="r">1</span>hello</div>
+        <div class="msg user"><span class="r">2</span>1231+23123等于几</div>
+        <div class="msg user hl" data-mark="3"><span class="r">3</span><b class="cx-key">我叫 allo</b></div>
+        <div class="msg user"><span class="r">4</span>你还记得我叫什么吗</div>
+        <div class="msg user"><span class="r">5</span>《石钟山记》重复全文</div>
+        <div class="msg user"><span class="r">6</span>这个石钟山记讲了什么，你解释一下</div>
+        <div class="msg user"><span class="r">7</span>好，那你输出一下这篇文章</div>
+      </div>
+      <p class="cx-note" data-step="1" style="margin-top:14px"><b class="cx-key cx-mono">≈ 3,237 token</b> · 仅用户文本粗估</p>
+    </div>
+    <div class="cx-panel" data-step="2" data-fx="rise" style="left:446px;top:0;width:690px;height:184px;border-color:var(--warn)">
+      <h3>本项目这次：原话保留区只有 755 token</h3>
+      <div class="cx-meter" style="margin:14px 0 10px"><span data-step="2" data-fx="grow" style="width:100%;background:var(--warn)"></span></div>
+      <p class="cx-note">容量示意：这批文本超过原话配额；当前问题另留在最近组。<br>实际原话区只保留“解释文章”，姓名依赖摘要承接。</p>
+    </div>
+    <div class="cx-panel" data-step="3" data-fx="rise" style="left:446px;top:206px;width:690px;height:194px;border-color:var(--go)">
+      <h3>Codex 本地：20,000 token 的用户文本预算</h3>
+      <div class="cx-meter" style="margin:14px 0 10px"><span data-step="3" data-fx="grow" style="width:16.185%;background:var(--go)"></span></div>
+      <p class="cx-note"><b style="color:var(--go)">3,237 / 20,000 ≈ 16%</b>，这批文本全部放得下。<br>按源码规则推演，用户原句“我叫 allo”可以独立保留。</p>
+    </div>
+    <p class="cx-source">来源：hello 对话压缩前的用户文本，UTF-8 字节/4粗估。Codex 一侧是预算推演，未运行同对话实测；不保证模型一定答对。</p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">回到你的真实问题：姓名是靠摘要碰巧记住，还是靠用户原句保留？</p>
+    <p class="say" data-step="1" data-until="1">同一批用户文本约 3.2k token；这和全历史 token 数不是同一个数。</p>
+    <p class="say" data-step="2" data-until="2">本项目的原话配额很小，这次“我叫 allo”没有进入保留区。</p>
+    <p class="say" data-step="3" data-until="3">按 Codex 本地的 20k 规则推演，这句原话能留下，不依赖 assistant 再次说出姓名。</p>
+    <p class="say" data-step="4">原话仍有上限，摘要仍会丢细节。独立保留原话提高可靠性，但不是永久记忆。</p>
+  </div>
+</section>
+
+<!-- 12 评价与边界 -->
+<section class="slide" data-title="怎样判断压缩是否有用">
+  <header class="hd"><span class="kicker">06 · 检查方法</span><h2>变短只是一个结果，还要能继续任务</h2></header>
+  <div class="canvas">
+    <div class="lesson-grid two">
+      <div class="lesson-card" data-step="1" data-fx="rise" style="height:178px;border-top:4px solid var(--user)"><h3 style="margin-top:0">关键内容是否仍可用</h3><p>目标、约束、账号、数值和下一步，要能从新上下文或明确的工具来源得到。</p></div>
+      <div class="lesson-card" data-step="2" data-fx="rise" style="height:178px;border-top:4px solid var(--go)"><h3 style="margin-top:0">消息结构是否完整</h3><p>工具调用和对应结果保持配对；片段与摘要标明来源，不能冒充完整原文。</p></div>
+      <div class="lesson-card" data-step="3" data-fx="rise" style="height:178px;border-top:4px solid var(--warn)"><h3 style="margin-top:0">过程是否能解释</h3><p>区分直接裁掉、交给摘要、原样保留三种去向。压缩后再看实际用量与任务表现。</p></div>
+      <div class="lesson-card" data-step="4" data-fx="rise" style="height:178px;border-top:4px solid var(--err)"><h3 style="margin-top:0">失败是否能收场</h3><p>准备成功后再替换活动历史；失败保留已有状态并报错，为重试和循环设限。</p></div>
+    </div>
+    <p class="cx-source">这些是学习与评估的检查点；“模型曾答对一次”不能证明长期记忆可靠。</p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">没有一个固定的“压后百分比”，能独自证明压缩成功。</p>
+    <p class="say" data-step="1" data-until="1">把姓名删掉，只留下更短的摘要，可能省了 token 却损害任务。</p>
+    <p class="say" data-step="2" data-until="2">更短的消息仍需遵守模型接口的协议。</p>
+    <p class="say" data-step="3" data-until="3">“裁了 8 条、摘要读了 6 条”与“摘要了 14 条”是不同的事实。</p>
+    <p class="say" data-step="4">压缩只是 Agent 循环中的一步，也需要预算、失败反馈与状态保护。</p>
+  </div>
+</section>
+
+<!-- 13 项目参数单独放在附录 -->
+<section class="slide" data-title="附录：本项目现有参数">
+  <header class="hd"><span class="kicker">附录 · GO 代码现状</span><h2>这些百分比属于本项目的学习实验</h2></header>
+  <div class="canvas">
+    <table class="t" style="font-size:18px">
+      <tr><th style="width:21%">环节</th><th style="width:39%">当前代码</th><th>它决定什么</th></tr>
+      <tr data-step="1"><td>输入预算</td><td>12288 − 4096 预留 − 1024 = 7168</td><td>学习程序规划的容量；4096 默认不作为 API 输出上限</td></tr>
+      <tr data-step="1"><td>触发</td><td>规划容量的 90%，约 6451</td><td>何时进入整理流程</td></tr>
+      <tr data-step="2"><td>保留原话与最近组</td><td>原话 10%；最近组 ≤20%，默认 K=2</td><td>新 View 中分给原文的空间</td></tr>
+      <tr data-step="2"><td>摘要</td><td>目标约 5%</td><td>给模型的长度要求，不能保证精确遵守</td></tr>
+      <tr data-step="3"><td>压后检查</td><td>40% 软目标，60% 接受上限</td><td>本项目为实验设置的取舍；Codex 没有这组压后目标</td></tr>
+    </table>
+    <div class="lesson-callout abs" data-step="4" data-fx="rise" style="left:0;right:0;top:367px;font-size:18px">本次整理课件，Go 压缩逻辑仍按这些参数运行。阅读观测结果时，先分清“代码实际行为”和“Codex 参考策略”。</div>
+    <p class="cx-source">实现：context_manager.go · main.go。百分比布局会按真实 usage 与粗估的比例换算，本表列出原始规划值。</p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">这一页单独保留代码事实，避免把项目参数误当成通用规则。</p>
+    <p class="say" data-step="1" data-until="1">7168 是学习预算，不是声明方舟模型只有这么大的窗口。</p>
+    <p class="say" data-step="2" data-until="2">保留原话和最近组都是本项目的布局选择，会影响信息能否留下。</p>
+    <p class="say" data-step="3" data-until="3">40% 与 60% 仍在代码里，但不再画成 Codex 压缩必须到达的谷底。</p>
+    <p class="say" data-step="4">若要修改运行策略，应再修改代码与验证；仅改课件不会改变真实行为。</p>
+  </div>
+</section>
+
+<!-- 14 自测 -->
+<section class="slide" data-title="自测与阅读入口">
+  <header class="hd"><span class="kicker">07 · 自测</span><h2>先自己回答，再展开参考理解</h2></header>
+  <div class="canvas">
+    <div class="lesson-grid two review-grid" style="gap:14px">
+      <div class="lesson-card"><h3>压缩是否必须到固定百分比？</h3><p data-step="1">不是。Codex 重建后的大小由保留内容与压缩产物决定。</p></div>
+      <div class="lesson-card"><h3>越短就一定越好吗？</h3><p data-step="2">还要保住继续任务所需的状态，不能只优化 token 数。</p></div>
+      <div class="lesson-card"><h3>副本删了姓名，姓名一定丢了吗？</h3><p data-step="3">不一定。Codex 本地会从会话历史独立选择用户原话。</p></div>
+      <div class="lesson-card"><h3>存档里还在，模型就能用吗？</h3><p data-step="4">需要放回实际输入，或有可用工具取回；存档本身不等于上下文。</p></div>
+      <div class="lesson-card"><h3>有共同前缀，能证明缓存命中吗？</h3><p data-step="5">不能。需要核对实际 cached_tokens 等返回值。</p></div>
+      <div class="lesson-card"><h3>这次 allo 对照证明了什么？</h3><p data-step="6">真实文本可放进 Codex 原话配额；这是源码推演，不是模型实测。</p></div>
+    </div>
+    <p class="cx-source lesson-sources">阅读：<a href="https://github.com/openai/codex/tree/afb436df8b70bb5bc57b86d9a3e829968988cd21" target="_blank" rel="noopener noreferrer">Codex afb436d ↗</a> · <a href="https://developers.openai.com/api/docs/guides/compaction" target="_blank" rel="noopener noreferrer">OpenAI Compaction ↗</a> · 项目 docs/day-03：学习笔记与源码调研。</p>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">把“什么时候压缩”“留下什么”“还能不能继续”分开回答。</p>
+    <p class="say" data-step="1" data-until="2">触发线决定开始时间，保留规则决定新上下文的大小与质量。</p>
+    <p class="say" data-step="3" data-until="4">查看信息去向时，要区分完整记录、活动上下文和临时请求副本。</p>
+    <p class="say" data-step="5" data-until="5">缓存省计算，原文保留减少信息损失；两者需要分别观察。</p>
+    <p class="say" data-step="6">回到观测台，逐条对照新请求实际发出了哪些内容。</p>
+  </div>
+</section>
+</div></main>
+
+<nav class="bar" aria-label="翻页">
+  <button type="button" data-act="prev" aria-label="上一步">←</button>
+  <button type="button" data-act="next" aria-label="下一步">→</button>
+  <span class="where"></span>
+  <span class="dots"></span>
+  <span class="title"></span>
+  <span class="hint">← → 翻页 · P 自动播放 · F 全屏</span>
+  <button type="button" data-act="play" aria-pressed="false">自动播放</button>
+  <button type="button" data-act="toc" aria-pressed="false">目录</button>
+  <button type="button" data-act="full">全屏</button>
+</nav>
+<div class="toc" hidden></div>
+<script src="deck.js"></script>
+</body>
+</html>

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -36,8 +37,17 @@ type Observation struct {
 }
 
 // 主线：请求模型 → 读取 tool_calls → 执行工具 → 保存结果 → 下一轮。
-func runAgent(ctx context.Context, config modelConfig, question string, parallel, maxSteps, retries int) error {
-	history := []Message{{Role: "system", Content: systemPrompt()}, {Role: "user", Content: question}}
+func runAgent(ctx context.Context, config modelConfig, question string, parallel, maxSteps, retries int, options contextOptions, history *historyInput) error {
+	conversation := newContext(systemPrompt, options, true)
+	if history != nil {
+		var err error
+		conversation, err = restoreContext(*history, options)
+		if err != nil {
+			return err
+		}
+	}
+	conversation.Append(Message{Role: "user", Content: question})
+	client := &modelClient{Config: config, Limit: maxSteps, Output: options.Output}
 	summary := []string{}
 	lastAction, repeated := "", 0
 	fmt.Printf("Limits: max_steps=%d retries=%d repeat_limit=3 parallel=%d lab_tools=%t\n", maxSteps, retries, parallel, labToolsEnabled)
@@ -45,12 +55,26 @@ func runAgent(ctx context.Context, config modelConfig, question string, parallel
 		if err := ctx.Err(); err != nil {
 			return stopRun("cancelled", err.Error(), summary)
 		}
-		fmt.Printf("\nRound %d\n", step)
-		reply, err := callModel(ctx, config, history)
-		if err != nil {
-			return stopRun("model_error", err.Error(), summary)
+		if client.Calls >= maxSteps {
+			break
 		}
-		history = append(history, reply)
+		fmt.Printf("\nRound %d\n", step)
+		response, err := conversation.Next(ctx, client)
+		if err != nil {
+			reason := "model_error"
+			if errors.Is(err, errContextPrepare) {
+				reason = "context_error"
+			}
+			if errors.Is(err, errModelBudget) {
+				reason = "max_steps"
+			}
+			if ctx.Err() != nil {
+				reason = "cancelled"
+			}
+			return stopRun(reason, err.Error(), summary)
+		}
+		conversation.RecordReply(response)
+		reply := response.Message
 		if reply.Content != "" {
 			fmt.Println(reply.Content)
 		}
@@ -95,14 +119,14 @@ func runAgent(ctx context.Context, config modelConfig, question string, parallel
 				summary = append(summary, fmt.Sprintf("- 第%d轮 %s(%s)，尝试%d次，%s", step, observation.Tool, reply.ToolCalls[i].Function.Arguments, observation.Attempts, status))
 			}
 			fmt.Printf("Observation [%s]: %s\n", observation.ID, data)
-			history = append(history, Message{Role: "tool", ToolCallID: observation.ID, Content: string(data)})
+			conversation.Append(Message{Role: "tool", ToolCallID: observation.ID, Content: string(data)})
 		}
 		if err := ctx.Err(); err != nil {
 			return stopRun("cancelled", err.Error(), summary)
 		}
 	}
-	// 预算包含最终回答轮；耗尽后用本地记录生成摘要，不再请求模型，以免突破预算。
-	return stopRun("max_steps", fmt.Sprintf("已达到 %d 轮模型请求上限", maxSteps), summary)
+	// 预算包含最终回答和上下文摘要；耗尽后用本地执行记录报告，不再额外请求模型。
+	return stopRun("max_steps", fmt.Sprintf("已达到 %d 次模型请求上限（包含摘要）", maxSteps), summary)
 }
 
 // 每个 goroutine 只写自己的结果；历史由主循环在整批结束后追加。

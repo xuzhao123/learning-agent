@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Day 1 工具调用循环</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700;900&display=swap">
+<link rel="stylesheet" href="deck.css">
+</head>
+<body>
+<div class="progress"></div>
+<main class="deck"><div class="stage">
+
+<!-- 1 封面 -->
+<section class="slide cover" data-title="封面">
+  <p class="day">DAY 01 · LEARNING AGENT</p>
+  <h1>模型如何通过工具完成任务</h1>
+  <p class="lead">模型只提出“要调用什么”，Go 程序真正执行，再把结果交回模型。这几步连起来，就是最小的 Agent 循环。</p>
+  <div class="legend">
+    <span class="tag t-user">用户</span><span class="tag t-model">模型（方舟）</span><span class="tag t-go">Go 程序与工具</span><span class="tag t-err">错误</span>
+  </div>
+  <p class="muted small">按 → 或点击右侧，一步步播放；P 自动播放，F 全屏</p>
+</section>
+
+<!-- 2 一个问题走一遍 -->
+<section class="slide" data-title="一个问题走一遍">
+  <header class="hd"><span class="kicker">01 · 全景</span><h2>一个问题走一遍</h2></header>
+  <div class="canvas">
+    <div class="lane" style="left:150px"><span class="lane-head user">用户</span></div>
+    <div class="lane" style="left:568px"><span class="lane-head model">模型</span></div>
+    <div class="lane" style="left:986px"><span class="lane-head go">Go 程序</span></div>
+    <svg class="wires" viewBox="0 0 1136 480">
+      <defs>
+        <marker id="d1a-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--user)"/></marker>
+        <marker id="d1a-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--model)"/></marker>
+        <marker id="d1a-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--go)"/></marker>
+      </defs>
+      <path data-step="1" data-fx="draw" pathLength="1" d="M152 82 H562" style="stroke:var(--user);stroke-width:3;fill:none" marker-end="url(#d1a-u)"/>
+      <path data-step="2" data-fx="draw" pathLength="1" d="M570 196 H980" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1a-m)"/>
+      <path data-step="2" data-fx="draw" pathLength="1" d="M570 236 H980" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1a-m)"/>
+      <path data-step="3" data-fx="draw" pathLength="1" d="M984 326 H576" style="stroke:var(--go);stroke-width:3;fill:none" marker-end="url(#d1a-g)"/>
+      <path data-step="3" data-fx="draw" pathLength="1" d="M984 366 H576" style="stroke:var(--go);stroke-width:3;fill:none" marker-end="url(#d1a-g)"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M566 440 H158" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1a-m)"/>
+    </svg>
+    <div class="lbl user" data-step="1" style="left:160px;top:52px;width:400px">计算 floor(sqrt(1234×5678))，今天星期几？</div>
+    <div class="node model" data-step="2" data-fx="pop" style="left:448px;top:112px;width:240px;height:52px;font-size:16px">判断：要计算，也要查时间</div>
+    <div class="lbl model" data-step="2" style="left:580px;top:172px;width:400px">tool_call · calculator(expression)</div>
+    <div class="lbl model" data-step="2" style="left:580px;top:212px;width:400px">tool_call · get_current_datetime()</div>
+    <div class="node go" data-step="3" data-fx="pop" style="left:866px;top:256px;width:240px;height:44px;font-size:16px">真正执行两个函数</div>
+    <div class="lbl go" data-step="3" style="left:580px;top:302px;width:400px">tool 结果 · {"result": 2647}</div>
+    <div class="lbl go" data-step="3" style="left:580px;top:342px;width:400px">tool 结果 · 2026-10-03 星期六</div>
+    <div class="lbl model" data-step="4" style="left:160px;top:410px;width:400px">回答：结果是 2647，今天星期六</div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">三个角色：用户提问，<b>模型</b>决定下一步，Go 程序负责真正执行。</p>
+    <p class="say" data-step="1" data-until="1">问题连同工具定义，一起发给模型（第 1 次请求）。</p>
+    <p class="say" data-step="2" data-until="2">模型没有算。它只返回两个<b>调用请求</b>：工具名 + 参数。</p>
+    <p class="say" data-step="3" data-until="3">Go 真正执行函数，把<b>实际结果</b>作为 tool 消息交回模型（第 2 次请求）。</p>
+    <p class="say" data-step="4">模型读到结果，组织成回答。一个问题，请求了模型两次。</p>
+  </div>
+</section>
+
+<!-- 3 三样东西 -->
+<section class="slide" data-title="工具定义、调用请求、执行结果">
+  <header class="hd"><span class="kicker">02 · 协议</span><h2>三样不同的东西</h2></header>
+  <div class="canvas">
+    <div class="abs" data-step="1" data-fx="rise" style="left:0;top:0;width:360px">
+      <p class="colhead"><span class="tag t-go">工具定义</span> 放在 tools 字段</p>
+<div class="code">{
+  "name": "calculator",
+  "description": "计算数学表达式",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expression":
+        {"type": "string"}
+    },
+    "required": ["expression"]
+  }
+}</div>
+      <p class="small muted" style="margin-top:10px">告诉模型：能做什么、参数长什么样</p>
+    </div>
+    <div class="abs" data-step="2" data-fx="rise" style="left:388px;top:0;width:360px">
+      <p class="colhead"><span class="tag t-model">调用请求</span> 模型返回的 tool_calls</p>
+<div class="code">{
+  "id": <span class="mk" data-mark="4">"call_calc"</span>,
+  "type": "function",
+  "function": {
+    "name": "calculator",
+    "arguments":
+      <span class="mk" data-mark="2">"{\"expression\":
+       \"floor(sqrt(1234*5678))\"}"</span>
+  }
+}</div>
+      <p class="small muted" style="margin-top:10px">告诉程序：这一次要做什么</p>
+    </div>
+    <div class="abs" data-step="3" data-fx="rise" style="left:776px;top:0;width:360px">
+      <p class="colhead"><span class="tag t-go">执行结果</span> role 为 tool 的消息</p>
+<div class="code">{
+  "role": "tool",
+  "tool_call_id": <span class="mk" data-mark="4">"call_calc"</span>,
+  "content":
+    "{\"result\":2647}"
+}</div>
+      <p class="small muted" style="margin-top:10px">告诉模型：实际发生了什么</p>
+      <div class="card" data-step="3" style="margin-top:18px;border-color:var(--err)"><p class="small">失败时写回错误信息。结果必须来自真实执行，不能让模型的猜测冒充结果。</p></div>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">工具调用里有三样东西，名字相近，作用完全不同。</p>
+    <p class="say" data-step="1" data-until="1"><b>工具定义</b>只描述名字、用途和参数结构，里面没有任何实现代码。</p>
+    <p class="say" data-step="2" data-until="2"><b>调用请求</b>是模型这一次的决定。注意 arguments 是“装着 JSON 的字符串”。</p>
+    <p class="say" data-step="3" data-until="3"><b>执行结果</b>是 Go 实际执行后写回的 tool 消息。</p>
+    <p class="say" data-step="4">请求和结果靠同一个 id 对应。下一页会看到，不能用工具名代替 id。</p>
+  </div>
+</section>
+
+<!-- 4 arguments 解析两次 -->
+<section class="slide" data-title="arguments 要解析两次">
+  <header class="hd"><span class="kicker">03 · 参数</span><h2>arguments 要解析两次</h2></header>
+  <div class="canvas">
+    <svg class="wires" viewBox="0 0 1136 480">
+      <defs><marker id="d1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+      <path data-step="1" data-fx="draw" pathLength="1" d="M240 60 H292" style="stroke:var(--muted);stroke-width:2.5;fill:none" marker-end="url(#d1b)"/>
+      <path data-step="2" data-fx="draw" pathLength="1" d="M540 60 H592" style="stroke:var(--muted);stroke-width:2.5;fill:none" marker-end="url(#d1b)"/>
+      <path data-step="3" data-fx="draw" pathLength="1" d="M840 60 H892" style="stroke:var(--muted);stroke-width:2.5;fill:none" marker-end="url(#d1b)"/>
+    </svg>
+    <div class="node" style="left:0;top:20px;width:236px;height:84px">API 响应<br><span class="small muted">一整段 JSON</span></div>
+    <div class="node model" data-step="1" data-fx="pop" style="left:300px;top:20px;width:236px;height:84px">tool_calls[0]<br><span class="small muted">第一次解码得到</span></div>
+    <div class="node warn" data-step="2" data-fx="pop" style="left:600px;top:20px;width:236px;height:84px">Arguments<br><span class="small">仍然是 string</span></div>
+    <div class="node go" data-step="3" data-fx="pop" style="left:900px;top:20px;width:236px;height:84px">args.Expression<br><span class="small muted">第二次 Unmarshal</span></div>
+<div class="code abs" data-step="3" data-fx="rise" style="left:0;top:150px;width:660px">var args struct {
+    Expression string `json:"expression"`
+}
+err := json.Unmarshal([]byte(call.Function.Arguments), &amp;args)
+<span class="c">// 检查 err，再把 args.Expression 交给 calculate</span></div>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:700px;top:150px;width:436px;border-color:var(--err)">
+      <h3 style="color:var(--err)">解析失败怎么办</h3>
+      <p>不执行工具，把“参数不是有效 JSON”或“缺少 expression”作为结果交回模型。模型下一轮可以修正参数。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">模型给的参数，要经过两层解析才能变成 Go 能用的值。</p>
+    <p class="say" data-step="1" data-until="1">第一层：解码整个 API 响应，拿到 tool_calls 列表。</p>
+    <p class="say" data-step="2" data-until="2">这时 arguments 还只是一个字符串，Go 还不能直接用。</p>
+    <p class="say" data-step="3" data-until="3">第二层：把这个字符串再 Unmarshal 成结构体，见 tools.go 的 runTool。</p>
+    <p class="say" data-step="4">参数可能写错。错误也是一种结果，要回到模型手里。</p>
+  </div>
+</section>
+
+<!-- 5 请求里装了什么 -->
+<section class="slide" data-title="请求里装了什么">
+  <header class="hd"><span class="kicker">04 · 请求</span><h2>一次请求里装了什么</h2></header>
+  <div class="canvas">
+<div class="code abs" style="left:0;top:0;width:560px;font-size:16px">POST /chat/completions
+{
+  "model": "（方舟模型）",
+  "messages": [
+    <span class="mk" data-mark="1">{"role": "system",
+     "content": "你是一个工具助手，按需使用
+       工具帮助用户，并用中文回答。"}</span>,
+    {"role": "user", "content": "…"}
+  ],
+  <span class="mk" data-mark="2">"tools": [calculator,
+            get_current_datetime,
+            search_notes]</span>,
+  "parallel_tool_calls": true
+}</div>
+    <div class="card abs" data-step="1" data-fx="rise" style="left:600px;top:0;width:536px">
+      <h3>system prompt 只有一句</h3>
+      <p>不再要求模型输出 Thought、Action 这类文本前缀。调用协议交给 API 字段表达。</p>
+    </div>
+    <div class="card abs" data-step="2" data-fx="rise" style="left:600px;top:130px;width:536px">
+      <h3>工具说明放在 tools</h3>
+      <p>模型需要工具时，通过 tool_calls 返回结构化请求；普通回答放在 content 里。</p>
+    </div>
+    <div class="abs" data-step="3" data-fx="rise" style="left:600px;top:262px;width:536px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="card" style="border-color:var(--err)"><p class="small"><b>只有 prompt，没有 tools</b><br>模型不知道本地有哪些函数</p></div>
+      <div class="card" style="border-color:var(--err)"><p class="small"><b>只有 tools，没有执行器</b><br>模型只能提出请求，没人执行</p></div>
+    </div>
+    <div class="card abs" data-step="4" data-fx="pop" style="left:600px;top:388px;width:536px;border-color:var(--go)">
+      <p><b>定义 + 执行器 + 结果回流</b>，三者缺一不可。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">llm.go 的 callModel 每次都发送这样一个请求体。</p>
+    <p class="say" data-step="1" data-until="1">提示词很短，因为“怎么调用工具”不靠文字约定。</p>
+    <p class="say" data-step="2" data-until="2">工具清单单独放在 <b>tools</b> 字段，每次请求都带上。</p>
+    <p class="say" data-step="3" data-until="3">两种残缺的情况，都走不通。</p>
+    <p class="say" data-step="4">这三样连起来，模型才真正“用上了”工具。</p>
+  </div>
+</section>
+
+<!-- 6 消息历史逐步增长 -->
+<section class="slide" data-title="消息历史逐步增长">
+  <header class="hd"><span class="kicker">05 · 历史</span><h2>消息历史是下一轮的依据</h2></header>
+  <div class="canvas">
+    <div class="abs" style="left:0;top:0;width:360px">
+      <p class="colhead">第 1 次请求</p>
+      <div class="stack">
+        <div class="msg sys"><span class="r">system</span>工具助手</div>
+        <div class="msg user"><span class="r">user</span>查循环职责，再 ×25</div>
+      </div>
+    </div>
+    <div class="abs" data-step="2" style="left:388px;top:0;width:360px">
+      <p class="colhead">第 2 次请求</p>
+      <div class="stack">
+        <div class="msg sys old"><span class="r">system</span>工具助手</div>
+        <div class="msg user old"><span class="r">user</span>查循环职责，再 ×25</div>
+        <div class="msg asst" data-step="2" data-fx="fly" style="--fx:-60px"><span class="r">assistant</span>tool_calls: search_notes</div>
+        <div class="msg tool" data-step="3" data-fx="fly" style="--fx:-60px"><span class="r">tool</span>找到 4 项职责</div>
+      </div>
+    </div>
+    <div class="abs" data-step="4" style="left:776px;top:0;width:360px">
+      <p class="colhead">第 3 次请求</p>
+      <div class="stack">
+        <div class="msg sys old"><span class="r">system</span>工具助手</div>
+        <div class="msg user old"><span class="r">user</span>查循环职责，再 ×25</div>
+        <div class="msg asst old"><span class="r">assistant</span>tool_calls: search_notes</div>
+        <div class="msg tool old"><span class="r">tool</span>找到 4 项职责</div>
+        <div class="msg asst" data-step="4" data-fx="fly" style="--fx:-60px"><span class="r">assistant</span>tool_calls: calculator(4*25)</div>
+        <div class="msg tool" data-step="5" data-fx="fly" style="--fx:-60px"><span class="r">tool</span>{"result": 100}</div>
+      </div>
+      <div class="card" data-step="6" data-fx="pop" style="margin-top:14px;border-color:var(--model)"><p class="small"><b style="color:var(--model)">assistant：</b>循环职责有 4 项，乘以 25 是 100。没有新的调用，结束。</p></div>
+    </div>
+<div class="code abs" data-step="3" data-fx="rise" style="left:0;top:150px;width:360px;font-size:14px"><span class="c">// 存模型的请求（连同 usage）</span>
+conversation.RecordReply(response)
+<span class="c">// 存程序的结果</span>
+conversation.Append(Message{
+    Role:       "tool",
+    ToolCallID: observation.ID,
+    Content:    string(data),
+})</div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">例子：先查学习笔记里的循环职责，再把职责数量乘以 25。</p>
+    <p class="say" data-step="1" data-until="1">第 1 次请求只有 system 和用户问题。模型不知道答案，需要先查。</p>
+    <p class="say" data-step="2" data-until="2">模型要求查笔记。程序先把这条 <b>assistant</b> 消息原样存进历史……</p>
+    <p class="say" data-step="3" data-until="3">……再把执行结果作为 <b>tool</b> 消息存进去。两处追加缺一不可。</p>
+    <p class="say" data-step="4" data-until="4">第 2 次请求带着前面全部 4 条。模型看到“4 项”，才能发起 4×25。</p>
+    <p class="say" data-step="5" data-until="5">计算结果同样写回历史。</p>
+    <p class="say" data-step="6">第 3 次请求，模型直接回答。注意：每次请求都把完整历史重发一遍。</p>
+  </div>
+</section>
+
+<!-- 7 tool_call_id -->
+<section class="slide" data-title="用 id 对应结果">
+  <header class="hd"><span class="kicker">06 · 对应</span><h2>为什么必须用 tool_call_id</h2></header>
+  <div class="canvas">
+    <p class="colhead abs" style="left:0;top:0">模型同一轮提出</p>
+    <div class="msg asst abs" style="left:0;top:34px;width:300px"><span class="r">call_a</span>calculator(2+3)</div>
+    <div class="msg asst abs" style="left:0;top:84px;width:300px"><span class="r">call_b</span>calculator(10*10)</div>
+    <p class="colhead abs" data-step="1" style="left:360px;top:0">Go 并行执行（完成先后不定）</p>
+    <div class="abs" data-step="1" style="left:360px;top:44px;width:380px;height:22px;background:var(--line);border-radius:6px"></div>
+    <div class="abs" data-step="1" data-fx="grow" style="left:360px;top:44px;width:380px;height:22px;background:var(--go);border-radius:6px;transition-duration:1.8s"></div>
+    <div class="abs" data-step="1" style="left:360px;top:94px;width:380px;height:22px;background:var(--line);border-radius:6px"></div>
+    <div class="abs" data-step="1" data-fx="grow" style="left:360px;top:94px;width:180px;height:22px;background:var(--go);border-radius:6px"></div>
+    <div class="lbl go" data-step="1" style="left:550px;top:96px">先完成</div>
+    <p class="colhead abs" data-step="2" style="left:800px;top:0">results 数组（按调用顺序）</p>
+    <div class="msg tool abs" data-step="2" data-fx="fly" style="--fx:-120px;left:800px;top:34px;width:336px"><span class="r">results[0]</span>call_a → 5</div>
+    <div class="msg tool abs" data-step="2" data-fx="fly" style="--fx:-120px;left:800px;top:84px;width:336px"><span class="r">results[1]</span>call_b → 100</div>
+    <p class="colhead abs" data-step="3" style="left:0;top:180px">写回历史的 tool 消息</p>
+    <div class="msg tool abs" data-step="3" data-fx="rise" style="left:0;top:214px;width:560px"><span class="r">tool</span>tool_call_id: <b class="mk" data-mark="3">call_a</b>　content: 5</div>
+    <div class="msg tool abs" data-step="3" data-fx="rise" style="left:0;top:264px;width:560px"><span class="r">tool</span>tool_call_id: <b class="mk" data-mark="3">call_b</b>　content: 100</div>
+    <div class="card abs" data-step="4" data-fx="pop" style="left:600px;top:200px;width:536px;border-color:var(--err)">
+      <h3 style="color:var(--err)">只靠工具名会怎样</h3>
+      <p>两次调用都叫 calculator。如果按名字或完成先后对应，5 和 100 可能被配错，模型会拿错误的数字继续推理。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">同一轮里，模型对同一个工具提出两次调用。</p>
+    <p class="say" data-step="1" data-until="1">并行执行时，后提出的 call_b 可能先完成。</p>
+    <p class="say" data-step="2" data-until="2">每个 goroutine 只写自己的 results[i]，结果顺序与调用顺序一致，不受完成先后影响。</p>
+    <p class="say" data-step="3" data-until="3">写回历史时，每条 tool 消息带上原调用的 <b>id</b>。</p>
+    <p class="say" data-step="4">id 标识的是“某一次调用”，不是“某个工具”。</p>
+  </div>
+</section>
+
+<!-- 8 循环的四项职责 -->
+<section class="slide" data-title="循环的四项职责">
+  <header class="hd"><span class="kicker">07 · 循环</span><h2>loop 比一次 API 调用多做了什么</h2></header>
+  <div class="canvas">
+    <svg class="wires" viewBox="0 0 1136 480">
+      <defs><marker id="d1c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--model)"/></marker></defs>
+      <circle cx="300" cy="230" r="170" style="fill:none;stroke:var(--line);stroke-width:2;stroke-dasharray:6 8"/>
+      <path data-step="2" data-fx="draw" pathLength="1" d="M410 100 A170 170 0 0 1 468 196" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1c)"/>
+      <path data-step="3" data-fx="draw" pathLength="1" d="M462 290 A170 170 0 0 1 380 382" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1c)"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M210 380 A170 170 0 0 1 134 280" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1c)"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M140 170 A170 170 0 0 1 200 92" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d1c)"/>
+    </svg>
+    <div class="node model" data-step="1" data-fx="pop" style="left:200px;top:30px;width:200px;height:70px">请求模型<br><span class="small">解析输出</span></div>
+    <div class="node go" data-step="2" data-fx="pop" style="left:400px;top:196px;width:200px;height:70px">调度工具<br><span class="small">并行执行</span></div>
+    <div class="node go" data-step="3" data-fx="pop" style="left:200px;top:366px;width:200px;height:70px">维护历史<br><span class="small">写回 tool 结果</span></div>
+    <div class="node warn" data-step="4" data-fx="pop" style="left:0;top:196px;width:200px;height:70px">判断终止<br><span class="small">还有调用吗？</span></div>
+    <div class="lbl go" data-step="5" style="left:0;top:276px;width:200px">无调用且有回答 → 结束</div>
+<div class="code abs" data-step="1" data-fx="rise" style="left:660px;top:20px;width:476px;font-size:14.5px"><span class="c">// runAgent 主线（简化，略去 Day 2/3 的护栏）</span>
+for step := 1; step &lt;= maxSteps; step++ {
+    reply := <span class="k">请求模型</span>(历史)
+    历史 = append(历史, reply)
+    if len(reply.ToolCalls) == 0 {
+        return <span class="c">// 回答并结束</span>
+    }
+    results := <span class="s">executeBatch</span>(reply.ToolCalls)
+    历史 = append(历史, tool 结果...)
+}</div>
+    <div class="card abs" data-step="5" data-fx="rise" style="left:660px;top:300px;width:476px">
+      <p class="small">结束只表示模型这一轮不再行动，<b>不自动证明回答正确</b>。还要对照实际工具结果理解答案。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">一次 API 调用只拿到当前响应。loop 让模型能根据新信息继续行动。</p>
+    <p class="say" data-step="1" data-until="1">职责一：请求模型，并解析它返回的内容和调用请求。</p>
+    <p class="say" data-step="2" data-until="2">职责二：调度工具，独立的调用可以同时执行。</p>
+    <p class="say" data-step="3" data-until="3">职责三：维护消息历史，让下一轮看得到发生了什么。</p>
+    <p class="say" data-step="4" data-until="4">职责四：判断是否终止。有调用就继续绕圈。</p>
+    <p class="say" data-step="5">没有调用、并且有正常回答时，循环结束。</p>
+  </div>
+</section>
+
+<!-- 9 并行发生在哪一层 -->
+<section class="slide" data-title="并行发生在哪一层">
+  <header class="hd"><span class="kicker">08 · 并行</span><h2>三个数量，别混在一起</h2></header>
+  <div class="canvas">
+    <div class="abs" data-step="1" data-fx="rise" style="left:0;top:0;width:1136px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+      <div class="card"><p class="big" style="color:var(--muted)">3</p><p>种工具可用<br><span class="small muted">加载：准备名字、描述、schema 和处理函数</span></p></div>
+      <div class="card" style="border-color:var(--model)"><p class="big" style="color:var(--model)">2</p><p>次调用由模型本轮提出<br><span class="small muted">批次：同一轮的 tool_calls</span></p></div>
+      <div class="card" style="border-color:var(--go)"><p class="big" style="color:var(--go)">4</p><p>个执行名额 -parallel<br><span class="small muted">并发：Go 同时执行几项</span></p></div>
+    </div>
+    <p class="colhead abs" data-step="2" style="left:0;top:224px">串行：一个接一个</p>
+    <div class="abs" data-step="2" data-fx="grow" style="left:150px;top:220px;width:240px;height:30px;background:var(--go);border-radius:6px;transition-duration:.8s"></div>
+    <div class="abs" data-step="2" data-fx="grow" style="left:390px;top:220px;width:360px;height:30px;background:var(--go-soft);border:2px solid var(--go);border-radius:6px;transition-delay:.6s;transition-duration:1s"></div>
+    <div class="lbl" data-step="2" style="left:760px;top:226px">≈ 5 秒</div>
+    <p class="colhead abs" data-step="3" style="left:0;top:294px">并行：同时开始</p>
+    <div class="abs" data-step="3" data-fx="grow" style="left:150px;top:282px;width:240px;height:30px;background:var(--go);border-radius:6px"></div>
+    <div class="abs" data-step="3" data-fx="grow" style="left:150px;top:318px;width:360px;height:30px;background:var(--go-soft);border:2px solid var(--go);border-radius:6px"></div>
+    <div class="lbl" data-step="3" style="left:520px;top:324px">≈ 3 秒</div>
+    <div class="abs muted small" data-step="2" style="left:150px;top:370px;width:720px;display:flex;justify-content:space-between;font-family:var(--font-mono)"><span>0s</span><span>1s</span><span>2s</span><span>3s</span><span>4s</span><span>5s</span><span>6s</span></div>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:900px;top:220px;width:236px;border-color:var(--model)">
+      <p class="small">批量调用<b>减少模型往返</b>；并行执行<b>减少工具等待</b>。真正的并行来自 Go 执行器。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">“并行”这个词，经常把三件事说成一件。</p>
+    <p class="say" data-step="1" data-until="1">可用的工具、本轮提出的调用、同时执行的名额，是三个不同的数。</p>
+    <p class="say" data-step="2" data-until="2">两个独立工具分别耗时 2 秒和 3 秒。串行执行约 5 秒。</p>
+    <p class="say" data-step="3" data-until="3">并行执行约 3 秒，由最慢的那个决定。</p>
+    <p class="say" data-step="4">本项目的本地工具很快，重点是看清流程，而不是省下的时间。</p>
+  </div>
+</section>
+
+<!-- 10 executeBatch -->
+<section class="slide" data-title="executeBatch 内部">
+  <header class="hd"><span class="kicker">09 · 并发</span><h2>executeBatch：名额、结果槽、等待</h2></header>
+  <div class="canvas">
+    <p class="colhead abs" style="left:0;top:0">每个调用一个 goroutine</p>
+    <div class="msg asst abs dim" data-mark="2" style="left:0;top:34px;width:220px"><span class="r">go #0</span>calculator</div>
+    <div class="msg asst abs dim" data-mark="2" style="left:0;top:80px;width:220px"><span class="r">go #1</span>datetime</div>
+    <div class="msg asst abs dim" data-mark="3" style="left:0;top:126px;width:220px"><span class="r">go #2</span>search_notes</div>
+    <div class="msg asst abs dim" data-mark="3" style="left:0;top:172px;width:220px"><span class="r">go #3</span>calculator</div>
+
+    <p class="colhead abs" data-step="1" style="left:300px;top:0">slots：容量 2 的 channel（-parallel 2）</p>
+    <div class="abs card" data-step="1" style="left:300px;top:34px;width:340px;height:184px;display:grid;grid-template-rows:1fr 1fr;gap:10px;padding:12px">
+      <div style="border:2px dashed var(--line);border-radius:8px"></div>
+      <div style="border:2px dashed var(--line);border-radius:8px"></div>
+    </div>
+    <div class="msg asst abs" data-step="2" data-until="2" data-fx="fly" style="--fx:-300px;left:316px;top:56px;width:308px"><span class="r">go #0</span>执行中…</div>
+    <div class="msg asst abs" data-step="2" data-until="2" data-fx="fly" style="--fx:-300px;left:316px;top:150px;width:308px"><span class="r">go #1</span>执行中…</div>
+    <div class="msg asst abs" data-step="3" data-until="3" data-fx="fly" style="--fx:-300px;left:316px;top:56px;width:308px"><span class="r">go #2</span>执行中…</div>
+    <div class="msg asst abs" data-step="3" data-until="3" data-fx="fly" style="--fx:-300px;left:316px;top:150px;width:308px"><span class="r">go #3</span>执行中…</div>
+
+    <p class="colhead abs" data-step="1" style="left:720px;top:0">results：每项只写自己的格子</p>
+    <div class="abs" data-step="1" style="left:720px;top:34px;width:416px" >
+      <div class="stack">
+        <div class="msg tool"><span class="r">[0]</span><span data-step="2" data-fx="fly" style="--fx:-80px">2647</span></div>
+        <div class="msg tool"><span class="r">[1]</span><span data-step="2" data-fx="fly" style="--fx:-80px">2026-10-03 星期六</span></div>
+        <div class="msg tool"><span class="r">[2]</span><span data-step="3" data-fx="fly" style="--fx:-80px">笔记 4 条</span></div>
+        <div class="msg tool"><span class="r">[3]</span><span data-step="3" data-fx="fly" style="--fx:-80px">100</span></div>
+      </div>
+    </div>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:0;top:270px;width:540px;border-color:var(--warn)">
+      <h3>WaitGroup：<span class="num" data-step="4">4 → 0</span></h3>
+      <p class="small">wg.Wait() 等整批都结束，主循环才继续。</p>
+    </div>
+    <div class="card abs" data-step="5" data-fx="rise" style="left:580px;top:270px;width:556px;border-color:var(--go)">
+      <h3 style="color:var(--go)">主循环统一写回历史</h3>
+      <p class="small">按 results 顺序追加 4 条 tool 消息。goroutine 从不直接改历史，避免并发写冲突。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">模型一轮提出 4 个调用，每个调用启动一个 goroutine。</p>
+    <p class="say" data-step="1" data-until="1">有缓冲的 channel 当作执行名额，容量就是 -parallel。</p>
+    <p class="say" data-step="2" data-until="2">两个 goroutine 拿到名额先执行，结果写进各自的 results[i]。</p>
+    <p class="say" data-step="3" data-until="3">有名额释放，等待的 goroutine 接着执行。名额为 1 时也不保证按数组顺序。</p>
+    <p class="say" data-step="4" data-until="4">WaitGroup 计数归零，说明整批结束。</p>
+    <p class="say" data-step="5">最后由主循环一次性写回历史，见 react.go 的 executeBatch。</p>
+  </div>
+</section>
+
+<!-- 11 依赖 vs 独立 -->
+<section class="slide" data-title="哪些调用可以并行">
+  <header class="hd"><span class="kicker">10 · 依赖</span><h2>哪些调用可以放进同一批</h2></header>
+  <div class="canvas">
+    <div class="card abs" data-step="1" data-fx="rise" style="left:0;top:0;width:548px;border-color:var(--go)">
+      <h3 style="color:var(--go)">互不依赖：同一轮，一起执行</h3>
+      <p>“计算 floor(sqrt(1234×5678))，并查询今天星期几”</p>
+      <div class="stack" style="margin-top:14px">
+        <div class="msg asst"><span class="r">第 1 轮</span>calculator　+　get_current_datetime</div>
+        <div class="msg asst"><span class="r">第 2 轮</span>直接回答</div>
+      </div>
+    </div>
+    <div class="card abs" data-step="2" data-fx="rise" style="left:588px;top:0;width:548px;border-color:var(--warn)">
+      <h3 style="color:var(--warn)">有依赖：必须分轮</h3>
+      <p>“先查笔记里的职责数量，再乘以 25”</p>
+      <div class="stack" style="margin-top:14px">
+        <div class="msg asst"><span class="r">第 1 轮</span>search_notes → 得到 4</div>
+        <div class="msg asst"><span class="r">第 2 轮</span>calculator(4*25) → 100</div>
+        <div class="msg asst"><span class="r">第 3 轮</span>回答</div>
+      </div>
+    </div>
+    <div class="card abs" data-step="3" data-fx="rise" style="left:0;top:300px;width:1136px">
+      <p>后一个调用的<b>参数</b>或<b>执行效果</b>依赖前一个时，不能放进同一批。把 -parallel 设为 1 也不能代替这种先后关系，因为名额为 1 时执行顺序同样不保证。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">模型同一轮提出几个调用，取决于它判断这些调用是否互相依赖。</p>
+    <p class="say" data-step="1" data-until="1">计算和查日期互不影响，可以同轮提出、同时执行。</p>
+    <p class="say" data-step="2" data-until="2">“乘以多少”要等查询结果出来才知道，只能分成多轮。</p>
+    <p class="say" data-step="3">真正需要先后顺序的任务，靠分轮决策，而不是靠调低并发数。</p>
+  </div>
+</section>
+
+<!-- 12 复述 -->
+<section class="slide" data-title="用自己的话复述">
+  <header class="hd"><span class="kicker">11 · 自测</span><h2>用自己的话复述</h2></header>
+  <div class="canvas" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-content:start">
+    <div class="card"><h3>模型返回 calculator 请求后，谁真正计算？</h3><p data-step="1">Go 的工具函数。模型只提供名字和参数。</p></div>
+    <div class="card"><h3>为什么下一轮要保存 assistant 和 tool 两种消息？</h3><p data-step="2">前者记录请求，后者记录结果，两者用 id 关联。</p></div>
+    <div class="card"><h3>工具结果只打印到终端会怎样？</h3><p data-step="3">下一次请求里没有它，模型无法据此继续判断。</p></div>
+    <div class="card"><h3>为什么两次工具调用不一定能并行？</h3><p data-step="4">后一次的参数或执行效果，可能依赖前一次的结果。</p></div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">先自己回答，再按 → 看参考答案。</p>
+    <p class="say" data-step="1" data-until="3">对照代码：tools.go 的 runTool，react.go 的 runAgent 和 executeBatch。</p>
+    <p class="say" data-step="4">下一课：循环失控、工具失败、原地打转时，怎样让它停下来。</p>
+  </div>
+</section>
+
+</div></main>
+
+<nav class="bar" aria-label="翻页">
+  <button type="button" data-act="prev" aria-label="上一步">←</button>
+  <button type="button" data-act="next" aria-label="下一步">→</button>
+  <span class="where"></span>
+  <span class="dots"></span>
+  <span class="title"></span>
+  <span class="hint">← → 翻页 · P 自动播放 · F 全屏</span>
+  <button type="button" data-act="play" aria-pressed="false">自动播放</button>
+  <button type="button" data-act="toc" aria-pressed="false">目录</button>
+  <button type="button" data-act="full">全屏</button>
+</nav>
+<div class="toc" hidden></div>
+<script src="deck.js"></script>
+</body>
+</html>

@@ -23,6 +23,7 @@ var toolDefinitions = []map[string]any{
 
 // 仅在显式 -lab-tools 时注册；故障行为是 Day 2 实验，模型调用仍由真实 API 生成。
 var labToolsEnabled bool
+var contextLabEnabled bool
 var labToolDefinitions = []map[string]any{
 	{"name": "always_fail", "description": "Day 2 故障实验：执行一次故障操作，可能返回错误，无需参数。", "parameters": parameters("")},
 	{"name": "check_task_status", "description": "查询任务状态；pending 表示还未完成，需要使用相同 task_id 继续查询。", "parameters": parameters("task_id")},
@@ -52,6 +53,15 @@ func runTool(ctx context.Context, call ToolCall) (result any, err error) {
 		return nil, errors.New("工具参数需要是有效 JSON 对象")
 	}
 	switch call.Function.Name {
+	case "read_day3_notes":
+		if !contextLabEnabled {
+			return nil, errors.New("上下文实验工具未启用")
+		}
+		data, err := os.ReadFile("docs/day-03/day-03-notes.md")
+		if err != nil {
+			return nil, errors.New("无法读取Day 3学习笔记")
+		}
+		return map[string]string{"file": "docs/day-03/day-03-notes.md", "content": string(data)}, nil
 	case "always_fail", "check_task_status":
 		if !labToolsEnabled {
 			return nil, errors.New("故障实验工具未启用")

@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Day 2 循环护栏</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700;900&display=swap">
+<link rel="stylesheet" href="deck.css">
+<style>
+  .ring { position: absolute; border: 3px solid var(--warn); border-radius: 16px; box-shadow: 0 0 0 6px var(--warn-soft); }
+  .cell { width: 44px; height: 44px; border-radius: 8px; border: 2px solid var(--line); background: var(--card); display: grid; place-items: center; font: 600 14px/1 var(--font-mono); color: var(--muted); }
+  .cell.fill, .cell.marked { background: var(--model); border-color: var(--model); color: var(--stage); }
+  .cell { transition: background-color .3s ease, border-color .3s ease, color .3s ease; }
+</style>
+</head>
+<body>
+<div class="progress"></div>
+<main class="deck"><div class="stage">
+
+<!-- 1 封面 -->
+<section class="slide cover" data-title="封面">
+  <p class="day">DAY 02 · LEARNING AGENT</p>
+  <h1>让循环在失败时可控</h1>
+  <p class="lead">任务跑得太久要停，工具短暂失败要再试，模型原地打转要打断。三种失败，需要三种不同的护栏，而且它们由 Go 程序执行，不靠模型自觉。</p>
+  <div class="legend">
+    <span class="tag t-model">模型请求</span><span class="tag t-go">工具执行</span><span class="tag t-warn">护栏判断</span><span class="tag t-err">停止或失败</span>
+  </div>
+  <p class="muted small">按 → 或点击右侧，一步步播放；P 自动播放，F 全屏</p>
+</section>
+
+<!-- 2 三种失败三种护栏 -->
+<section class="slide" data-title="三种失败，三种护栏">
+  <header class="hd"><span class="kicker">01 · 总览</span><h2>三种失败，三种护栏</h2></header>
+  <div class="canvas" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;align-content:start">
+    <div class="card" data-step="1" data-fx="rise" style="border-top:6px solid var(--model)">
+      <p class="small muted">一直行动，迟迟不结束</p>
+      <h3 style="margin-top:8px">max_steps 请求预算</h3>
+      <p class="big" style="color:var(--model);margin:14px 0">10</p>
+      <p class="small">默认最多 10 次模型请求。用完就停，返回已经做了什么。</p>
+    </div>
+    <div class="card" data-step="2" data-fx="rise" style="border-top:6px solid var(--go)">
+      <p class="small muted">当前这次工具调用失败</p>
+      <h3 style="margin-top:8px">有限重试 + 指数退避</h3>
+      <p class="big" style="color:var(--go);margin:14px 0">2 次</p>
+      <p class="small">首次失败后最多再试 2 次，依次等 200ms、400ms。仍失败就把错误交回模型。</p>
+    </div>
+    <div class="card" data-step="3" data-fx="rise" style="border-top:6px solid var(--warn)">
+      <p class="small muted">连续提出相同的动作</p>
+      <h3 style="margin-top:8px">重复动作熔断</h3>
+      <p class="big" style="color:var(--warn);margin:14px 0">第 3 次</p>
+      <p class="small">同一工具、同一参数连续第三次出现时拦下，不再执行。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">任务没完成，可能有三种原因。只加一个停止条件，处理不好所有情况。</p>
+    <p class="say" data-step="1" data-until="1">第一种：步骤太多或走错路。用<b>请求预算</b>兜底。</p>
+    <p class="say" data-step="2" data-until="2">第二种：工具暂时不可用。在执行层<b>有限重试</b>，不打扰模型。</p>
+    <p class="say" data-step="3">第三种：工具正常，但模型原地打转。<b>熔断</b>盯的是模型的决策。</p>
+  </div>
+</section>
+
+<!-- 3 护栏流程 -->
+<section class="slide" data-title="护栏在循环里的位置">
+  <header class="hd"><span class="kicker">02 · 流程</span><h2>护栏在循环里的位置</h2></header>
+  <div class="canvas">
+    <svg class="wires" viewBox="0 0 1136 480">
+      <defs>
+        <marker id="d2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker>
+        <marker id="d2e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--err)"/></marker>
+        <marker id="d2g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--go)"/></marker>
+      </defs>
+      <g style="stroke:var(--muted);stroke-width:2.5;fill:none">
+        <path data-step="1" data-fx="draw" pathLength="1" d="M190 187 H234" marker-end="url(#d2a)"/>
+        <path data-step="2" data-fx="draw" pathLength="1" d="M430 187 H474" marker-end="url(#d2a)"/>
+        <path data-step="3" data-fx="draw" pathLength="1" d="M670 187 H714" marker-end="url(#d2a)"/>
+        <path data-step="4" data-fx="draw" pathLength="1" d="M910 187 H944" marker-end="url(#d2a)"/>
+        <path data-step="5" data-fx="draw" pathLength="1" d="M1043 224 V294" marker-end="url(#d2a)"/>
+        <path data-step="6" data-fx="draw" pathLength="1" d="M950 337 H120 V230" marker-end="url(#d2a)"/>
+      </g>
+      <path data-step="7" data-fx="draw" pathLength="1" d="M575 150 V78" style="stroke:var(--go);stroke-width:2.5;fill:none" marker-end="url(#d2g)"/>
+      <path data-step="8" data-fx="draw" pathLength="1" d="M50 224 V404" style="stroke:var(--err);stroke-width:2.5;fill:none" marker-end="url(#d2e)"/>
+      <path data-step="8" data-fx="draw" pathLength="1" d="M800 224 V404" style="stroke:var(--err);stroke-width:2.5;fill:none" marker-end="url(#d2e)"/>
+    </svg>
+    <div class="node warn" style="left:0;top:150px;width:190px;height:74px">还有请求预算？</div>
+    <div class="node model" style="left:240px;top:150px;width:190px;height:74px">请求模型</div>
+    <div class="node" style="left:480px;top:150px;width:190px;height:74px">有工具调用？</div>
+    <div class="node warn" style="left:720px;top:150px;width:190px;height:74px">第三次<br>相同动作？</div>
+    <div class="node go" style="left:950px;top:150px;width:186px;height:74px;font-size:16px">执行工具<br>失败则有限重试</div>
+    <div class="node go" style="left:950px;top:300px;width:186px;height:74px;font-size:16px">结果或错误<br>写回历史</div>
+    <div class="node go" style="left:480px;top:10px;width:190px;height:64px">回答并结束</div>
+    <div class="node err" style="left:0;top:410px;width:1136px;height:56px">未完成：返回已执行步骤摘要（本地生成，不再请求模型）</div>
+    <div class="lbl" style="left:676px;top:162px">有</div>
+    <div class="lbl" style="left:912px;top:162px">否</div>
+    <div class="lbl go" style="left:586px;top:100px">无调用且有回答</div>
+    <div class="lbl" style="left:420px;top:345px">下一轮</div>
+    <div class="lbl err" style="left:60px;top:300px">用完</div>
+    <div class="lbl err" style="left:810px;top:300px">是：整批拦下</div>
+    <div class="ring" data-step="1" data-until="1" style="left:-8px;top:142px;width:206px;height:90px"></div>
+    <div class="ring" data-step="2" data-until="2" style="left:232px;top:142px;width:206px;height:90px"></div>
+    <div class="ring" data-step="3" data-until="3" style="left:472px;top:142px;width:206px;height:90px"></div>
+    <div class="ring" data-step="4" data-until="4" style="left:712px;top:142px;width:206px;height:90px"></div>
+    <div class="ring" data-step="5" data-until="5" style="left:942px;top:142px;width:202px;height:90px"></div>
+    <div class="ring" data-step="6" data-until="6" style="left:942px;top:292px;width:202px;height:90px"></div>
+    <div class="ring" data-step="7" data-until="7" style="left:472px;top:2px;width:206px;height:80px"></div>
+    <div class="ring" data-step="8" style="left:-8px;top:402px;width:1152px;height:72px;border-color:var(--err);box-shadow:0 0 0 6px var(--err-soft)"></div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">跟着高亮框走一圈，看三个护栏分别守在哪里。</p>
+    <p class="say" data-step="1" data-until="1">每次请求模型之前，先检查<b>请求预算</b>。</p>
+    <p class="say" data-step="2" data-until="2">请求模型，拿到它这一轮的决定。</p>
+    <p class="say" data-step="3" data-until="3">有工具调用就继续往下走。</p>
+    <p class="say" data-step="4" data-until="4">执行之前，按模型给出的顺序检查<b>重复动作</b>。</p>
+    <p class="say" data-step="5" data-until="5">执行工具。失败时在这里<b>有限重试</b>，不消耗模型请求。</p>
+    <p class="say" data-step="6" data-until="6">成功结果或最终错误都写回历史，进入下一轮。</p>
+    <p class="say" data-step="7" data-until="7">模型不再调用工具并给出回答：正常结束。</p>
+    <p class="say" data-step="8">预算用完或熔断：程序主动停止，用本地记录说明做到了哪一步。</p>
+  </div>
+</section>
+
+<!-- 4 max_steps -->
+<section class="slide" data-title="max_steps 数的是模型请求">
+  <header class="hd"><span class="kicker">03 · 预算</span><h2>max_steps 数的是模型请求</h2></header>
+  <div class="canvas">
+    <p class="colhead abs" style="left:0;top:0">请求预算 10 次</p>
+    <div class="abs" style="left:0;top:28px;display:flex;gap:8px">
+      <div class="cell" data-mark="1">1</div>
+      <div class="cell" data-mark="2">2</div>
+      <div class="cell" data-mark="3">3</div>
+      <div class="cell">4</div><div class="cell">5</div><div class="cell">6</div><div class="cell">7</div><div class="cell">8</div><div class="cell">9</div><div class="cell">10</div>
+    </div>
+    <div class="card abs" data-step="1" data-fx="rise" style="left:0;top:110px;width:360px">
+      <p class="small muted">第 1 次请求</p><h3>模型：查笔记</h3>
+      <p class="small">执行 search_notes，得到“4 项职责”。工具即使重试，也不算新的请求。</p>
+    </div>
+    <div class="card abs" data-step="2" data-fx="rise" style="left:388px;top:110px;width:360px">
+      <p class="small muted">第 2 次请求</p><h3>模型：计算 4×25</h3>
+      <p class="small">执行 calculator，得到 100。</p>
+    </div>
+    <div class="card abs" data-step="3" data-fx="rise" style="left:776px;top:110px;width:360px">
+      <p class="small muted">第 3 次请求</p><h3>模型：回答</h3>
+      <p class="small">最终回答同样要请求模型，也占一次。</p>
+    </div>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:0;top:290px;width:740px;border-color:var(--err)">
+      <h3 style="color:var(--err)">如果预算只有 1 次（-max-steps 1）</h3>
+      <p class="small">查完笔记就停：返回“未完成”，附上本地生成的步骤摘要“第1轮 search_notes 成功”。不会再请求模型来写总结，否则就突破了预算。</p>
+    </div>
+    <div class="card abs" data-step="5" data-fx="rise" style="left:776px;top:290px;width:360px;border-color:var(--warn)">
+      <h3 style="color:var(--warn)">Day 3 之后</h3>
+      <p class="small">上下文摘要也是一次模型请求，同样计入这个预算。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">例子：查笔记里的职责数量，再乘以 25。</p>
+    <p class="say" data-step="1" data-until="1">一次请求里可以提出多个工具调用。工具在本地重试，不增加请求次数。</p>
+    <p class="say" data-step="2" data-until="2">第二次请求根据查询结果发起计算。</p>
+    <p class="say" data-step="3" data-until="3">回答也要请求模型。这个任务共用 3 次。预算是“最多”，不是“必须用满”。</p>
+    <p class="say" data-step="4" data-until="4">预算不够时，“已查到笔记”是有效进度，应该告诉用户。</p>
+    <p class="say" data-step="5">现在 -max-steps 的含义是：这次任务所有模型请求的总数。</p>
+  </div>
+</section>
+
+<!-- 5 10 还是 50 -->
+<section class="slide" data-title="上限设 10 还是 50">
+  <header class="hd"><span class="kicker">04 · 取舍</span><h2>上限设 10 还是 50</h2></header>
+  <div class="canvas">
+    <table class="t abs" style="left:0;top:0;width:520px">
+      <tr><th>上限</th><th>得到什么</th><th>付出什么</th></tr>
+      <tr data-step="1"><td class="num">10</td><td>更早停止错误路径，耗时和费用好控制</td><td>正常的长任务也可能被截断</td></tr>
+      <tr data-step="2"><td class="num">50</td><td>长任务更有机会完成</td><td>失控路径也有更多空间消耗预算</td></tr>
+    </table>
+    <p class="colhead abs" data-step="3" style="left:600px;top:0">每次请求的输入：历史越来越长</p>
+    <div class="abs" data-step="3" style="left:600px;top:40px;width:536px;height:300px;display:flex;align-items:flex-end;gap:8px;border-bottom:2px solid var(--line)">
+      <div data-step="3" data-fx="growy" style="flex:1;height:10%;background:var(--model);border-radius:4px 4px 0 0"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:19%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.05s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:28%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.1s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:37%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.15s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:46%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.2s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:55%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.25s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:64%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.3s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:73%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.35s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:82%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.4s"></div>
+      <div data-step="3" data-fx="growy" style="flex:1;height:91%;background:var(--model);border-radius:4px 4px 0 0;transition-delay:.45s"></div>
+    </div>
+    <div class="abs muted small" data-step="3" style="left:600px;top:350px;width:536px;display:flex;justify-content:space-between;font-family:var(--font-mono)"><span>第 1 次</span><span>第 10 次</span></div>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:0;top:200px;width:520px;border-color:var(--warn)">
+      <p>请求上限翻 5 倍，总 token 和费用<b>不止</b>翻 5 倍：每次请求都要带上越来越长的历史。</p>
+      <p class="small muted" style="margin-top:10px">max_steps 也不是超时。次数和时间是两种不同的限制。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">上限不是越大越好，也不是越小越好。</p>
+    <p class="say" data-step="1" data-until="2">两个数字各有代价，要按任务类型选。</p>
+    <p class="say" data-step="3" data-until="3">每一轮都把完整历史重新发一遍，单次输入越来越大。</p>
+    <p class="say" data-step="4">所以总消耗大致随请求次数的平方增长。这也是 Day 3 要管理上下文的原因。</p>
+  </div>
+</section>
+
+<!-- 6 指数退避 -->
+<section class="slide" data-title="指数退避">
+  <header class="hd"><span class="kicker">05 · 重试</span><h2>重试只处理当前这一次调用</h2></header>
+  <div class="canvas">
+    <div class="abs" style="left:60px;top:150px;width:1000px;height:2px;background:var(--line)"></div>
+    <div class="node err" data-step="1" data-fx="pop" style="left:60px;top:110px;width:60px;height:80px;font-size:15px">第1次<br>✕</div>
+    <div class="abs" data-step="1" data-fx="grow" style="left:120px;top:146px;width:200px;height:10px;background:repeating-linear-gradient(90deg,var(--warn) 0 10px,transparent 10px 16px);transition-delay:.3s"></div>
+    <div class="lbl" data-step="1" style="left:170px;top:166px;color:var(--warn)">等 200ms</div>
+    <div class="node err" data-step="2" data-fx="pop" style="left:320px;top:110px;width:60px;height:80px;font-size:15px">第2次<br>✕</div>
+    <div class="abs" data-step="2" data-fx="grow" style="left:380px;top:146px;width:400px;height:10px;background:repeating-linear-gradient(90deg,var(--warn) 0 10px,transparent 10px 16px);transition-delay:.3s"></div>
+    <div class="lbl" data-step="2" style="left:530px;top:166px;color:var(--warn)">等 400ms</div>
+    <div class="node err" data-step="3" data-fx="pop" style="left:780px;top:110px;width:60px;height:80px;font-size:15px">第3次<br>✕</div>
+    <div class="msg err abs" data-step="4" data-fx="fly" style="--fx:-200px;left:860px;top:126px;width:276px"><span class="r">tool</span>错误回填，attempts=3</div>
+    <div class="abs muted small" style="left:60px;top:200px;width:1000px;display:flex;justify-content:space-between;font-family:var(--font-mono)"><span>0</span><span>200ms</span><span>400ms</span><span>600ms</span><span>800ms</span><span></span></div>
+<div class="code abs" data-step="3" data-fx="rise" style="left:0;top:270px;width:560px"><span class="c">// runWithRetry：一个调用最多尝试 1 + retries 次</span>
+delay := 200 * time.Millisecond * time.Duration(1&lt;&lt;attempt)
+select {
+case &lt;-timer.C:      <span class="c">// 等够了，再试</span>
+case &lt;-ctx.Done():   <span class="c">// Ctrl+C 能打断等待</span>
+}</div>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:600px;top:270px;width:536px">
+      <p class="small">同一个调用 id，attempts 从 1 加到 3。用完后不让程序崩溃，而是把错误作为 Observation 交回模型。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">时间轴按比例画。默认 retries=2：首次执行之后，最多再试两次。</p>
+    <p class="say" data-step="1" data-until="1">第一次失败，等 200ms。可能只是临时网络抖动。</p>
+    <p class="say" data-step="2" data-until="2">还失败，等待翻倍到 400ms。等待时间是 200ms × 2^r。</p>
+    <p class="say" data-step="3" data-until="3">第三次仍失败，停止重试。200ms 是方便观察的起点，不是生产标准。</p>
+    <p class="say" data-step="4">最后的错误写回历史，下一轮交给模型处理。</p>
+  </div>
+</section>
+
+<!-- 7 错误必须回填 -->
+<section class="slide" data-title="错误为什么要回填">
+  <header class="hd"><span class="kicker">06 · 回填</span><h2>错误也要交回模型</h2></header>
+  <div class="canvas">
+    <div class="stack abs" style="left:0;top:0;width:520px">
+      <div class="msg sys old"><span class="r">system</span>工具助手</div>
+      <div class="msg user old"><span class="r">user</span>帮我算一下…</div>
+      <div class="msg asst"><span class="r">assistant</span>calculator({})</div>
+      <div class="msg err" data-step="1" data-fx="fly" style="--fx:-60px"><span class="r">tool</span>缺少参数 expression</div>
+    </div>
+    <svg class="wires" viewBox="0 0 1136 480">
+      <defs><marker id="d2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--model)"/></marker></defs>
+      <g style="stroke:var(--model);stroke-width:2.5;fill:none">
+        <path data-step="2" data-fx="draw" pathLength="1" d="M530 140 C600 140 600 60 660 60" marker-end="url(#d2b)"/>
+        <path data-step="2" data-fx="draw" pathLength="1" d="M530 140 C600 140 600 160 660 160" marker-end="url(#d2b)"/>
+        <path data-step="2" data-fx="draw" pathLength="1" d="M530 140 C600 140 600 260 660 260" marker-end="url(#d2b)"/>
+      </g>
+    </svg>
+    <div class="card abs" data-step="2" data-fx="rise" style="left:670px;top:28px;width:466px"><p class="small"><b>补参数</b>：重新提出 calculator(expression="…")</p></div>
+    <div class="card abs" data-step="2" data-fx="rise" style="left:670px;top:128px;width:466px"><p class="small"><b>换工具</b>：服务暂时不可用，改用别的途径</p></div>
+    <div class="card abs" data-step="2" data-fx="rise" style="left:670px;top:228px;width:466px"><p class="small"><b>向用户说明</b>：做不到，原因是什么</p></div>
+    <div class="abs" data-step="3" data-fx="rise" style="left:0;top:330px;width:1136px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div class="card" style="border-color:var(--go)"><h3 style="color:var(--go)">执行层决定</h3><p class="small">同一个请求，要不要再试、再试几次。</p></div>
+      <div class="card" style="border-color:var(--model)"><h3 style="color:var(--model)">模型决定</h3><p class="small">接下来改做什么。</p></div>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">模型调用 calculator，却漏了参数。</p>
+    <p class="say" data-step="1" data-until="1">错误不只打印在终端，而是作为 tool 消息写回历史。</p>
+    <p class="say" data-step="2" data-until="2">下一轮，模型看得到原因，才能选择合适的下一步。</p>
+    <p class="say" data-step="3">两层各管一件事。runTool 还会把 panic 转成 error，异常工具也走同一条回流路线。</p>
+  </div>
+</section>
+
+<!-- 8 重复动作熔断 -->
+<section class="slide" data-title="重复动作熔断">
+  <header class="hd"><span class="kicker">07 · 熔断</span><h2>重复动作熔断盯的是模型决策</h2></header>
+  <div class="canvas">
+    <div class="abs" style="left:0;top:0;width:1136px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+      <div class="card" data-step="1" data-fx="rise"><p class="small muted">第 1 轮</p><p class="num small">check_task_status(day2-loop)</p><p style="color:var(--go);margin-top:6px">执行 → pending</p></div>
+      <div class="card" data-step="2" data-fx="rise"><p class="small muted">第 2 轮</p><p class="num small">check_task_status(day2-loop)</p><p style="color:var(--go);margin-top:6px">执行 → pending</p></div>
+      <div class="card" data-step="3" data-fx="pop" style="border-color:var(--err)"><p class="small muted">第 3 轮</p><p class="num small">check_task_status(day2-loop)</p><p style="color:var(--err);margin-top:6px">拦下，不执行，停止</p></div>
+    </div>
+    <p class="colhead abs" data-step="4" style="left:0;top:150px">actionKey：判断“是不是同一个动作”</p>
+<div class="code abs" data-step="4" data-fx="rise" style="left:0;top:180px;width:560px">check_task_status:{"task_id":"day2-loop"}
+<span class="c">// 忽略：调用 id、JSON 空白、键的顺序</span>
+<span class="c">// 不忽略：工具名、参数值</span></div>
+    <table class="t abs" data-step="5" style="left:600px;top:150px;width:536px">
+      <tr><th>动作序列</th><th>判定</th></tr>
+      <tr><td class="num">A(x) → A(x) → A(x)</td><td style="color:var(--err)">第三次熔断</td></tr>
+      <tr><td class="num">A(x) → A(y) → A(x)</td><td>参数变了，重新计数</td></tr>
+      <tr><td class="num">A(x) → B(y) → A(x)</td><td>工具变了，重新计数</td></tr>
+      <tr><td class="num">A → B → A → B</td><td class="muted">绕过了，靠预算兜底</td></tr>
+    </table>
+    <div class="card abs" data-step="6" data-fx="rise" style="left:0;top:330px;width:560px;border-color:var(--warn)">
+      <p class="small">检查在启动工具<b>之前</b>，按 tool_calls 数组顺序进行，不看谁先跑完。触发时，<b>整批</b>都不启动。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">实验工具 check_task_status 永远返回 pending，模型被要求一直查。</p>
+    <p class="say" data-step="1" data-until="2">工具每次都正常返回，所以重试机制不会触发，任务却没有推进。</p>
+    <p class="say" data-step="3" data-until="3">第三次相同请求出现时，程序拦下它。前两次已执行，第三次不执行。</p>
+    <p class="say" data-step="4" data-until="4">调用 id 每次都可能不同，空格和键顺序也不代表任务变了，所以要先归一化。</p>
+    <p class="say" data-step="5" data-until="5">只盯“连续相同”。交替调用能绕过，最后靠请求预算兜底。</p>
+    <p class="say" data-step="6">判定和运行快慢无关，同样的输入总得到同样的结论。</p>
+  </div>
+</section>
+
+<!-- 9 三个数字 -->
+<section class="slide" data-title="最容易混淆的三个数字">
+  <header class="hd"><span class="kicker">08 · 计数</span><h2>最容易混淆的三个数字</h2></header>
+  <div class="canvas">
+    <table class="t">
+      <tr><th style="width:44%">场景</th><th>模型请求</th><th>工具尝试</th><th>连续重复</th></tr>
+      <tr data-step="1"><td>一轮提出两个不同工具，各成功一次</td><td class="num">1</td><td class="num">各 1</td><td>没有连续重复</td></tr>
+      <tr data-step="2"><td>一个工具失败，又重试两次</td><td class="num">1</td><td class="num" style="color:var(--go)">同一调用 3</td><td>只提出过 1 次</td></tr>
+      <tr data-step="3"><td>三轮提出同一工具和参数</td><td class="num">3</td><td class="num">前两次各 1，第三次 0</td><td class="num" style="color:var(--err)">3 → 熔断</td></tr>
+    </table>
+    <div class="card abs" data-step="4" data-fx="rise" style="left:0;top:300px;width:1136px;border-color:var(--warn)">
+      <p>“重试两次”不会触发“三次重复熔断”：一个计数在工具执行内部，另一个在模型和执行器之间。</p>
+      <p class="small muted" style="margin-top:8px">还要分清“工具执行成功”和“任务完成”：查询成功返回 pending，任务仍未完成。</p>
+    </div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">三个计数器，分别在三个不同的层次。</p>
+    <p class="say" data-step="1" data-until="1">一次请求可以带多个调用。</p>
+    <p class="say" data-step="2" data-until="2">重试发生在执行层，模型只看到最后的结果。</p>
+    <p class="say" data-step="3" data-until="3">熔断数的是模型连续提出的动作。</p>
+    <p class="say" data-step="4">读终端日志时，先问自己：这个数字在数哪一层？</p>
+  </div>
+</section>
+
+<!-- 10 重试前先分类 -->
+<section class="slide" data-title="重试前先分类">
+  <header class="hd"><span class="kicker">09 · 生产</span><h2>重试之前，先判断该怎么恢复</h2></header>
+  <div class="canvas" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;align-content:start">
+    <div class="card" data-step="1" data-fx="rise" style="border-top:6px solid var(--go)"><h3>稍后再试</h3><p class="small muted">服务繁忙、临时限流</p><p class="small" style="margin-top:8px">在预算内退避重试，加随机抖动，遵守服务端的等待提示。</p></div>
+    <div class="card" data-step="2" data-fx="rise" style="border-top:6px solid var(--model)"><h3>换一种做法</h3><p class="small muted">缺参数、除数为 0</p><p class="small" style="margin-top:8px">等再久参数也不会自己长出来。回填给模型修正。</p></div>
+    <div class="card" data-step="3" data-fx="rise" style="border-top:6px solid var(--warn)"><h3>修配置或授权</h3><p class="small muted">Key 无效、无权限</p><p class="small" style="margin-top:8px">不原样重试，也不能让模型换工具绕过权限。</p></div>
+    <div class="card" data-step="4" data-fx="rise" style="border-top:6px solid var(--err)"><h3>停止</h3><p class="small muted">用户取消、截止时间到</p><p class="small" style="margin-top:8px">不再重试，报告已有进度。</p></div>
+<div class="code" data-step="5" data-fx="rise" style="grid-column:1 / 3">自动重试的条件（同时满足）：
+  可能通过等待恢复
+  且 同一操作可以安全重放
+  且 次数和时间还有预算
+  且 没有被取消</div>
+    <div class="card" data-step="6" data-fx="rise" style="grid-column:3 / 5;border-color:var(--err)"><h3>层层重试会相乘</h3><p class="small">Agent、工具封装、HTTP 客户端各试 3 次，一次逻辑操作最坏变成 <b class="num">3×3×3 = 27</b> 次底层请求。约定由哪一层负责重试。</p></div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">课程实现统一重试所有工具错误。生产中要先分类。</p>
+    <p class="say" data-step="1" data-until="4">四种情况，四种不同的处理。判断依据是错误码和接口语义，不是错误文案里的某个词。</p>
+    <p class="say" data-step="5" data-until="5">“暂时性”和“能否安全重放”是两个独立的问题。</p>
+    <p class="say" data-step="6">次数、总耗时和费用要一起限制。</p>
+  </div>
+</section>
+
+<!-- 11 超时但已经成功 -->
+<section class="slide" data-title="超时了，但操作已经成功">
+  <header class="hd"><span class="kicker">10 · 幂等</span><h2>超时了，但操作可能已经成功</h2></header>
+  <div class="canvas">
+    <div class="lane" style="left:150px"><span class="lane-head go">Agent</span></div>
+    <div class="lane" style="left:900px"><span class="lane-head model">工单服务</span></div>
+    <svg class="wires" viewBox="0 0 1136 480">
+      <defs>
+        <marker id="d2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--go)"/></marker>
+        <marker id="d2d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--model)"/></marker>
+        <marker id="d2f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--err)"/></marker>
+      </defs>
+      <path data-step="1" data-fx="draw" pathLength="1" d="M152 76 H894" style="stroke:var(--go);stroke-width:3;fill:none" marker-end="url(#d2c)"/>
+      <path data-step="2" data-fx="draw" pathLength="1" d="M898 150 H560" style="stroke:var(--model);stroke-width:3;fill:none;stroke-dasharray:8 6"/>
+      <path data-step="4" data-fx="draw" pathLength="1" d="M152 300 H894" style="stroke:var(--err);stroke-width:3;fill:none" marker-end="url(#d2f)"/>
+      <path data-step="5" data-fx="draw" pathLength="1" d="M152 380 H894" style="stroke:var(--go);stroke-width:3;fill:none" marker-end="url(#d2c)"/>
+      <path data-step="5" data-fx="draw" pathLength="1" d="M898 430 H158" style="stroke:var(--model);stroke-width:3;fill:none" marker-end="url(#d2d)"/>
+    </svg>
+    <div class="lbl go" data-step="1" style="left:300px;top:46px;width:450px">创建工单，业务操作 id = op-001</div>
+    <div class="node model" data-step="2" data-fx="pop" style="left:920px;top:96px;width:216px;height:44px;font-size:16px">已创建 T-123</div>
+    <div class="lbl" data-step="2" style="left:600px;top:122px;width:280px;color:var(--model)">响应：T-123</div>
+    <div class="node err" data-step="2" data-fx="pop" style="left:520px;top:132px;width:44px;height:36px">✕</div>
+    <div class="node warn" data-step="3" data-fx="pop" style="left:20px;top:180px;width:300px;height:64px;font-size:16px">只收到 timeout<br>状态：结果未知</div>
+    <div class="lbl err" data-step="4" style="left:300px;top:270px;width:450px">换新 id 重发 → 又建了 T-124（重复）</div>
+    <div class="lbl go" data-step="5" style="left:300px;top:350px;width:450px">复用幂等键 op-001 重放</div>
+    <div class="lbl model" data-step="5" style="left:300px;top:400px;width:450px">服务端去重：返回已有的 T-123</div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">有副作用的操作，最难处理的失败是“不知道成功没有”。</p>
+    <p class="say" data-step="1" data-until="1">Agent 发起创建工单，带上业务操作 id。</p>
+    <p class="say" data-step="2" data-until="2">服务端其实已经创建成功，但响应在网络上丢了。</p>
+    <p class="say" data-step="3" data-until="3">Agent 只看到 timeout。正确的状态是“结果未知”，不是“没有创建”。</p>
+    <p class="say" data-step="4" data-until="4">直接换个新请求重发，会产生第二张工单。</p>
+    <p class="say" data-step="5">按服务端的幂等协议复用同一个键，或先用操作 id 查询结果。tool_call_id 不能代替业务操作 id。</p>
+  </div>
+</section>
+
+<!-- 12 max_steps 不能代替超时 -->
+<section class="slide" data-title="次数不能代替超时">
+  <header class="hd"><span class="kicker">11 · 时间</span><h2>max_steps 不能代替超时</h2></header>
+  <div class="canvas">
+    <p class="colhead abs" style="left:0;top:0">请求预算</p>
+    <div class="abs" style="left:0;top:28px;display:flex;gap:8px">
+      <div class="cell fill">1</div><div class="cell">2</div><div class="cell">3</div><div class="cell">4</div><div class="cell">5</div><div class="cell">6</div><div class="cell">7</div><div class="cell">8</div><div class="cell">9</div><div class="cell">10</div>
+    </div>
+    <p class="colhead abs" data-step="1" style="left:0;top:110px">第 1 轮的某个工具一直不返回</p>
+    <div class="abs" data-step="1" style="left:0;top:144px;width:1136px;height:28px;border-radius:6px;background:var(--line)"></div>
+    <div class="abs" data-step="1" data-fx="grow" style="left:0;top:144px;width:1136px;height:28px;border-radius:6px;background:repeating-linear-gradient(90deg,var(--err) 0 14px,var(--err-soft) 14px 28px);transition-duration:3s"></div>
+    <div class="lbl err" data-step="1" style="left:0;top:182px">WaitGroup.Wait 一直等……第 2 轮永远不会到来</div>
+    <table class="t abs" data-step="2" style="left:0;top:230px;width:1136px">
+      <tr><th>预算</th><th>回答的问题</th><th>当前实现</th></tr>
+      <tr><td>模型请求次数</td><td>最多做几轮决策？</td><td>-max-steps</td></tr>
+      <tr><td>单次超时、任务截止时间</td><td>一个调用、整个任务最多等多久？</td><td>模型 HTTP 请求 5 分钟；工具和整个任务尚未设置</td></tr>
+      <tr><td>token、费用、调用额度</td><td>总共允许消耗多少资源？</td><td>Day 3 开始管理输入大小</td></tr>
+    </table>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">设 max_steps = 10。这是不是意味着任务一定会很快结束？</p>
+    <p class="say" data-step="1" data-until="1">如果第 1 轮的工具卡住，循环根本走不到第 2 轮，计数器永远停在 1。</p>
+    <p class="say" data-step="2">次数、时间、资源是三种预算。Go 的 context 能传递截止时间，但工具本身也要响应取消。</p>
+  </div>
+</section>
+
+<!-- 13 分工 -->
+<section class="slide" data-title="三层分工">
+  <header class="hd"><span class="kicker">12 · 分工</span><h2>谁解释错误，谁决定重试，谁调整计划</h2></header>
+  <div class="canvas">
+    <div class="node go" data-step="1" data-fx="pop" style="left:0;top:0;width:340px;height:120px;display:block;text-align:left;padding:16px"><span style="font-size:20px">工具封装</span><p class="small muted" style="font-weight:400;margin-top:8px">懂业务：把原始失败归类，说明操作有没有产生效果</p></div>
+    <div class="node warn" data-step="2" data-fx="pop" style="left:398px;top:0;width:340px;height:120px;display:block;text-align:left;padding:16px"><span style="font-size:20px">执行器</span><p class="small muted" style="font-weight:400;margin-top:8px">管规则：是否重试、等多久、何时停止</p></div>
+    <div class="node model" data-step="3" data-fx="pop" style="left:796px;top:0;width:340px;height:120px;display:block;text-align:left;padding:16px"><span style="font-size:20px">模型与主循环</span><p class="small muted" style="font-weight:400;margin-top:8px">定方向：补参数、换方案或说明无法完成</p></div>
+    <div class="lbl" data-step="1" style="left:0;top:130px;width:340px">对应 runTool</div>
+    <div class="lbl" data-step="2" style="left:398px;top:130px;width:340px">对应 runWithRetry</div>
+    <div class="lbl" data-step="3" style="left:796px;top:130px;width:340px">对应 runAgent 和历史</div>
+    <table class="t abs" data-step="4" style="left:0;top:180px;width:1136px;font-size:16px">
+      <tr><th>create_ticket 的结果</th><th>工具封装说明</th><th>后续处理</th></tr>
+      <tr><td>本地校验缺 title，未发请求</td><td>参数错误，未执行</td><td>不重试，回填给模型补齐</td></tr>
+      <tr><td>服务返回临时限流，保证未执行</td><td>临时故障，无效果</td><td>预算内退避重试</td></tr>
+      <tr><td>请求已发出，读取响应超时</td><td>结果未知</td><td>幂等重放或查询；否则报告待核实</td></tr>
+      <tr><td>服务返回无权限</td><td>权限拒绝</td><td>不重试，报告受阻原因</td></tr>
+      <tr><td>HTTP 成功，业务状态 pending</td><td>已受理，未完成</td><td>返回真实状态，不宣布完成</td></tr>
+    </table>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">业务知识不必全堆进主循环，重试逻辑也不必每个工具重写一遍。</p>
+    <p class="say" data-step="1" data-until="1">工具封装最懂这个接口：错误码是什么意思，操作有没有副作用。</p>
+    <p class="say" data-step="2" data-until="2">执行器统一应用规则：次数、退避、截止时间、取消。</p>
+    <p class="say" data-step="3" data-until="3">模型根据结果调整计划，主循环守住预算并保存结果。</p>
+    <p class="say" data-step="4">同一个 timeout，查询可以考虑重试，创建必须先处理重复副作用。</p>
+  </div>
+</section>
+
+<!-- 14 自测 -->
+<section class="slide" data-title="自测">
+  <header class="hd"><span class="kicker">13 · 自测</span><h2>用自己的话复述</h2></header>
+  <div class="canvas" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-content:start">
+    <div class="card"><h3>预算用完后，为什么不再请求模型写摘要？</h3><p data-step="1">那会突破预算。执行记录在程序手里，本地生成即可。</p></div>
+    <div class="card"><h3>一个工具执行了 3 次，为什么不一定熔断？</h3><p data-step="2">它们属于同一个调用请求。熔断数的是模型连续提出的动作。</p></div>
+    <div class="card"><h3>换了调用 id，工具和参数没变，会怎样？</h3><p data-step="3">id 不参与判定，仍然算相同动作。</p></div>
+    <div class="card"><h3>创建工单超时，能立即换新 id 重发吗？</h3><p data-step="4">先当作结果未知：查询原操作，或复用同一个幂等键。</p></div>
+    <div class="card"><h3>max_steps = 10 能保证十分钟内结束吗？</h3><p data-step="5">不能。次数和耗时不同，还需要超时和取消链路。</p></div>
+    <div class="card"><h3>只做熔断为什么不够？</h3><p data-step="6">交替调用或不断改参数能绕过它，请求预算仍要兜底。</p></div>
+  </div>
+  <div class="says">
+    <p class="say" data-step="0" data-until="0">先自己回答，再按 → 看参考答案。</p>
+    <p class="say" data-step="1" data-until="5">对照代码：react.go 的 runAgent、runWithRetry、actionKey、stopRun。</p>
+    <p class="say" data-step="6">下一课：历史越来越长，怎样决定每次发给模型什么。</p>
+  </div>
+</section>
+
+</div></main>
+
+<nav class="bar" aria-label="翻页">
+  <button type="button" data-act="prev" aria-label="上一步">←</button>
+  <button type="button" data-act="next" aria-label="下一步">→</button>
+  <span class="where"></span>
+  <span class="dots"></span>
+  <span class="title"></span>
+  <span class="hint">← → 翻页 · P 自动播放 · F 全屏</span>
+  <button type="button" data-act="play" aria-pressed="false">自动播放</button>
+  <button type="button" data-act="toc" aria-pressed="false">目录</button>
+  <button type="button" data-act="full">全屏</button>
+</nav>
+<div class="toc" hidden></div>
+<script src="deck.js"></script>
+</body>
+</html>

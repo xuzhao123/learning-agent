@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent 学习课件</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700;900&display=swap">
+<link rel="stylesheet" href="deck.css">
+<style>
+  /* 入口页可以滚动，沿用课件的颜色与字体 */
+  body { overflow: auto; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding-inline: 20px; padding-block: 56px 72px; display: flex; flex-direction: column; gap: 28px; }
+  .wrap h1 { font-size: clamp(34px, 6vw, 56px); line-height: 1.15; }
+  .intro { font-size: 18px; line-height: 1.7; color: var(--muted); max-width: 680px; }
+  .flow { font: 600 15px/1.8 var(--font-mono); color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; overflow-x: auto; white-space: nowrap; }
+  .lessons { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  .lesson { display: flex; flex-direction: column; gap: 10px; min-width: 0; text-decoration: none; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 22px; transition: border-color .2s ease, transform .2s ease; }
+  .lesson:hover { border-color: var(--model); transform: translateY(-2px); }
+  .lesson:focus-visible { outline: 2px solid var(--model); outline-offset: 3px; }
+  .lesson .no { font: 600 14px/1 var(--font-mono); color: var(--muted); letter-spacing: .1em; }
+  .lesson h2 { font-size: 26px; }
+  .lesson p { font-size: 16px; line-height: 1.6; color: var(--muted); }
+  .lesson .meta { margin-top: auto; padding-top: 8px; font: 600 14px/1 var(--font-mono); color: var(--model); }
+  .keys { font-size: 15px; line-height: 1.8; color: var(--muted); }
+  kbd { font: 600 13px/1 var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 3px 6px; background: var(--card); color: var(--ink); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <p class="kicker">LEARNING AGENT · 用 Go 手写 Agent</p>
+  <h1>Agent 学习课件</h1>
+  <p class="intro">每节课一份可翻页的课件。每一页按步骤播放，跟着动画看清一次任务里消息怎样流动、程序在哪里做判断。内容与项目源码和每日学习笔记一致。</p>
+  <div class="flow">问题 → 选择本轮上下文 → 请求模型 → 读取 tool_calls → 并行执行 → tool 结果写回历史 → 下一轮或结束</div>
+  <div class="lessons">
+    <a class="lesson" href="day-01.html">
+      <span class="no">DAY 01</span>
+      <h2>工具调用循环</h2>
+      <p>工具定义、调用请求和执行结果的区别；消息历史怎样逐轮增长；并行在哪一层发生。</p>
+      <span class="meta">12 页 →</span>
+    </a>
+    <a class="lesson" href="day-02.html">
+      <span class="no">DAY 02</span>
+      <h2>循环护栏</h2>
+      <p>请求预算、有限重试与指数退避、重复动作熔断；生产中的错误分类与幂等。</p>
+      <span class="meta">14 页 →</span>
+    </a>
+    <a class="lesson" href="day-03.html">
+      <span class="no">DAY 03</span>
+      <h2>上下文管理</h2>
+      <p>截断、裁剪与压缩的区别；压后大小由保留内容决定；Codex 本地/远端动画、allo 对照与项目参数附录。</p>
+      <span class="meta">14 页 · Codex 动画从第 7 页开始 →</span>
+    </a>
+  </div>
+  <p class="keys">翻页：<kbd>→</kbd> <kbd>←</kbd> 或点击课件左右两侧，手机上左右滑动。<kbd>P</kbd> 自动播放，<kbd>F</kbd> 全屏，底部“目录”可以跳页。</p>
+</main>
+</body>
+</html>
