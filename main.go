@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,12 +37,32 @@ func run() error {
 	toolOutput := flag.Int("tool-output-tokens", 2000, "工具结果写入视图的估算token上限，至少64")
 	keepGroups := flag.Int("keep-groups", 2, "压缩后最多保留的最近完整消息组数")
 	contextLab := flag.Bool("context-lab", false, "Day 3：33轮真实对话和真实大工具输出实验，建议 -max-steps 60")
+	flag.BoolVar(&ragEnabled, "rag", false, "Day 4：启用本地知识库检索工具与来源引用")
+	ragLab := flag.Bool("rag-lab", false, "Day 4：10题检索检查与无检索/有检索真实模型对比")
+	embeddingMode := flag.String("embedding", "ark", "向量模型：ark（线上方舟）或local（本地纯Go推理）")
+	threshold := flag.Float64("min-score", minScore, "检索余弦相似度阈值，-1到1")
+	searchQuery := flag.String("search-docs", "", "只执行检索；不调用聊天模型，local模式无需密钥")
+	searchK := flag.Int("k", 3, "search-docs 返回的候选数，1到6")
 	flag.Parse()
 	if flag.NArg() != 0 || *parallel < 1 || *parallel > 16 {
 		return errors.New("使用 -question 提供问题，-parallel 范围为 1 到 16")
 	}
 	if *maxSteps < 1 || *retries < 0 || *retries > 5 {
 		return errors.New("max-steps 至少为1，retries 范围为0到5")
+	}
+	if (*embeddingMode != "ark" && *embeddingMode != "local") || math.IsNaN(*threshold) || *threshold < -1 || *threshold > 1 {
+		return errors.New("embedding取ark或local，min-score范围为-1到1")
+	}
+	if *ragLab && (*contextLab || *question != "" || *historyStdin || labToolsEnabled || *searchQuery != "") {
+		return errors.New("rag-lab请单独运行，不与其他实验、问题或续聊参数组合")
+	}
+	if *searchQuery != "" {
+		if *question != "" || *contextLab || *historyStdin || labToolsEnabled || ragEnabled {
+			return errors.New("search-docs请单独使用，可配合-k")
+		}
+		if *searchK < 1 || *searchK > 6 {
+			return errors.New("k范围为1到6")
+		}
 	}
 	options := contextOptions{Window: *window, Output: *output, ReasoningReserve: *reserve, ToolOutput: *toolOutput, KeepGroups: *keepGroups}
 	if *effort != "minimal" && *effort != "low" && *effort != "medium" && *effort != "high" {
@@ -50,8 +71,31 @@ func run() error {
 	if *output < 0 || *reserve < 0 || *toolOutput < 64 || *keepGroups < 0 || options.capacity() < 256 {
 		return errors.New("输出上限、推理预留和keep-groups须非负、tool-output-tokens至少64；扣除预留后的输入容量至少256")
 	}
-	if *contextLab && (*maxSteps < 36 || *question != "" || labToolsEnabled) {
+	if *contextLab && (*maxSteps < 36 || *question != "" || labToolsEnabled || ragEnabled) {
 		return errors.New("context-lab单独使用，至少36次请求，建议 -max-steps 60 为摘要保留额度")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	// 普通ReAct任务不加载向量模型；只有检索模式初始化，并在当前进程退出时释放。
+	if ragEnabled || *ragLab || *searchQuery != "" {
+		if *searchQuery != "" {
+			indexLog = os.Stderr
+		}
+		var err error
+		docsRetriever, err = newRetriever(ctx, *embeddingMode, *threshold)
+		if err != nil {
+			return err
+		}
+		defer docsRetriever.embedding.Close()
+	}
+	if *searchQuery != "" {
+		result, err := searchDocs(ctx, *searchQuery, *searchK)
+		if err != nil {
+			return err
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
 	}
 	var history *historyInput
 	if *historyStdin {
@@ -66,12 +110,15 @@ func run() error {
 	if labToolsEnabled {
 		toolDefinitions = append(toolDefinitions, labToolDefinitions...)
 	}
-	if !*contextLab && strings.TrimSpace(*question) == "" {
+	if ragEnabled {
+		toolDefinitions = append(toolDefinitions, searchDocsDefinition)
+	}
+	if !*contextLab && !*ragLab && strings.TrimSpace(*question) == "" {
 		fmt.Print("请输入任务： ")
 		*question, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	}
 	*question = strings.TrimSpace(*question)
-	if !*contextLab && *question == "" {
+	if !*contextLab && !*ragLab && *question == "" {
 		return errors.New("问题不能为空")
 	}
 	config, err := loadConfig()
@@ -79,10 +126,11 @@ func run() error {
 		return err
 	}
 	config.Effort = *effort
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	if *contextLab {
 		return runContextLab(ctx, config, options, *maxSteps)
+	}
+	if *ragLab {
+		return runRAGLab(ctx, config, options, *maxSteps)
 	}
 	return runAgent(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
 }

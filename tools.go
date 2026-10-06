@@ -53,6 +53,18 @@ func runTool(ctx context.Context, call ToolCall) (result any, err error) {
 		return nil, errors.New("工具参数需要是有效 JSON 对象")
 	}
 	switch call.Function.Name {
+	case "search_docs":
+		if !ragEnabled {
+			return nil, errors.New("请使用 -rag 开启知识库检索")
+		}
+		args := struct {
+			Query string `json:"query"`
+			K     int    `json:"k"`
+		}{K: 3}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return nil, errors.New("query 需要是字符串，k 需要是整数")
+		}
+		return searchDocs(ctx, args.Query, args.K)
 	case "read_day3_notes":
 		if !contextLabEnabled {
 			return nil, errors.New("上下文实验工具未启用")

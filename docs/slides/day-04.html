@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 4 按需检索与引用</title>
+<link rel="stylesheet" href="deck.css">
+<style>
+.hd{display:block;height:82px}.hd .kicker{display:block;font-size:13px;margin-bottom:9px}.hd h2{font-size:34px;line-height:1.2}.canvas{top:138px;height:448px}.says{top:628px}.say{font-size:20px}
+.grid{display:grid;gap:22px}.two{grid-template-columns:repeat(2,1fr)}.three,.index-flow{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}.card{padding:24px;background:var(--card);border:1.5px solid var(--line);border-radius:14px;min-width:0}.card h3{font-size:24px;line-height:1.35;margin:16px 0}.card p{font-size:19px;line-height:1.65}.eyebrow{font:600 14px/1.5 var(--font-mono);color:var(--muted)}.purple{border-color:var(--model);background:var(--model-soft)}.green{border-color:var(--go);background:var(--go-soft)}.muted{color:var(--muted)}
+.callout{margin-top:28px;padding:17px 22px;background:var(--code);border-left:4px solid var(--model);border-radius:0 12px 12px 0;font-size:23px;line-height:1.55}.callout small{font-size:18px;color:var(--muted)}.hero h1{font-size:70px;line-height:1.2;margin:18px 0}.hero em{font-style:normal;color:var(--model)}.lead{font-size:23px;color:var(--muted)}.route{display:flex;gap:20px;align-items:center;margin-top:30px;font-size:21px}.route span{padding:12px 22px;border:1px solid var(--line);border-radius:10px;background:var(--card)}.route b{color:var(--go)}
+.query{padding:18px 24px;background:var(--user-soft);border:1px solid var(--user);border-radius:14px;color:var(--user);font-size:22px;line-height:1.5}.split{display:grid;grid-template-columns:1fr 1.2fr;gap:28px;margin-top:24px}.vector{font:600 21px/1.4 var(--font-mono);margin-top:22px;color:var(--model)}.ranking{padding:8px}.ranking>div{position:relative;height:63px;font-size:20px;display:flex;justify-content:space-between;margin-bottom:18px}.ranking i{position:absolute;left:0;bottom:0;width:var(--w);height:14px;border-radius:5px;background:var(--go)}.ranking .dim{color:var(--muted)}.ranking .dim i{background:var(--line)}.ranking p{font-size:15px;color:var(--muted)}.sequence{display:grid;gap:13px}.seq{padding:17px 22px;border:1px solid var(--line);border-radius:10px;display:grid;grid-template-columns:200px 1fr;gap:18px;font-size:21px;line-height:1.3}.seq.user{background:var(--user-soft)}.seq strong{color:var(--model)}.scoreboard{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:28px;text-align:center}.scoreboard div{padding:18px;background:var(--code);border-radius:12px}.scoreboard b{display:block;font:700 32px/1.4 var(--font-body);color:var(--go)}.scoreboard span{font-size:16px;color:var(--muted)}.quiz .card{padding:16px 22px}.quiz h3{font-size:21px;margin:10px 0}.quiz p{font-size:17px}.source{position:absolute;left:0;bottom:-15px;font-size:13px;line-height:1.5;color:var(--muted)}.source a{color:var(--model)}code{font-size:.83em;word-break:break-word}
+</style>
+</head>
+<body>
+<div class="progress">
+</div>
+<main class="deck">
+<div class="stage">
+<section class="slide" data-title="需要知识时，调用一次工具">
+<header class="hd">
+<span class="kicker">DAY 04 · 检索注入</span>
+<h2>需要知识时，调用一次工具</h2>
+</header>
+<div class="canvas">
+<div class="hero">
+<p class="eyebrow">从 Day 3 的“留下什么”走到 Day 4 的“取回什么”</p>
+<h1>知识在窗口外<br>
+<em>证据按需进来</em>
+</h1>
+<p class="lead">复用 Go ReAct loop · 可选本地 / 线上向量模型 · 来源可核对</p>
+</div>
+<div class="route" data-step="1">
+<span>提问</span>
+<b>→</b>
+<span>search_docs</span>
+<b>→</b>
+<span>片段</span>
+<b>→</b>
+<span>带引用的回答</span>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">今天不需要新写一套 Agent，先看懂一个新工具怎样接入旧循环。</p>
+<p class="say" data-step="1">文档不预先塞满 prompt；模型需要资料时发起检索。</p>
+</div>
+</section>
+
+<section class="slide" data-title="压缩与检索，解决两个方向">
+<header class="hd">
+<span class="kicker">01 · 信息边界</span>
+<h2>压缩与检索，解决两个方向</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<article class="card purple" data-step="0" data-fx="rise">
+<span class="eyebrow">DAY 3</span>
+<h3>已经进入窗口的信息</h3>
+<p>对话、工具结果越来越多。<br>压缩与裁剪决定哪些继续保留。</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">DAY 4</span>
+<h3>尚未进入窗口的信息</h3>
+<p>笔记、FAQ 放在文档库。<br>检索决定这次取回哪些片段。</p>
+</article>
+</div>
+<div class="callout" data-step="2">外部知识库 ≠ 自动保存聊天记忆<br>
+<small>今天不会把用户每句话自动写进向量库。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">上下文管理针对模型这次实际收到的输入。</p>
+<p class="say" data-step="1" data-until="1">检索面对窗口外的资料，只把选中的内容放进来。</p>
+<p class="say" data-step="2">两个模块会配合：检索结果进窗口后，仍受 Day 3 的预算与截断规则约束。</p>
+</div>
+</section>
+
+<section class="slide" data-title="先建索引，再接受问题">
+<header class="hd">
+<span class="kicker">02 · 离线准备</span>
+<h2>先建索引，再接受问题</h2>
+</header>
+<div class="canvas">
+<div class="index-flow">
+<article class="card " data-step="0" data-fx="rise">
+<span class="eyebrow">01 · SOURCE</span>
+<h3>24 条 FAQ</h3>
+<p>每条有编号、标题、正文、来源。<br>
+<code>retrieval/corpus.md</code>
+</p>
+</article>
+<article class="card purple" data-step="1" data-fx="rise">
+<span class="eyebrow">02 · EMBEDDING</span>
+<h3>标题 + 正文 → 向量</h3>
+<p>Go：本地 MiniLM / 方舟 API<br>本地384维 / 线上1024维。</p>
+</article>
+<article class="card green" data-step="2" data-fx="rise">
+<span class="eyebrow">03 · GO INDEX</span>
+<h3>保存向量与原文</h3>
+<p>归一化后算点积、排序；编号与来源随片段返回。</p>
+</article>
+</div>
+<div class="callout" data-step="3">原文是事实来源，索引是派生缓存。<br>
+<small>修改语料后重新启动Agent；内容指纹变化才重建索引。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">把一个 FAQ 当作一条短文档，先让它自身能够被读懂。</p>
+<p class="say" data-step="1" data-until="1">同一模型也负责把用户 query 转成向量，才能在相同空间里比较。</p>
+<p class="say" data-step="2" data-until="2">本地模式无需embedding密钥；线上模式复用ARK_API_KEY调用方舟。</p>
+<p class="say" data-step="3">本地首次下载权重；两种模式各自缓存文档向量，不混用。</p>
+</div>
+</section>
+
+<section class="slide" data-title="切块要保住主体与条件">
+<header class="hd">
+<span class="kicker">03 · CHUNKING</span>
+<h2>切块要保住主体与条件</h2>
+</header>
+<div class="canvas">
+<div class="grid three">
+<article class="card muted" data-step="0" data-fx="rise">
+<span class="eyebrow">过小</span>
+<h3>“额外重试 2 次”</h3>
+<p>谁重试？什么情况下？<br>第一次算不算？</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">当前 FAQ</span>
+<h3>完整的一件事</h3>
+<p>本项目工具失败：额外2次，总共3次；等待200ms、400ms；耗尽后回填错误。</p>
+</article>
+<article class="card muted" data-step="2" data-fx="rise">
+<span class="eyebrow">过大</span>
+<h3>整个工程手册</h3>
+<p>混入并发、压缩、部署……<br>命中了也可能带来大量噪声。</p>
+</article>
+</div>
+<div class="callout" data-step="3">语义边界先行，长度上限兜底。<br>
+<small>启动时用 embedding tokenizer 检查长度；超长要求拆分，不静默截尾。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">只保留一句孤立数字，很容易把条件丢掉。</p>
+<p class="say" data-step="1" data-until="1">一个完整 FAQ 保留了答案成立的范围与必要数字。</p>
+<p class="say" data-step="2" data-until="2">长块不等于更好的证据，尤其当里面同时讨论很多主题时。</p>
+<p class="say" data-step="3">本地模型按128个模型token检查长度；超长时要求按语义拆分。</p>
+</div>
+</section>
+
+<section class="slide" data-title="查询也变成向量，找语义邻居">
+<header class="hd">
+<span class="kicker">04 · 在线检索</span>
+<h2>查询也变成向量，找语义邻居</h2>
+</header>
+<div class="canvas">
+<div class="query" data-step="0">这里默认的输入容量和压缩触发点分别是多少？4096是强制输出上限吗？</div>
+<div class="split">
+<div class="card purple" data-step="1">
+<span class="eyebrow">QUERY VECTOR</span>
+<h3>同一个 embedding 模型</h3>
+<p>比较语义方向，<br>无需逐字包含整个问题。</p>
+<div class="vector">[ · · · 384 / 1024 维 · · · ]</div>
+</div>
+<div class="ranking" data-step="2">
+<div>
+<b>D08 输入容量</b>
+<span>0.7837</span>
+<i style="--w:78%">
+</i>
+</div>
+<div>
+<b>D12 压缩目标</b>
+<span>0.5721</span>
+<i style="--w:57%">
+</i>
+</div>
+<div>
+<b>D11 最近消息组</b>
+<span>0.4027</span>
+<i style="--w:40%">
+</i>
+</div>
+<p>Go本地模式实测 · k=3 · 阈值0.40</p>
+</div>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">标题不同、问题措辞不同，也可以找到相关片段。</p>
+<p class="say" data-step="1" data-until="1">这里做的是相似度检索；模型还没有生成回答。</p>
+<p class="say" data-step="2">D08最接近；D11刚过阈值。还要检查正文是否支持结论。</p>
+</div>
+</section>
+
+<section class="slide" data-title="片段回流，仍然是原来的 loop">
+<header class="hd">
+<span class="kicker">05 · 一次完整调用</span>
+<h2>片段回流，仍然是原来的 loop</h2>
+</header>
+<div class="canvas">
+<div class="sequence">
+<div class="seq user" data-step="0">
+<b>user</b>
+<span>工具失败总共尝试几次？等待多久？</span>
+</div>
+<div class="seq purple" data-step="1">
+<b>assistant</b>
+<span>tool_calls：search_docs(query, k=3)</span>
+</div>
+<div class="seq green" data-step="2">
+<b>Go 进程内检索</b>
+<span>query embedding → Go top-k → 片段、score、来源</span>
+</div>
+<div class="seq green" data-step="3">
+<b>tool</b>
+<span>tool_call_id 对上请求；Observation 包含 D05 的正文</span>
+</div>
+<div class="seq purple" data-step="4">
+<b>assistant</b>
+<span>总共最多3次，等待200ms、400ms。<strong>[D05]</strong>
+</span>
+</div>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">第一次请求没有整份文档库，只有问题、规则与工具定义。</p>
+<p class="say" data-step="1" data-until="1">模型选择调用与query，Go才开始真正执行。</p>
+<p class="say" data-step="2" data-until="2">检索工具像 calculator 一样，返回一次实际执行的结果。</p>
+<p class="say" data-step="3" data-until="3">先追加到消息历史，再发下一次模型请求，资料才能被模型使用。</p>
+<p class="say" data-step="4">引用让用户找到证据；仍要核对证据与结论是否一致。</p>
+</div>
+</section>
+
+<section class="slide" data-title="k 控制候选数，不保证证据数">
+<header class="hd">
+<span class="kicker">06 · 覆盖与成本</span>
+<h2>k 控制候选数，不保证证据数</h2>
+</header>
+<div class="canvas">
+<div class="query">这个项目压缩时承诺保留最后两组消息吗？</div>
+<div class="grid three" style="margin-top:22px">
+<article class="card muted" data-step="0" data-fx="rise">
+<span class="eyebrow">k = 1</span>
+<h3>省空间，可能漏</h3>
+<p>首轮直接检索第一名D12，主要说压缩目标。</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">k = 3</span>
+<h3>当前起点</h3>
+<p>带回第二名D11，明确“最多2组，可以缩减到0”。</p>
+</article>
+<article class="card purple" data-step="2" data-fx="rise">
+<span class="eyebrow">k = 6</span>
+<h3>更多候选</h3>
+<p>覆盖可能增加，也混入更多无关片段，消耗窗口。</p>
+</article>
+</div>
+<div class="callout" data-step="3">分别观察：相关片段有没有被找回？最终答案有没有被支持？</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">只看第一名，可能错过回答所需的另一个片段。</p>
+<p class="say" data-step="1" data-until="1">这里k=3覆盖了真正解释K缩减规则的D11。</p>
+<p class="say" data-step="2" data-until="2">更多候选并非越多越好，还会增加阅读与截断风险。</p>
+<p class="say" data-step="3">参数好坏需要真实问题来衡量，不能只数返回了多少条。</p>
+</div>
+</section>
+
+<section class="slide" data-title="过阈值，也可能没有答案">
+<header class="hd">
+<span class="kicker">07 · 两种资料不足</span>
+<h2>过阈值，也可能没有答案</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<article class="card muted" data-step="0" data-fx="rise">
+<span class="eyebrow">Q09 · 酒店报销</span>
+<h3>主题就不在库里</h3>
+<p>Go本地模式最高分约0.213。<br>低于0.40，不能作为证据。</p>
+</article>
+<article class="card purple" data-step="1" data-fx="rise">
+<span class="eyebrow">Q10 · TS-999</span>
+<h3>主题近，事实缺失</h3>
+<p>错误处理片段可能过阈值。<br>但没有TS-999的定义或修复方法。</p>
+</article>
+</div>
+<div class="callout" data-step="2">
+<strong>资料不足，我不确定。</strong>
+<br>
+<small>低分是一个信号，正文是否支持问题才是更关键的判断。</small>
+</div>
+<p class="source" data-step="2">低分候选只保留元信息，正文不注入；观测台展示分数与过滤原因。</p>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">检索函数能直接识别“没有足够相似的候选”。</p>
+<p class="say" data-step="1" data-until="1">它不能仅凭相似度证明具体事实存在；TS-999必须由正文来核对。</p>
+<p class="say" data-step="2">应该清楚表达证据不足，而不是从相近主题编一个答案。</p>
+</div>
+</section>
+
+<section class="slide" data-title="生产扩展各自补一个缺口">
+<header class="hd">
+<span class="kicker">08 · 拓展概念</span>
+<h2>生产扩展各自补一个缺口</h2>
+</header>
+<div class="canvas">
+<div class="grid three">
+<article class="card purple" data-step="0" data-fx="rise">
+<span class="eyebrow">Contextual Retrieval</span>
+<h3>先补背景再索引</h3>
+<p>LLM为chunk生成通常50–100 token的文档背景，增加预处理成本。</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">BM25</span>
+<h3>补精确词项</h3>
+<p>与向量召回合并去重，补错误码、缩写等精确匹配。</p>
+</article>
+<article class="card purple" data-step="2" data-fx="rise">
+<span class="eyebrow">Rerank</span>
+<h3>重排候选</h3>
+<p>联合读问题与候选，再筛更少片段进入上下文。</p>
+</article>
+</div>
+<div class="callout" data-step="3">本日实现向量召回。以上是拓展，不把它们说成已实现功能。</div>
+<p class="source">Anthropic特定top-20实验：背景向量35% → 加背景BM25 49% → 加rerank 67%，均为检索失败率相对降幅。</p>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">标题元信息有帮助，但并不等于LLM生成的背景小抄。</p>
+<p class="say" data-step="1" data-until="1">语义相近和精确命中各有所长，组合后仍需评估。</p>
+<p class="say" data-step="2" data-until="2">重排提高候选选择能力，也增加计算或模型调用成本。</p>
+<p class="say" data-step="3">“下降49%”带有实验条件，不能当成任意项目的效果保证。</p>
+</div>
+</section>
+
+<section class="slide" data-title="观测时沿着证据走">
+<header class="hd">
+<span class="kicker">09 · 从输入到引用</span>
+<h2>观测时沿着证据走</h2>
+</header>
+<div class="canvas">
+<div class="grid three">
+<article class="card green" data-step="0" data-fx="rise">
+<span class="eyebrow">① 工具卡片</span>
+<h3>先看取回了什么</h3>
+<p>query、k、片段ID、分数、阈值、正文和来源。</p>
+</article>
+<article class="card purple" data-step="1" data-fx="rise">
+<span class="eyebrow">② 下一Step的输入</span>
+<h3>再看发送了什么</h3>
+<p>检索内容属于role=tool。点击“X条messages”查看该Step的全部输入。</p>
+</article>
+<article class="card green" data-step="2" data-fx="rise">
+<span class="eyebrow">③ 回答引用</span>
+<h3>最后核对结论</h3>
+<p>点击[D05]跳回对应检索；编号必须真实返回并过阈值。</p>
+</article>
+</div>
+<div class="callout" data-step="3">检索成功 ≠ 引用有效 ≠ 回答正确<br>
+<small>即使引用了正确的资料，也可能在生成时把“是”说成“不是”。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">先确认工具真的被调用，而不是模型声称已经查过。</p>
+<p class="say" data-step="1" data-until="1">工具返回不代表原文全部进窗口；长结果还可能被Day 3截断。</p>
+<p class="say" data-step="2" data-until="2">点击引用能缩短核查路径，不能替代你阅读原文。</p>
+<p class="say" data-step="3">本次首轮就发现了“引用正确、否定关系说反”的问题。</p>
+</div>
+</section>
+
+<section class="slide" data-title="10 题对比，分层检查">
+<header class="hd">
+<span class="kicker">10 · 实验设计</span>
+<h2>10 题对比，分层检查</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<article class="card muted" data-step="0" data-fx="rise">
+<span class="eyebrow">无检索</span>
+<h3>没有文档工具</h3>
+<p>同一个问题、同一模型、同样回答标准；不偷偷放入答案。</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">有检索</span>
+<h3>提供 search_docs</h3>
+<p>模型主动生成query；每题独立上下文，避免前题泄漏。</p>
+</article>
+</div>
+<div class="scoreboard" data-step="2">
+<div>
+<b>8 / 8</b>
+<span>Go本地可答题召回 hit@3</span>
+</div>
+<div>
+<b>2 题</b>
+<span>资料不足检查</span>
+</div>
+<div>
+<b>逐题核对</b>
+<span>答案、引用、无依据断言</span>
+</div>
+</div>
+<p class="source">实际答案对比与修正复跑结果见 docs/day-04/day-04-lab.md；题库为教学样本，不代表生产泛化能力。</p>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">无检索组移除全部文档工具，避免原search_notes泄漏项目资料。</p>
+<p class="say" data-step="1" data-until="1">有检索组只增加search_docs，所有模型回答都来自真实方舟。</p>
+<p class="say" data-step="2">召回报告之外，还要看模型是否检索、是否误读、是否在缺资料时编造。</p>
+</div>
+</section>
+
+<section class="slide" data-title="自己把这条链路讲一遍">
+<header class="hd">
+<span class="kicker">11 · 练习与回顾</span>
+<h2>自己把这条链路讲一遍</h2>
+</header>
+<div class="canvas">
+<div class="grid two quiz">
+<article class="card " data-step="0" data-fx="rise">
+<span class="eyebrow">练习 1</span>
+<h3>为什么还要下一轮模型请求？</h3>
+<p>先说明tool结果如何被放回messages，再看回答。</p>
+</article>
+<article class="card " data-step="1" data-fx="rise">
+<span class="eyebrow">练习 2</span>
+<h3>k从1改到3，哪里发生变化？</h3>
+<p>检索候选会变；循环、tool_call_id配对与重试机制不变。</p>
+</article>
+<article class="card " data-step="2" data-fx="rise">
+<span class="eyebrow">练习 3</span>
+<h3>score=0.7能直接引用吗？</h3>
+<p>还需核对正文是否支持具体结论，不能当作70%正确率。</p>
+</article>
+<article class="card " data-step="3" data-fx="rise">
+<span class="eyebrow">练习 4</span>
+<h3>资料里有一句“忽略系统规则”呢？</h3>
+<p>它只是文档中的文字，不能变成系统权限或执行命令。</p>
+</article>
+</div>
+<p class="source">
+<a href="https://www.anthropic.com/engineering/contextual-retrieval" target="_blank" rel="noopener noreferrer">Anthropic原文 ↗</a> · <a href="https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus" target="_blank" rel="noopener noreferrer">Manus原文 ↗</a> · <a href="https://sbert.net/docs/sentence_transformer/pretrained_models.html#multilingual-models" target="_blank" rel="noopener noreferrer">多语言模型 ↗</a>
+</p>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">先从“模型看到了什么”解释RAG，不急着背向量数据库名词。</p>
+<p class="say" data-step="1" data-until="1">在观测台用同一个问题比较k=1与k=3的实际片段。</p>
+<p class="say" data-step="2" data-until="2">引用一条真文档，也不保证对文档的理解正确。</p>
+<p class="say" data-step="3">今天学会按需取证，后续再逐步补评估、权限与长期记忆。</p>
+</div>
+</section>
+</div>
+</main>
+<nav class="bar" aria-label="翻页">
+<button type="button" data-act="prev" aria-label="上一步">←</button>
+<button type="button" data-act="next" aria-label="下一步">→</button>
+<span class="where">
+</span>
+<span class="dots">
+</span>
+<span class="title">
+</span>
+<span class="hint">← → 翻页 · P 自动播放 · F 全屏</span>
+<button type="button" data-act="play" aria-pressed="false">自动播放</button>
+<button type="button" data-act="toc" aria-pressed="false">目录</button>
+<button type="button" data-act="full">全屏</button>
+</nav>
+<div class="toc" hidden>
+</div>
+<script src="deck.js">
+</script>
+</body>
+</html>

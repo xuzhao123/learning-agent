@@ -1,0 +1,12 @@
+[
+  {"id":"Q01","question":"本项目一次最多向模型发几次请求？摘要和最终回答算不算？","relevant_ids":["D04"],"answer_hint":"默认10次，摘要与最终回答计入"},
+  {"id":"Q02","question":"这个 Agent 的工具失败后总共尝试几次？两次等待分别多久？","relevant_ids":["D05"],"answer_hint":"默认总共3次；200ms、400ms"},
+  {"id":"Q03","question":"模型同时请求好几个互不依赖的工具，本项目默认能同时跑几个，上限多少？","relevant_ids":["D02"],"answer_hint":"默认并发4；每批上限16"},
+  {"id":"Q04","question":"本项目第三次重复调用会先执行再停，还是直接拦住？JSON键顺序不同算重复吗？","relevant_ids":["D06"],"answer_hint":"执行前拦住整批；键顺序不影响重复判定"},
+  {"id":"Q05","question":"这里默认的输入容量和压缩触发点分别是多少？4096是强制输出上限吗？","relevant_ids":["D08"],"answer_hint":"7168、6451（90%）；4096为本地预留，默认不传API上限"},
+  {"id":"Q06","question":"这个项目压缩时承诺保留最后两组消息吗？空间不够时怎样处理？","relevant_ids":["D11"],"answer_hint":"最多2组；按配额缩减，可减到0"},
+  {"id":"Q07","question":"这里浏览器里继续聊天，会重新把全部原始聊天记录加载给模型吗？","relevant_ids":["D14"],"answer_hint":"恢复最后View和最终回答，不重载完整原文"},
+  {"id":"Q08","question":"Anthropic提到检索失败率降低49%，是只加背景向量就达到的吗？","relevant_ids":["D22"],"answer_hint":"不是，背景向量与背景BM25结合；单独背景向量为35%，特定top20实验"},
+  {"id":"Q09","question":"请查一下我们公司差旅报销每晚酒店的费用上限是多少？","relevant_ids":[],"answer_hint":"知识库没有公司差旅政策，资料不足"},
+  {"id":"Q10","question":"我们项目的 TS-999 错误码具体表示什么，应该如何修复？","relevant_ids":[],"answer_hint":"知识库没有这个错误码的定义，不应编造恢复步骤"}
+]

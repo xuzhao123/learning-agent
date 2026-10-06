@@ -1,18 +1,18 @@
-# 学习 agent：Day 1 → Day 2 → Day 3
+# 学习 agent：Day 1 → Day 2 → Day 3 → Day 4
 
 想先看动画讲解，打开 [课件入口](docs/slides/index.html)：每节课一份可翻页、按步骤播放的 HTML 课件。
 
-每天只读一篇笔记：先学 [Day 1 工具调用与循环](docs/day-01/day-01-notes.md)，再学 [Day 2 循环护栏](docs/day-02/day-02-notes.md) 和 [Day 3 上下文管理](docs/day-03/day-03-notes.md)。每篇包含原理、例子、关键代码和自己动手的练习。
+每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)。
 
 用 Go 手写最小 ReAct loop，重点是看懂流程：
 
 `问题 → 选择本轮上下文 → 请求模型 → 读取 tool_calls → 并行执行 → tool 结果写回历史 → 下一轮或结束`
 
-使用方舟原生 Tool Calling。system prompt 只说明工具助手角色，回答可以自由表达；工具定义通过 `tools` 提供，调用参数由模型生成，不要求 Thought / Actions / Final Answer 文本格式。
+使用方舟原生 Tool Calling。普通模式的 system prompt 只说明工具助手角色；Day 4 的 `-rag` 模式补充检索、引用与资料不足规则。回答仍可自由表达，工具定义通过 `tools` 提供，调用参数由模型生成。
 
 ## 运行
 
-在项目根目录运行（Mac：`/Users/bytedance/workspace-vm/learning-agent`；VM：`/home/dev/workspace/learning-agent`）。首次配置参考 [.env.example](.env.example)，将自己的 ARK_API_KEY 填入 .env，然后输入问题：
+使用Go 1.25以上，在项目根目录运行（Mac：`/Users/bytedance/workspace-vm/learning-agent`；VM：`/home/dev/workspace/learning-agent`）。首次配置参考 [.env.example](.env.example)，将自己的 ARK_API_KEY 填入 .env，然后输入问题：
 
 ```sh
 go run .
@@ -42,6 +42,12 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | `-keep-groups` | 2 | 最近组超20%配额或挤占摘要空间时逐步减少，可到0 |
 | `-reasoning-effort` | high | 所有请求统一的推理强度：minimal、low、medium、high |
 | `-context-lab` | false | 33轮召回与约束保留，再运行真实大工具输出实验 |
+| `-rag` | false | 增加 search_docs，项目知识回答先检索并引用来源 |
+| `-embedding` | ark | 向量模型：ark线上方舟，local本地纯Go MiniLM |
+| `-min-score` | 0.40 | 检索相似度阈值，范围−1到1 |
+| `-search-docs` | 空 | 只执行检索，不调用聊天模型；local无需密钥，ark使用同一ARK_API_KEY |
+| `-k` | 3 | 配合 search-docs，最多返回1–6条候选 |
+| `-rag-lab` | false | 10题直接检索检查，再做20次独立真实问答；max-steps对每题每组分别生效 |
 
 工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。
 
@@ -55,6 +61,9 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | [tools.go](tools.go) | 工具 Schema、实际执行、实际笔记检索 |
 | [context_manager.go](context_manager.go) | Transcript/View、usage用量、集中清理与摘要 |
 | [context_lab.go](context_lab.go) | 真实33轮召回、约束与大工具输出观察 |
+| [retrieval.go](retrieval.go) | search_docs定义、进程内索引、点积排序、低分过滤与文件缓存 |
+| [rag_lab.go](rag_lab.go) | 10题真实检索与无检索/有检索对比；不写死模型回答 |
+| [embedding.go](embedding.go) | 本地纯Go推理 / 线上方舟embedding |
 
 默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail 和 check_task_status 两个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
 
@@ -70,20 +79,50 @@ go run . -context-lab -max-steps 60 -context-window 8192 -max-output-tokens 2048
 
 ## 观测台
 
-`observer/` 是独立程序（有自己的 go.mod）。网页是类似 Codex 客户端的对话界面：左侧对话列表，主区显示用户消息、思考、工具调用和回答，底部输入框发送。顶栏切到“观测”有三个视图：轨迹（事件账本 + 瀑布时间轴）、迷宫（主路径、绕路、回退 + token 与上下文压力数据轨）、对比（2–5 次运行按轮次对齐），并支持回放：
+`observer/` 是独立程序（有自己的 go.mod）。网页是类似 Codex 客户端的对话界面：左侧对话列表，主区显示用户消息、思考、工具调用和回答，底部输入框发送。顶栏切到“观测”有三个视图：轨迹（用户Turn → 模型Step的事件账本 + 瀑布时间轴）、迷宫（主路径、绕路、回退 + token与上下文压力数据轨）、对比（2–5次运行按请求序号对齐），并支持回放：
 
 ```sh
 cd observer && go run .
 # 打开 http://127.0.0.1:8090
 ```
 
-回答结束后，在底部输入下一句话并按 Enter，会延续同一条对话；也可以先选择左侧的历史记录再续聊。点击“新对话”开始独立任务。运行中禁止重复发送，观测台重启后仍可从存档恢复。每个新问题重新获得默认10次模型请求预算，页面Turn编号则在整条对话中持续递增。
+回答结束后，在底部输入下一句话并按 Enter，会延续同一条对话；也可以先选择左侧的历史记录再续聊。点击“新对话”开始独立任务。运行中禁止重复发送，观测台重启后仍可从存档恢复。每个新问题开启下一个Turn并重新获得默认10次模型请求预算；Turn内Step从1编号，全局请求#N保持连续。摘要单独展示，不占任务Step，但仍计入请求预算。每个Step可查看全部messages和原始输入/输出。
 
 点击左侧“Day 3 上下文实验”并确认，即可在对话流中看到33轮对话、压缩分隔线和大工具调用。它等价于 `go run . -context-lab -max-steps 60 -reasoning-effort minimal`，由观测台启动并接入代理，无需另开终端执行实验命令。切到“观测”，点击“终端输出”查看 `Context`、`Compact`、`Recall` 和 `Lab complete`；“迷宫”查看上下文压力与压缩位置。更新观测台源码后，需要重启观测台并刷新网页。
 
 单独在项目根目录运行实验会直连方舟，不会自动出现在观测台；已经绕过代理的对话无法事后补录。通过观测台启动时，沿用观测台的 `observer/runs/` 存档；实验程序本身不另写日志。
 
 观测台把 agent 的 `LLM_API_URL` 指向本机代理，从模型协议本身还原过程，agent 代码不含观测台专用埋点。摘要作为独立模型调用展示；视图重建在上下文压力轨中标记，工具结果按调用ID跨请求关联。详见 [观测台笔记](docs/observer/observer-notes.md)。
+
+## Day 4：带来源的知识库问答
+
+检索与Agent在同一个Go进程里，search_docs直接调用函数，无需启动8092服务。默认线上方舟向量模型，复用根目录.env里的ARK_API_KEY：
+
+```sh
+# 一条命令启动带检索的Agent：线上1024维向量
+go run . -rag -embedding ark -question '本项目工具失败总共尝试几次？等待多久？'
+# 或本地384维向量；问答仍调用方舟聊天模型
+go run . -rag -embedding local -question '本项目工具失败总共尝试几次？等待多久？'
+# 只检索，不调用聊天模型；local模式无需密钥
+go run . -search-docs '本项目的工具重试次数与等待时间' -embedding local -k 3
+# 10题真实对比，可用-embedding选择模型
+go run . -rag-lab -max-steps 6 -reasoning-effort minimal
+```
+
+本地模式用Hugot纯Go后端加载官方ONNX权重，不运行Python或CGO；首次下载约470MB。线上请求使用方舟多模态embedding接口，只请求稠密向量（开启multi/sparse会让每次响应从约16KB变为约2MB）。本地模式单进程峰值内存约1.6GB。入库与查询分别使用压缩、检索指令。
+
+网页使用时，只需一条命令：
+
+```sh
+go -C observer run .
+# 打开 http://127.0.0.1:8090
+```
+
+**新对话 → 勾选“知识库 RAG” → 选择线上方舟或本地MiniLM → 提问**。观测台自动启动Agent，Agent自行初始化检索；无需另开检索进程。续聊自动沿用原模式和向量模型，重启观测台后也保留。左侧“Day 4 检索对比”可选择模型；实验记录不支持混成一段对话续聊。展开search_docs看结果，点击有效引用跳到对应片段。[学习课件](http://127.0.0.1:8090/slides/)也由观测台提供。
+
+知识库为[24条FAQ](retrieval/corpus.md)，按标题切块，标题与正文一起embedding，来源作为元信息。仅启用RAG、检索检查或RAG实验时初始化向量模型；普通ReAct不加载。本地模型共享实例时串行推理，线上请求可并行。每个Agent进程初始化一次，退出时释放；新进程复用.cache/retrieval-go/磁盘缓存。修改语料或模型后，根据指纹选择或重建索引，不能混用不同模型的向量。
+
+默认k=3，最多6；余弦相似度阈值0.40是教学起点，用-min-score调整，本地和线上分别校准。低分片段仅返回元信息，accepted=true仍需核对正文。BM25、rerank和LLM背景小抄讲清原理，基础实验实现向量召回。原理见[Day 4笔记](docs/day-04/day-04-notes.md)，本项目实现与10题实验见[Day 4项目实践](docs/day-04/day-04-lab.md)。`-search-docs`的stdout只有JSON，建索引日志写到stderr。
 
 ## 配置与学习
 

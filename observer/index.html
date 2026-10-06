@@ -95,6 +95,13 @@ button { cursor: pointer; }
 .divider > summary::before, .divider > summary::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
 .divider .body { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--soft); }
 .stopcard { margin: 12px 0; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--err) 45%, var(--line)); border-radius: 10px; font-size: 13px; }
+.retrieval { display: grid; gap: 10px; margin: 10px 0; }
+.doc-hit { padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--panel); overflow-wrap: anywhere; }
+.doc-hit.rejected { border-left-color: var(--muted); color: var(--muted); }
+.doc-hit .text { margin: 7px 0; font-size: 13px; line-height: 1.7; }
+.doc-hit .meta { font-size: 11px; }
+.cite { color: var(--accent); font-size: inherit; border: 0; padding: 0 2px; background: var(--soft); border-radius: 3px; }
+.cite.bad { color: var(--err); text-decoration: line-through dotted; cursor: help; }
 .welcome { padding: 18vh 0 0; text-align: center; }
 .welcome h1 { margin: 0 0 18px; font-size: 24px; font-weight: 600; }
 .sugs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
@@ -142,9 +149,40 @@ button { cursor: pointer; }
 .lrow .sum.err { color: var(--err); }
 .turn { display: flex; gap: 12px; align-items: center; padding: 6px 10px; background: var(--soft); border-bottom: 1px solid var(--line); cursor: pointer; font-weight: 600; }
 .turn .meta { font-weight: 400; }
+.turn { flex-wrap: wrap; }
+.step-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 5px 10px 5px 28px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.step-header strong { color: var(--text); font-weight: 600; }
+.step-header .input-link { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--accent); background: var(--panel); font-size: 11px; }
+.step-header .raw-toggle { padding: 2px 8px; }
+.raw-toggle { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.raw-toggle::before { content: "{ }"; font: 600 11px var(--mono); color: var(--accent); }
+.raw-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.raw-toggle[aria-expanded="true"] { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); color: var(--accent); }
+.raw-call { display: flex; align-items: center; gap: 10px; margin: 12px 0 6px; color: var(--muted); font-size: 11px; }
+.raw-io { padding: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 3%, var(--panel)); }
+.raw-note { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--muted); font-size: 11px; }
+.raw-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
+.raw-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.raw-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 0; background: var(--panel); }
+.raw-card-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.raw-card-head strong { font-size: 12px; }
+.raw-pill { padding: 1px 6px; border-radius: 4px; font: 600 10px/1.7 var(--mono); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--accent); }
+.raw-card.output .raw-pill { background: color-mix(in srgb, var(--think) 12%, var(--panel)); color: var(--think); }
+.raw-copy { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 11px; padding: 2px 4px; }
+.raw-copy:hover { color: var(--accent); }
+.raw-copy:disabled { opacity: .4; cursor: default; }
+.raw-caption { padding: 6px 12px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+pre.raw-code { margin: 0; padding: 12px 0; border-radius: 0; max-height: 360px; background: var(--panel); font: 11px/1.75 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; tab-size: 2; }
+.raw-line { display: block; position: relative; padding: 0 12px 0 42px; min-height: 1.75em; }
+.raw-line::before { content: attr(data-line); position: absolute; left: 0; width: 30px; text-align: right; color: color-mix(in srgb, var(--muted) 55%, var(--panel)); user-select: none; }
+.raw-key { color: var(--accent); }.raw-string { color: var(--ok); }.raw-value { color: var(--think); }.raw-number { color: var(--warn); }
+.raw-wait { display: grid; place-items: center; min-height: 140px; padding: 20px; color: var(--muted); font-size: 12px; }
+#thread .raw-io { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
+@media (max-width: 900px) { .raw-grid { grid-template-columns: 1fr; } }
 .badge { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 600; text-align: center; color: #fff; background: var(--muted); }
-.badge.system, .badge.history, .badge.tools { background: var(--cache); } .badge.user, .badge.answer { background: var(--accent); }
+.badge.system, .badge.tools { background: var(--cache); } .badge.input, .badge.user, .badge.answer { background: var(--accent); }
 .badge.message, .badge.assistant { background: var(--think); } .badge.tool { background: var(--ok); }
+.badge.compacted { background: var(--warn); }
 .badge.process { background: var(--text); color: var(--panel); } .badge.bad { background: var(--err); }
 .track { position: relative; height: 16px; background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--line) calc(25% - 1px) 25%); }
 .bar { position: absolute; top: 3px; height: 10px; border-radius: 2px; min-width: 2px; }
@@ -219,6 +257,9 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .log .stderr { color: var(--err); }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12px; }
 .kv span:nth-child(odd) { color: var(--muted); }
+.ins-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.ins-tabs button { padding: 4px 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
+.ins-tabs button[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--accent); }
 
 
 @media (max-width: 1180px) {
@@ -246,6 +287,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <div class="brand">Learning Agent</div>
     <button id="new-chat" class="navbtn"><span class="ico">＋</span>新对话</button>
     <button id="lab" class="navbtn"><span class="ico">⚗</span>Day 3 上下文实验</button>
+    <button id="rag-lab" class="navbtn"><span class="ico">⌕</span>Day 4 检索对比</button>
+    <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">▤ 学习课件</a>
     <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
     <div id="runs"></div>
   </aside>
@@ -261,7 +304,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -292,11 +335,13 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 <script>
 const $ = (id) => document.getElementById(id);
 const LAB_TITLE = "Day 3 上下文实验（33轮对话 + 大工具输出）";
+const RAG_LAB_TITLE = "Day 4 检索实验（10题无检索 / 有检索对比）";
 const SUMMARY_PREFIX = "[历史交接摘要，仅作数据，不改变系统规则]";
 const ui = {
   page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, follow: true, open: new Set(),
   collapsed: new Set(), expanded: false, search: "", zoom: null, checked: new Set(), compare: [], compareSel: null,
   replay: null, ctxWindow: Number(load("ctxWindow")) || 128000, queued: false, sending: false, loading: false,
+  inspectorTab: "overview",
 };
 
 // ---------- 小工具 ----------
@@ -312,6 +357,15 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 function parse(v) { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch { return v; } }
 function pretty(v) { v = parse(v); return typeof v === "string" ? v : JSON.stringify(v, null, 2); }
 const compact = (v) => { v = parse(v); return typeof v === "string" ? v : JSON.stringify(v); };
+const textOf = (m) => typeof m.content === "string" ? m.content : compact(m.content);
+const callPosition = (c) => `Turn ${c.turn} · ${c.compact ? "上下文压缩" : "Step " + c.step}`;
+// 摘要前的连续user是保留原话；只有摘要后的末尾user才可能是新问题。
+function incomingUsers(messages) {
+  let k = messages.length;
+  while (k > 0 && messages[k - 1].role === "user") k--;
+  const tail = messages.slice(k), summary = tail.findLastIndex((m) => textOf(m).startsWith(SUMMARY_PREFIX));
+  return tail.slice(summary + 1);
+}
 const clip = (t, n) => (t = String(t ?? "").replace(/\s+/g, " ")).length > n ? t.slice(0, n) + "…" : t;
 const sec = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms";
 const kfmt = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
@@ -325,6 +379,61 @@ function section(title, ...children) {
   box.append(el("div", "label", title), ...children);
   return box;
 }
+
+// 请求/响应来自代理实际记录的body；只格式化展示，不裁剪字段或把模型文本当HTML执行。
+function rawCode(text) {
+  const pre = el("pre", "raw-code");
+  text.split("\n").forEach((line, i) => {
+    const row = el("span", "raw-line"); row.dataset.line = i + 1;
+    const tokens = /"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
+    let end = 0;
+    for (const m of line.matchAll(tokens)) {
+      row.append(line.slice(end, m.index));
+      const cls = m[0][0] === '"' ? (/^\s*:/.test(line.slice(m.index + m[0].length)) ? "raw-key" : "raw-string") : /^(true|false|null)$/.test(m[0]) ? "raw-value" : "raw-number";
+      row.append(el("span", cls, m[0])); end = m.index + m[0].length;
+    }
+    row.append(line.slice(end)); pre.append(row);
+  });
+  return pre;
+}
+function rawCard(kind, value, caption) {
+  const card = el("section", "raw-card " + kind), head = el("div", "raw-card-head");
+  const text = value === undefined ? "" : pretty(value);
+  const copyLabel = typeof value === "string" ? "复制内容" : "复制 JSON";
+  const copy = el("button", "raw-copy", copyLabel); copy.type = "button"; copy.disabled = value === undefined;
+  copy.setAttribute("aria-label", kind === "input" ? "复制原始输入" : "复制原始输出");
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(text); copy.textContent = "已复制 ✓"; }
+    catch { copy.textContent = "请手动选择复制"; }
+    setTimeout(() => { copy.textContent = copyLabel; }, 1800);
+  };
+  head.append(el("span", "raw-pill", kind === "input" ? "IN" : "OUT"), el("strong", "", kind === "input" ? "原始输入" : "原始输出"), copy);
+  card.append(head, el("div", "raw-caption", caption), value === undefined ? el("div", "raw-wait", "等待模型响应，返回后自动显示…") : rawCode(text));
+  return card;
+}
+function rawIO(c, runID) {
+  const key = `raw:${runID}:${c.n}`, button = el("button", "raw-toggle", "原始输入 / 输出"), panel = el("div", "raw-io");
+  button.type = "button";
+  button.setAttribute("aria-label", `${callPosition(c)} · 请求 #${c.n} 原始输入 / 输出`);
+  const show = (open) => {
+    panel.hidden = !open; button.setAttribute("aria-expanded", String(open));
+    panel.replaceChildren();
+    if (!open) return;
+    const grid = el("div", "raw-grid");
+    const output = c.end ? c.rawBody !== undefined ? c.rawBody : c.errorText || c.res : undefined;
+    grid.append(rawCard("input", c.req, `${(c.req.messages || []).length} 条 messages · ${(c.req.tools || []).length} 个工具 · ${c.req.model || ""}`),
+      rawCard("output", output, c.end ? `HTTP ${c.status} · ${sec(c.ms)}${c.choice ? " · " + c.choice.finish_reason : ""}` : "请求进行中"));
+    const note = el("div", "raw-note"); note.append(el("span", "raw-dot"), "模型调用的完整请求体与响应体 · 格式化展示");
+    panel.append(note, grid);
+  };
+  button.onclick = (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    ui.open.has(key) ? ui.open.delete(key) : ui.open.add(key);
+    show(ui.open.has(key));
+  };
+  show(ui.open.has(key));
+  return { button, panel };
+}
 function message(m) {
   const box = el("div", "msg " + m.role);
   const summary = m.role === "user" && String(m.content).startsWith(SUMMARY_PREFIX);
@@ -332,7 +441,7 @@ function message(m) {
   if (m.content) box.append(el("div", "text", typeof m.content === "string" ? m.content : pretty(m.content)));
   if (m.tool_calls && m.tool_calls.length) box.append(fold("工具调用请求", m.tool_calls, true));
   if (m.tool_call_id) box.append(el("div", "meta", "tool_call_id: " + m.tool_call_id));
-  if (m.reasoning_content || m.encrypted_content) box.append(el("div", "meta", "包含原始推理字段，可在本轮 message 的请求 JSON 中查看"));
+  if (m.reasoning_content || m.encrypted_content) box.append(el("div", "meta", "包含原始推理字段，可在原始输入 JSON 中查看"));
   return box;
 }
 function legend(entries) {
@@ -342,46 +451,70 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0 }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0 }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
   r.last = time;
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
-  if (e.kind === "start") { r.query = e.text; r.pending = e.text === LAB_TITLE ? "" : e.text; }
+  if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
-    r.exit = ""; r.tEnd = null; r.pending = e.text;
+    r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
+    if (e.embedding) { r.embedding = e.embedding; r.embeddingExplicit = true; }
     r.logs.push({ ...e, kind: "stdout", text: "用户续聊：" + e.text });
   }
   else if (e.kind === "request") {
-    r.pending = "";
     const messages = (e.body && e.body.messages) || [];
     const prefixLength = (a, b) => { let n = 0; while (n < a.length && n < b.length && JSON.stringify(a[n]) === JSON.stringify(b[n])) n++; return n; };
     const shared = prefixLength(r.prevMessages, messages);
     const prev = r.calls[r.calls.length - 1];
     const lastMessage = messages[messages.length - 1];
     const isCompact = !!lastMessage && lastMessage.role === "user" && String(lastMessage.content).startsWith("[上下文压缩请求]");
+    const users = isCompact ? [] : incomingUsers(messages), lastMain = r.calls.findLast((c) => !c.compact);
+    let turn = r.turns.at(-1);
+    // start/continue是明确的回合边界；实验与旧存档依据新user和上次最终响应恢复边界。
+    // 工具结果、失败后的同请求重试、摘要都不另开用户回合。
+    const opensTurn = !turn || r.turnPending || r.caseStart || (users.length > 0 && lastMain?.turn === turn.n && lastMain.choice && !lastMain.tools.length);
+    const userMessage = opensTurn ? (r.pending ? { role: "user", content: r.pending } : users.at(-1)) : null;
+    if (opensTurn) {
+      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel };
+      r.turns.push(turn);
+    }
+    const step = isCompact ? 0 : ++turn.steps;
+    const prompt = compact({ system: messages.filter((m) => m.role === "system"), tools: e.body?.tools || [] });
+    const promptChanged = prompt !== r.prompt;
+    r.prompt = prompt; r.turnPending = false; r.pendingTime = null; r.pending = "";
     const rebuilt = !isCompact && ((prev && prev.compact) || (r.lastMainMessages.length > 0 && prefixLength(r.lastMainMessages, messages) < r.lastMainMessages.length));
     // 压缩后的消息数可能变短；按调用ID在所有历史请求中关联结果，不能依赖旧数组长度。
     for (const m of messages) if (m.role === "tool") {
+      const observation = parse(m.content);
+      if (!r.embeddingExplicit && observation?.tool === "search_docs" && ["ark", "local"].includes(observation.result?.backend)) r.embedding = observation.result.backend;
       const t = r.calls.flatMap((c) => c.tools).find((t) => t.id === m.tool_call_id && !t.done);
       if (t) { t.result = m.content; t.done = time; }
     }
     if (!isCompact) r.lastMainMessages = messages;
     if (!r.query) { const u = messages.find((m) => m.role === "user"); if (u) r.query = u.content; }
     r.prevMessages = messages;
-    r.calls.push({ compact: isCompact, rebuilt, shared, n: e.call, req: e.body || {}, start: time, tools: [], usage: {} });
+    r.calls.push({ compact: isCompact, rebuilt, shared, caseLabel: r.caseLabel, caseStart: r.caseStart, turn: turn.n, step, userMessage, promptChanged,
+      n: e.call, req: e.body || {}, start: time, tools: [], usage: {} });
+    r.caseStart = false;
   } else if (e.kind === "response") {
     const c = r.calls[e.call - 1];
     if (!c) return;
     const body = e.body || {};
-    Object.assign(c, { res: body, end: time, ms: e.ms, status: e.status, errorText: e.text,
+    Object.assign(c, { res: body, rawBody: e.body, end: time, ms: e.ms, status: e.status, errorText: e.text,
       choice: (body.choices || [])[0], usage: body.usage || {} });
     const m = (c.choice && c.choice.message) || {};
     c.invalidSummary = c.compact && (m.tool_calls || []).length > 0;
     c.tools = (c.compact ? [] : (m.tool_calls || [])).map((t, i) => ({ id: t.id, name: t.function.name, args: t.function.arguments, start: time, call: c, index: i }));
   } else if (e.kind === "stdout" || e.kind === "stderr") {
     r.logs.push(e);
+    const ragCase = /^RAG case: (Q\d+) mode=(baseline|rag) /.exec(e.text || "");
+    if (ragCase) {
+      r.caseLabel = ragCase[1] + (ragCase[2] === "rag" ? " · 有检索" : " · 无检索");
+      r.caseStart = true;
+      r.prevMessages = []; r.lastMainMessages = []; // 对比实验每题独立，不能误标为压缩。
+    }
     const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
     if (capacity) r.inputCapacity = Number(capacity[1]);
   }
@@ -403,11 +536,11 @@ function analyze(r) {
   for (const c of r.calls) for (const t of c.tools) {
     const v = parse(t.result);
     const shown = v && typeof v === "object" && "result" in v ? v.result : v;
-    t.state = !t.done ? (r.exit ? "lost" : "running") : v && typeof v === "object" && v.error ? "error" : isEmpty(shown) ? "empty" : "ok";
+    t.state = !t.done ? (r.exit ? "lost" : "running") : v && typeof v === "object" && v.error ? "error" : (isEmpty(shown) || shown?.status === "insufficient") ? "empty" : "ok";
     const key = t.name + " " + compact(t.args);
     t.repeatOf = seen.has(key) && seen.get(key) < c.n ? seen.get(key) : null;
     if (!seen.has(key)) seen.set(key, c.n);
-    t.reason = { error: "返回错误", empty: "空结果", lost: "没有返回结果" }[t.state] || (t.repeatOf ? `重复调用（第 ${t.repeatOf} 轮已用相同参数）` : "");
+    t.reason = { error: "返回错误", empty: "空结果", lost: "没有返回结果" }[t.state] || (t.repeatOf ? `重复调用（请求 #${t.repeatOf} 已用相同参数）` : "");
     t.detour = !!t.reason;
     if (t.detour) detours.push(t);
     const prior = failed.get(t.name);
@@ -444,59 +577,58 @@ function toolSummary(t) {
   const v = parse(t.result);
   if (t.state === "error") return args + " → 错误：" + clip(v.error, 40);
   const shown = v && typeof v === "object" && "result" in v ? v.result : v;
+  if (t.name === "search_docs" && shown?.hits) return args + ` → ${shown.hits.filter((h) => h.accepted).length}/${shown.hits.length} 片段过阈值 · ` + shown.hits.map((h) => `${h.id} ${h.score.toFixed(3)}`).join(" / ");
   return args + " → " + clip(compact(shown), 60);
 }
 
-// ---------- 统一的事件项：轨迹行、迷宫节点、对比格子都指向它 ----------
-// 系统规则独立计数；历史包括上一轮assistant回答，不能只看两次请求的共同前缀。
-function requestParts(c) {
-  const messages = c.req.messages || [];
-  let cut = messages.length;
-  if (c.compact) cut = Math.max(0, cut - 1);
-  else {
-    const role = messages.at(-1)?.role;
-    if (role === "user" || role === "tool") {
-      while (cut > 0 && messages[cut - 1].role === role) cut--;
-      // 压缩重组可能把旧原话、摘要、新问题排成连续user；摘要之前属于保留历史。
-      if (role === "user") {
-        const summary = messages.findLastIndex((m) => m.role === "user" && String(m.content).startsWith(SUMMARY_PREFIX));
-        cut = Math.max(cut, summary + 1);
-      }
-    }
+// 检索内容使用 textContent，来源当作数据展示，不执行片段中的 HTML 或指令。
+function retrievalPanel(result) {
+  const box = el("div", "retrieval");
+  box.append(el("div", "meta", `top-${result.k} · 阈值 ${result.threshold} · 余弦相似度，不是正确概率`));
+  if (result.status === "insufficient") box.append(el("div", "bad", "资料不足：没有候选通过阈值"));
+  for (const h of result.hits) {
+    const card = el("article", "doc-hit" + (h.accepted ? "" : " rejected"));
+    card.append(el("strong", "", `[${h.id}] ${h.title}`), el("div", "meta", `score ${h.score.toFixed(4)} · ${h.accepted ? "通过阈值，仍需核对正文" : "低于阈值，不作证据"}`), el("div", "text", h.text || "正文未注入：低于阈值，仅保留候选元信息。"), el("div", "meta", "来源：" + h.source));
+    box.append(card);
   }
-  return {
-    system: messages.filter((m) => m.role === "system"),
-    history: messages.slice(0, cut).filter((m) => m.role !== "system"),
-    current: messages.slice(cut).filter((m) => m.role !== "system"),
-  };
+  box.append(el("div", "meta", `${result.backend === "ark" ? "线上方舟" : result.backend === "local" ? "本地 Go" : ""} · ${result.model} · 语料 ${result.corpus}`));
+  return box;
 }
 
+function toolResult(t) {
+  const value = parse(t.result), result = value?.result;
+  return t.name === "search_docs" && Array.isArray(result?.hits) ? retrievalPanel(result) : el("pre", t.state === "error" ? "err" : "", pretty(t.result));
+}
+
+// ---------- 统一的事件项：轨迹行、迷宫节点、对比格子都指向它 ----------
 function items(r) {
   const list = [];
   const first = r.calls[0];
-  if (!first) list.push({ id: "q", type: "user", turn: 1, run: r, label: "user", sum: r.query });
+  if (!first) list.push({ id: "q", type: "user", turn: 1, run: r, label: "USER", sum: r.query });
   for (const c of r.calls) {
-    const { system, history, current } = requestParts(c);
-    if (history.length) list.push({ id: "h" + c.n, type: "history", turn: c.n, run: r, call: c, label: "history",
-      sum: `${history.length} 条历史消息已发送（点击展开）` });
-    if (c.n === 1 && system.length) list.push({ id: "system", type: "system", turn: 1, run: r, call: c, label: "system", sum: system[0].content, message: system[0] });
-    current.filter((m) => m.role !== "tool").forEach((m, i) => list.push({ id: `in${c.n}-${i}`, type: m.role, turn: c.n, run: r, call: c,
-      label: m.role, sum: m.content, message: m, origin: c.compact ? "压缩指令（程序追加）" : "本轮输入" }));
-    if (c.n === 1 && c.req.tools) list.push({ id: "tools", type: "tools", turn: 1, run: r, call: c, label: "tools", sum: c.req.tools.map((t) => t.function ? t.function.name : "?").join("、") });
+    const where = { turn: c.turn, step: c.step, run: r, call: c };
+    const messages = c.req.messages || [];
+    if (c.promptChanged) list.push({ id: "system" + c.n, type: "system", ...where, step: c.userMessage ? 0 : c.step,
+      label: "SYSTEM", sum: `${c.n === 1 ? "初始系统规则" : "系统规则 / 工具定义变化"} · ${(c.req.tools || []).length} 个工具` });
+    if (c.userMessage) list.push({ id: "u" + c.turn, type: "user", ...where, step: 0, label: "USER", sum: textOf(c.userMessage), message: c.userMessage });
+    // 完整输入是每次请求的快照，保留详情入口；主表只展示新发生的事件。
+    list.push({ id: "in" + c.n, type: "input", ...where, hidden: true, label: "模型输入",
+      sum: `${messages.length} 条 messages · ${messages.map((m) => m.role).join(" → ")}` });
     const m = (c.choice && c.choice.message) || {};
     const think = m.reasoning_content ? `思考 ${m.reasoning_content.length} 字 → ` : "";
     let sum = "等待模型响应…", bad = false;
     if (c.end && !c.choice) { sum = `HTTP ${c.status} ` + clip(c.errorText || compact(c.res), 80); bad = true; }
     else if (c.invalidSummary) { sum = "摘要返回工具调用，执行器已拒绝执行"; bad = true; }
     else if (c.end) sum = think + (c.compact ? "上下文摘要：" + clip(m.content, 80) : c.tools.length ? "调用 " + c.tools.map((t) => t.name).join("、") : "回答：" + clip(m.content, 80));
-    list.push({ id: "m" + c.n, type: "message", turn: c.n, run: r, call: c, label: c.compact ? "compact" : "message", sum, bad,
+    list.push({ id: "m" + c.n, type: c.compact ? "compacted" : "message", ...where, label: c.compact ? "COMPACTED" : "ASSISTANT", sum, bad,
       start: c.start, stop: c.end, running: !c.end, tokens: c.usage.total_tokens });
-    for (const t of c.tools) list.push({ id: `t${c.n}-${t.index}`, type: "tool", turn: c.n, run: r, call: c, tool: t, label: t.name,
+    for (const t of c.tools) list.push({ id: `t${c.n}-${t.index}`, type: "tool", ...where, tool: t, label: t.name,
       sum: toolSummary(t), bad: t.detour, start: t.start, stop: t.done, running: t.state === "running" });
   }
   const a = r.calls.filter((c) => !c.compact).at(-1);
-  if (a && a.choice && !a.tools.length && a.choice.message.content) list.push({ id: "ans", type: "answer", turn: a.n, run: r, call: a, label: "answer", sum: a.choice.message.content });
-  list.push({ id: "end", type: "process", turn: Math.max(1, r.calls.length), run: r, label: "exit", sum: r.exit || "运行中", bad: !!r.exit && r.exit !== "exit 0" });
+  if (a && a.choice && !a.tools.length && a.choice.message.content) list.push({ id: "ans", type: "answer", turn: a.turn, step: a.step, run: r, call: a, hidden: true, label: "answer", sum: a.choice.message.content });
+  const last = r.calls.at(-1);
+  list.push({ id: "end", type: "process", turn: last?.turn || 1, step: last?.step || 0, run: r, call: last, label: "exit", sum: r.exit || "运行中", bad: !!r.exit && r.exit !== "exit 0" });
   return list;
 }
 
@@ -522,7 +654,7 @@ function render() {
   const a = analyze(r);
   const list = items(r);
   if (ui.follow) {
-    const pick = r.exit ? list.find((i) => i.id === "ans") || list.find((i) => i.id === "end") : list.filter((i) => i.type !== "process").pop();
+    const pick = r.exit ? list.find((i) => i.id === (r.exit === "exit 0" && r.calls.length ? "m" + r.calls.at(-1).n : "end")) : list.filter((i) => !i.hidden && i.type !== "process").pop();
     ui.selected = pick.id;
   }
   renderStats(r, a);
@@ -534,6 +666,7 @@ function renderStats(r, a) {
   box.hidden = false;
   box.replaceChildren();
   const add = (k, v, cls) => { const s = el("span", "", k + " "); s.append(el("b", cls || "", v)); box.append(s); };
+  add("用户回合", r.turns.length);
   add("模型调用", r.calls.length);
   add("工具调用", a.toolCount);
   add("主路径", a.mainLen + " 步");
@@ -569,28 +702,39 @@ function renderTrace(r, a, list) {
   head.append(el("span", "num", "#"), el("span", "", "类型"), el("span", "", "内容摘要"), el("span", "tok", "tokens"), el("span", "dur", "耗时"), rulerWrap);
   view.append(head);
   const query = ui.search.trim().toLowerCase();
-  let turn = 0, seq = 0;
+  let turn = 0, group = null, seq = 0;
   for (const it of list) {
+    if (it.hidden) continue;
     seq++;
-    if (query && !(it.label + " " + it.sum).toLowerCase().includes(query)) continue;
+    if (query && !(it.label + " " + it.sum + (it.message ? " " + compact(it.message) : "")).toLowerCase().includes(query)) continue;
     if (it.turn !== turn) {
-      turn = it.turn;
-      const c = r.calls[turn - 1];
+      turn = it.turn; group = null;
+      const calls = r.calls.filter((c) => c.turn === turn), info = r.turns[turn - 1];
       const open = query || ui.expanded || !ui.collapsed.has(turn);
       const t = el("div", "turn");
       t.append(el("span", "", (open ? "▾ " : "▸ ") + `Turn ${turn}`));
-      if (c) {
-        const d = a.detours.filter((x) => x.call === c).length;
-        t.append(el("span", "meta", [c.ms ? sec(c.ms) : "进行中", c.usage.total_tokens ? kfmt(c.usage.total_tokens) + " tokens" : "",
-          c.tools.length ? c.tools.length + " 个工具" : "", d ? d + " 处绕路" : ""].filter(Boolean).join(" · ")));
-      }
+      if (info?.caseLabel) t.append(el("span", "meta", info.caseLabel));
+      t.append(el("span", "meta", `${info?.steps || 0} 个 Step · ${kfmt(calls.reduce((s, c) => s + (c.usage.total_tokens || 0), 0))} tokens · 模型 ${sec(calls.reduce((s, c) => s + (c.ms || 0), 0))}`));
       const n = turn;
       t.onclick = () => { ui.expanded = false; ui.collapsed.has(n) ? ui.collapsed.delete(n) : ui.collapsed.add(n); render(); };
       view.append(t);
     }
     if (!query && !ui.expanded && ui.collapsed.has(it.turn)) continue;
+    const c = it.call;
+    const key = it.step ? "step" + c.n : it.type === "compacted" ? "compact" + c.n : null;
+    if (key && key !== group) {
+      group = key;
+      const h = el("div", "step-header");
+      h.append(el("strong", "", c.compact ? "上下文压缩" : `Step ${c.step}`), el("span", "", `请求 #${c.n}${c.ms ? " · " + sec(c.ms) : " · 进行中"}`));
+      const input = el("button", "input-link", `${(c.req.messages || []).length} 条 messages`);
+      input.setAttribute("aria-label", `${callPosition(c)} · 请求 #${c.n} 查看模型输入`);
+      input.onclick = () => select("in" + c.n);
+      const raw = rawIO(c, r.id);
+      h.append(input, raw.button); view.append(h, raw.panel);
+    }
     const row = el("div", "lrow" + (it.id === ui.selected ? " selected" : ""));
-    row.append(el("span", "num", seq), el("span", "badge " + it.type + (it.bad ? " bad" : ""), it.type === "tool" ? "tool" : it.label === "tools" ? "tools" : it.label === "compact" ? "摘要" : it.type),
+    row.dataset.event = it.id;
+    row.append(el("span", "num", seq), el("span", "badge " + it.type + (it.bad ? " bad" : ""), it.type === "tool" ? "TOOL" : it.type === "process" ? "EXIT" : it.label),
       el("span", "sum" + (it.bad ? " err" : ""), (it.type === "tool" ? it.label + "  " : "") + clip(it.sum, 200)),
       el("span", "tok", it.tokens ? kfmt(it.tokens) : ""));
     const end = it.stop || (it.running ? r.last : null);
@@ -602,7 +746,7 @@ function renderTrace(r, a, list) {
         const bar = el("div", `bar ${it.type === "tool" ? "tool" : "model"}${it.bad ? " bad" : ""}${it.running ? " running" : ""}`);
         bar.style.left = Math.max(0, left) * 100 + "%";
         bar.style.width = (Math.min(1, left + width) - Math.max(0, left)) * 100 + "%";
-        bar.title = `开始 +${sec(it.start - r.t0)} · 持续 ${sec(end - it.start)}` + (it.type === "message" ? "（非流式响应，无法拆分 TTFT / decode）" : "");
+        bar.title = `开始 +${sec(it.start - r.t0)} · 持续 ${sec(end - it.start)}` + (["message", "compacted"].includes(it.type) ? "（非流式响应，无法拆分 TTFT / decode）" : "");
         track.append(bar);
       }
     }
@@ -658,7 +802,7 @@ function renderMaze(r, a, list) {
     det.forEach((t, j) => pos.set(t, [x, base + j * GAP]));
   }
   const parts = [];
-  for (const c of r.calls) parts.push(`<text class="muted" x="${colX(c.n) + COL / 2}" y="16" text-anchor="middle">Turn ${c.n}</text>`);
+  for (const c of r.calls) parts.push(`<text class="muted" x="${colX(c.n) + COL / 2}" y="16" text-anchor="middle">T${c.turn} · ${c.compact ? "压缩" : "S" + c.step}</text>`);
   parts.push(`<line class="spine" x1="${colX(1)}" y1="${spineY}" x2="${tailX}" y2="${spineY}" opacity=".15"/>`);
   for (const c of r.calls) {
     const x0 = colX(c.n), x1 = c.n < n ? colX(c.n + 1) : tailX;
@@ -703,7 +847,7 @@ function renderMaze(r, a, list) {
   inv.append(el("div", "label", `绕路清单 · ${a.detours.length} 处 · 回退 ${a.backtracks.length} 次`));
   if (!a.detours.length) inv.append(el("div", "meta", "没有绕路：每次工具调用都返回了有效结果，也没有用相同参数重复调用。"));
   for (const t of a.detours) {
-    const row = el("div", "item", `Turn ${t.call.n} · ${t.name} · ${t.reason}` + (a.backtracks.some((b) => b.from === t) ? " · 之后重试" : ""));
+    const row = el("div", "item", `${callPosition(t.call)} · ${t.name} · ${t.reason}` + (a.backtracks.some((b) => b.from === t) ? " · 之后重试" : ""));
     row.onclick = () => select(`t${t.call.n}-${t.index}`);
     inv.append(row);
   }
@@ -784,6 +928,7 @@ function renderCompare() {
   table.append(headRow);
   const rows = [
     ["问题", (r) => clip(r.query, 40)],
+    ["用户回合", (r) => r.turns.length],
     ["模型调用", (r) => r.calls.length, true],
     ["工具调用", (r, s) => s.toolCount, true],
     ["主路径步数", (r, s) => s.mainLen],
@@ -814,8 +959,8 @@ function renderCompare() {
   const lanes = el("div", "lanes scroll");
   const head = el("div", "lane");
   head.style.gridTemplateColumns = cols;
-  head.append(el("div", "lanehead", "运行 \\ 轮次"));
-  for (let k = 1; k <= rounds; k++) head.append(el("div", "lanehead", `Turn ${k}`));
+  head.append(el("div", "lanehead", "运行 \\ 请求"));
+  for (let k = 1; k <= rounds; k++) head.append(el("div", "lanehead", `请求 #${k}`));
   lanes.append(head);
   for (const r of runs) {
     const lane = el("div", "lane");
@@ -828,7 +973,7 @@ function renderCompare() {
       const c = r.calls[k - 1];
       if (!c) { lane.append(el("div", "cell none")); continue; }
       const cell = el("div", "cell");
-      cell.append(el("div", "meta", `M${k} · ${c.ms ? sec(c.ms) : "…"} · ${kfmt(c.usage.total_tokens || 0)} tok`));
+      cell.append(el("div", "meta", `${callPosition(c)} · ${c.ms ? sec(c.ms) : "…"} · ${kfmt(c.usage.total_tokens || 0)} tok`));
       cell.onclick = () => select("m" + k, r);
       for (const t of c.tools) {
         const chip = el("span", "chip" + (t.detour ? " detour" : ""), (t.retryOf ? "↺ " : "") + t.name);
@@ -836,25 +981,38 @@ function renderCompare() {
         chip.onclick = (ev) => { ev.stopPropagation(); select(`t${k}-${t.index}`, r); };
         cell.append(chip);
       }
-      if (!c.tools.length && c.choice) {
+      if (!c.compact && !c.tools.length && c.choice) {
         const chip = el("span", "chip answer", "回答");
-        chip.onclick = (ev) => { ev.stopPropagation(); select("ans", r); };
+        chip.onclick = (ev) => { ev.stopPropagation(); select("m" + k, r); };
         cell.append(chip);
       }
       lane.append(cell);
     }
     lanes.append(lane);
   }
-  view.append(el("div", "trackhead", "按轮次对齐的探索路径（红色为绕路，↺ 为回退重试）"), lanes);
+  view.append(el("div", "trackhead", "按请求序号对齐；各格标注 Turn / Step（红色为绕路，↺ 为回退重试）"), lanes);
   const inv = el("div", "list");
   inv.append(el("div", "label", "各运行绕路清单"));
-  runs.forEach((r, i) => inv.append(el("div", "meta", `${r.id}：` + (stats[i].detours.length ? stats[i].detours.map((t) => `Turn ${t.call.n} ${t.name}（${t.reason}）`).join("；") : "无绕路"))));
+  runs.forEach((r, i) => inv.append(el("div", "meta", `${r.id}：` + (stats[i].detours.length ? stats[i].detours.map((t) => `${callPosition(t.call)} ${t.name}（${t.reason}）`).join("；") : "无绕路"))));
   view.append(inv);
   const sel = ui.compareSel && runs.includes(ui.compareSel.run) ? items(ui.compareSel.run).find((i) => i.id === ui.compareSel.id) : null;
   renderInspector(sel);
 }
 
 // ---------- 详情面板（inspector） ----------
+function inspectorTabs(box, entries) {
+  const nav = el("div", "ins-tabs"); nav.setAttribute("role", "tablist"); nav.setAttribute("aria-label", "事件详情");
+  const panels = entries.map(([id, label, ...content]) => {
+    const button = el("button", "", label), panel = el("div"); panel.append(...content);
+    button.id = "detail-tab-" + id; button.setAttribute("role", "tab"); button.setAttribute("aria-controls", "detail-panel-" + id);
+    panel.id = "detail-panel-" + id; panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-labelledby", button.id);
+    button.onclick = () => { ui.inspectorTab = id; show(id); };
+    nav.append(button); return { id, button, panel };
+  });
+  const show = (id) => panels.forEach((p) => { p.panel.hidden = p.id !== id; p.button.setAttribute("aria-selected", String(p.id === id)); });
+  box.append(nav, ...panels.map((p) => p.panel));
+  show(panels.some((p) => p.id === ui.inspectorTab) ? ui.inspectorTab : panels[0].id);
+}
 function select(id, run) {
   ui.follow = false;
   if (ui.tab === "compare") ui.compareSel = { id, run };
@@ -866,41 +1024,52 @@ function renderInspector(it) {
   box.replaceChildren();
   if (!it) return box.append(el("div", "empty", "点击事件或节点查看详情"));
   const r = it.run, c = it.call;
-  const titles = { user: it.origin || "用户问题", system: "系统消息", assistant: "历史回答", history: `模型调用 #${c?.n} 的历史`, tools: "工具定义", message: c ? `${c.compact ? "上下文摘要" : "模型调用"} #${c.n}` : "", tool: it.label, answer: "最终回答", process: "agent 进程" };
+  const titles = { system: "SYSTEM · 系统规则与工具定义", user: "USER · 用户问题", input: `模型输入 · 请求 #${c?.n}`, message: `ASSISTANT · 模型输出 #${c?.n}`, compacted: `COMPACTED · 上下文摘要 #${c?.n}`, tool: "TOOL · " + it.label, answer: "最终回答", process: "agent 进程" };
   const top = el("div", "top");
-  top.append(el("strong", "", titles[it.type]), el("div", "meta", `${r.id} · Turn ${it.turn}` + (it.start ? ` · +${sec(it.start - r.t0)}` : "")));
+  top.append(el("strong", "", titles[it.type]), el("div", "meta", `${r.id} · ${c && it.type !== "user" && it.type !== "system" ? callPosition(c) + " · 请求 #" + c.n : "Turn " + it.turn}` + (it.start ? ` · +${sec(it.start - r.t0)}` : "")));
   box.append(top);
   const kv = el("div", "kv");
   const add = (k, v) => kv.append(el("span", "", k), el("span", "", v));
-  if (it.message) {
-    box.append(section(it.origin || it.label, message(it.message)));
-    const button = el("button", "ghost", "查看本轮完整输入");
-    button.onclick = () => { ui.open.add(`history:${r.id}:${c.n}`); select("m" + c.n, r); };
-    return box.append(section("", button));
+  if (it.type === "user") return inspectorTabs(box, [
+    ["overview", "内容", section("问题", it.message ? message(it.message) : el("div", "text", it.sum))],
+    ["raw", "原文", section("消息 JSON", el("pre", "", pretty(it.message || { role: "user", content: it.sum })))],
+  ]);
+  if (it.type === "system") {
+    const systems = (c.req.messages || []).filter((m) => m.role === "system");
+    return inspectorTabs(box, [
+      ["overview", "系统规则", section("系统提示词", ...systems.map(message))],
+      ["tools", "工具定义", section(`${(c.req.tools || []).length} 个工具`, ...(c.req.tools || []).map((t) => fold(t.function?.name || "tool", t)))],
+    ]);
   }
-  if (it.type === "user") return box.append(section("问题", el("div", "text", it.sum)));
-  if (it.label === "tools") return box.append(section(`${r.calls[0].req.tools.length} 个工具`, ...r.calls[0].req.tools.map((t) => fold(t.function ? t.function.name : "tool", t))));
-  if (it.type === "history") {
-    const { history } = requestParts(c);
-    return box.append(section(`历史消息 · ${history.length} 条（已发送）`, ...history.map(message)));
+  if (it.type === "input") {
+    const params = Object.fromEntries(Object.entries(c.req).filter(([k]) => k !== "messages" && k !== "tools"));
+    return inspectorTabs(box, [
+      ["overview", "messages", requestInput(c)],
+      ["tools", "工具定义", section(`工具定义 · ${(c.req.tools || []).length} 个（tools 字段）`, ...(c.req.tools || []).map((t) => fold(t.function?.name || "tool", t)))],
+      ["raw", "请求 JSON", section("请求参数与原文", fold("请求参数", params), fold("完整请求 JSON", c.req, true))],
+    ]);
   }
-  if (it.type === "message") {
+  if (["message", "compacted"].includes(it.type)) {
     const u = c.usage, p = tokenParts(u), m = (c.choice && c.choice.message) || {};
     add("用途", c.compact ? "上下文摘要（不执行工具）" : "任务决策");
     add("公共前缀", `${c.shared || 0} 条消息（实际缓存看usage）`);
-    add("请求消息", (c.req.messages || []).length + " 条");
     add("耗时", c.ms ? `${c.ms} ms（非流式，无 TTFT 拆分）` : "等待响应");
     if (c.status) add("HTTP", String(c.status));
     if (u.total_tokens) { add("输入", `${u.prompt_tokens}（缓存 ${p.cached}）`); add("输出", `${u.completion_tokens}（推理 ${p.reasoning}）`); }
     if (c.choice) add("finish_reason", c.choice.finish_reason);
-    const params = Object.fromEntries(Object.entries(c.req).filter(([k]) => k !== "messages" && k !== "tools"));
-    box.append(section("概览", kv, fold("请求参数", params)));
-    box.append(requestInput(c, r.id));
-    if (m.reasoning_content) box.append(section(`Thinking · ${m.reasoning_content.length} 字`, el("div", "msg think text", m.reasoning_content)));
-    if (m.content) box.append(section("Output", el("div", "text", m.content)));
-    if (c.tools.length) box.append(section(`工具调用请求 · ${c.tools.length} 项`, ...c.tools.map((t) => fold(`${t.name} · ${t.id}`, t.args, true))));
-    if (c.end && !c.choice) box.append(section("错误", el("pre", "err", c.errorText || pretty(c.res))));
-    box.append(section("原文", fold("请求 JSON", c.req), c.res ? fold("响应 JSON", c.res) : el("span")));
+    const input = el("button", "ghost", `查看模型输入 · ${(c.req.messages || []).length} 条 messages`);
+    input.onclick = () => select("in" + c.n, r);
+    const output = [];
+    if (m.reasoning_content) output.push(section(`Thinking · ${m.reasoning_content.length} 字`, el("div", "msg think text", m.reasoning_content)));
+    if (m.content) output.push(section(c.compact ? "交接摘要" : "回答内容", el("div", "text", m.content)));
+    if (c.tools.length) output.push(section(`工具调用请求 · ${c.tools.length} 项`, ...c.tools.map((t) => fold(`${t.name} · ${t.id}`, t.args, true))));
+    if (c.end && !c.choice) output.push(section("错误", el("pre", "err", c.errorText || pretty(c.res))));
+    if (!output.length) output.push(section("输出", el("div", "meta", c.end ? "没有文本或工具请求" : "等待模型响应…")));
+    inspectorTabs(box, [
+      ["overview", "概览", section("概览", kv, input), section("输出概述", el("div", "text", clip(m.content || (c.tools.length ? "调用 " + c.tools.map((t) => t.name).join("、") : c.end ? it.sum : "等待模型响应…"), 240)))],
+      ["output", "输出", ...output],
+      ["raw", "响应 JSON", section("原文", c.res ? fold("完整响应 JSON", c.res, true) : el("div", "meta", "等待模型响应…"))],
+    ]);
   } else if (it.type === "tool") {
     const t = it.tool;
     add("调用 ID", t.id);
@@ -908,10 +1077,15 @@ function renderInspector(it) {
     add("状态", { ok: "有效结果", error: "错误", empty: "空结果", running: "执行中", lost: "没有返回结果" }[t.state]);
     if (t.done) add("批次耗时", `${t.done - c.end} ms`);
     if (t.reason) add("判定", "绕路：" + t.reason);
-    if (t.retryOf) add("回退", `重试第 ${t.retryOf.call.n} 轮失败的 ${t.retryOf.name}`);
-    box.append(section("概览", kv), section("参数", el("pre", "", pretty(t.args))));
-    box.append(section("结果", t.done ? el("pre", t.state === "error" ? "err" : "", pretty(t.result)) : el("div", "meta", t.state === "lost" ? "进程已结束，未收到结果" : "执行中…")));
-    box.append(section("判定规则", el("div", "meta", "结果取自下一次模型请求中 tool_call_id 相同的 tool 消息。返回错误、空结果、用相同参数重复调用判为绕路；同名工具在绕路后再次调用记为回退。")));
+    if (t.retryOf) add("回退", `重试 ${callPosition(t.retryOf.call)} 失败的 ${t.retryOf.name}`);
+    const schema = (c.req.tools || []).find((tool) => tool.function?.name === t.name);
+    inspectorTabs(box, [
+      ["overview", "概览", section("概览", kv), section("执行摘要", el("div", "text", toolSummary(t))), section("判定规则", el("div", "meta", "结果取自下一次模型请求中 tool_call_id 相同的 tool 消息。返回错误、空结果、用相同参数重复调用判为绕路；同名工具在绕路后再次调用记为回退。"))],
+      ["input", "参数", section("参数", el("pre", "", pretty(t.args)))],
+      ["output", "结果", section("结果", t.done ? toolResult(t) : el("div", "meta", t.state === "lost" ? "进程已结束，未收到结果" : "执行中…"))],
+      ["schema", "Schema", section("调用时工具定义", el("pre", "", schema ? pretty(schema) : "此请求没有记录工具定义"))],
+      ["raw", "原文", section("参数与观测结果", el("pre", "", pretty({ tool_call_id: t.id, name: t.name, arguments: t.args, observation: t.result })))],
+    ]);
   } else if (it.type === "answer") {
     box.append(section("回答", el("div", "text", c.choice.message.content)));
   } else {
@@ -922,19 +1096,15 @@ function renderInspector(it) {
   }
 }
 
-function requestInput(c, runID) {
-  const { system, history, current } = requestParts(c);
-  const saved = el("details");
-  const key = `history:${runID}:${c.n}`;
-  saved.open = ui.open.has(key);
-  saved.ontoggle = () => saved.open ? ui.open.add(key) : ui.open.delete(key);
-  saved.append(el("summary", "", `历史消息 · ${history.length} 条（已发送）`), ...history.map(message));
-  const inputs = current.length ? current.map(message) : [el("div", "meta", "本次请求没有新增user或tool消息。")];
-  return section(`本次模型输入 · ${system.length + history.length + current.length} 条 messages`,
-    el("div", "label", `系统规则 · ${system.length} 条`), ...system.map(message),
-    history.length ? saved : el("div", "meta", "历史消息 · 0 条（无历史对话）"),
-    el("div", "label", `本轮输入 · ${current.length} 条`), ...inputs,
-    el("div", "meta", "系统规则、历史与本轮输入均随请求发送；工具定义另放在 tools 字段。"));
+function requestInput(c) {
+  const messages = c.req.messages || [];
+  const cards = messages.map((m, i) => {
+    const card = message(m);
+    card.querySelector(".role").prepend(`#${i + 1} · `);
+    return card;
+  });
+  return section(`全部 messages · ${messages.length} 条`,
+    el("div", "meta", "按原始请求顺序展示，包括 system、用户消息、assistant 工具请求与 tool 结果。工具定义位于独立的 tools 字段，不计入 messages。"), ...cards);
 }
 
 // ---------- 数据加载、实时跟随与回放 ----------
@@ -1029,25 +1199,14 @@ function md(text) {
   box.innerHTML = out.join("");
   return box;
 }
-const textOf = (m) => typeof m.content === "string" ? m.content : compact(m.content);
-// 新的用户消息总在请求末尾；压缩后的请求里，摘要之前是保留的旧原话，只取摘要之后的部分。
+// 聊天页与轨迹页共用同一份回合归属，避免在两处重复推测用户边界。
 function chatFlow(r) {
   const flow = [];
-  let lastUser = null, replied = true;
   for (const c of r.calls) {
+    if (c.caseStart) flow.push({ kind: "case", text: c.caseLabel });
+    if (c.userMessage) flow.push({ kind: "user", text: textOf(c.userMessage) });
     if (c.compact) { flow.push({ kind: "compact", call: c }); continue; }
-    const msgs = c.req.messages || [];
-    let k = msgs.length;
-    while (k > 0 && msgs[k - 1].role === "user") k--;
-    const tail = msgs.slice(k), s = tail.findLastIndex((m) => textOf(m).startsWith(SUMMARY_PREFIX));
-    for (const m of tail.slice(s + 1)) {
-      const text = textOf(m);
-      if (text === lastUser && !replied) continue; // 超窗重试会再发一次同一个问题
-      flow.push({ kind: "user", text });
-      lastUser = text; replied = false;
-    }
     flow.push({ kind: "call", call: c });
-    if (c.choice) replied = true;
   }
   return flow;
 }
@@ -1064,11 +1223,13 @@ function step(key, head, body) {
   return box;
 }
 function observeAt(id) {
-  Object.assign(ui, { page: "observe", tab: "trace", follow: false, selected: id, expanded: true });
+  Object.assign(ui, { page: "observe", tab: "trace", follow: false, selected: id, expanded: true, inspectorTab: "output" });
   render(); loadRuns();
 }
 function renderCall(box, r, c, last) {
   const m = (c.choice && c.choice.message) || {};
+  const raw = rawIO(c, r.id), head = el("div", "raw-call");
+  head.append(el("span", "", `${callPosition(c)} · 请求 #${c.n}`), raw.button); box.append(head, raw.panel);
   if (!c.end) return box.append(el("div", "shimmer", "思考中…"));
   if (!c.choice) {
     return box.append(step("e" + c.n, [el("span", "ico bad", "!"), el("span", "bad", `模型请求失败 · HTTP ${c.status}`)], [el("pre", "err", c.errorText || pretty(c.res))]));
@@ -1083,13 +1244,40 @@ function renderCall(box, r, c, last) {
     if (t.state === "running") icon.append(el("span", "spin"));
     const head = [icon, el("span", "tname", t.name), el("span", "targs", clip(compact(t.args), 90))];
     if (t.done) head.push(el("span", "", sec(t.done - c.end)));
-    const result = t.done ? el("pre", t.state === "error" ? "err" : "", pretty(t.result)) : el("div", "meta", t.state === "lost" ? "进程已结束，没有结果" : "执行中…");
+    const result = t.done ? toolResult(t) : el("div", "meta", t.state === "lost" ? "进程已结束，没有结果" : "执行中…");
     box.append(step(`t${c.n}-${t.index}`, head, [el("div", "label", "参数"), el("pre", "", pretty(t.args)), el("div", "label", "结果" + (t.reason ? " · " + t.reason : "")), result]));
   }
   if (!c.tools.length && m.content) {
-    box.append(md(m.content));
+    const answer = md(m.content);
+    // 只把本题实际取回且过阈值的编号变成可点击引用；其他 [Dxx] 标红，提示它不是有效来源。
+    const caseStart = r.calls.filter((x) => x.caseStart && x.n <= c.n).at(-1)?.n || 1;
+    const sources = new Map();
+    for (const earlier of r.calls.filter((x) => x.n >= caseStart && x.n <= c.n)) for (const t of earlier.tools) {
+      const result = parse(t.result)?.result;
+      if (t.name === "search_docs") for (const h of result?.hits || []) if (h.accepted) sources.set(h.id, t);
+    }
+    const walker = document.createTreeWalker(answer, NodeFilter.SHOW_TEXT), nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      if (node.parentElement.closest("code,pre")) continue;
+      const parts = node.textContent.split(/(\[D\d+\])/g);
+      if (parts.length < 2) continue;
+      const frag = document.createDocumentFragment();
+      for (const part of parts) {
+        const t = sources.get(part.slice(1, -1));
+        if (!t && /^\[D\d+\]$/.test(part)) {
+          const bad = el("span", "cite bad", part); bad.title = "本题没有取回这条，或它低于阈值：不能作为证据";
+          frag.append(bad); continue;
+        }
+        if (!t) { frag.append(part); continue; }
+        const link = el("button", "cite", part); link.title = "查看本题检索到的原始片段";
+        link.onclick = () => observeAt(`t${t.call.n}-${t.index}`); frag.append(link);
+      }
+      node.replaceWith(frag);
+    }
+    box.append(answer);
     const meta = el("div", "answer-meta");
-    meta.append(el("span", "", `模型调用 #${c.n} · ${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`));
+    meta.append(el("span", "", `${callPosition(c)} · 请求 #${c.n} · ${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`));
     const link = el("button", "link", "在观测中查看");
     link.onclick = () => observeAt("m" + c.n);
     meta.append(link);
@@ -1111,7 +1299,8 @@ function renderCompact(c) {
 function welcome() {
   const box = el("div", "welcome"), sugs = el("div", "sugs");
   box.append(el("h1", "", "想让 agent 做什么？"), sugs);
-  for (const q of ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"]) {
+  const suggestions = $("rag").checked ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"];
+  for (const q of suggestions) {
     const b = el("button", "", q);
     b.onclick = () => { $("query").value = q; syncComposer(); $("query").focus(); };
     sugs.append(b);
@@ -1126,9 +1315,11 @@ function renderChat() {
   if (!r) return box.append(welcome());
   analyze(r);
   if (r.query === LAB_TITLE) box.append(el("div", "banner", "Day 3 上下文实验：程序自动发出33轮真实对话，再触发一次大工具输出。下面的用户消息由实验程序发送。"));
+  if (r.query === RAG_LAB_TITLE) box.append(el("div", "banner", "Day 4：10个问题，每题分别运行无检索与有检索。每组使用独立上下文；问题由实验程序发送。检索评分见终端，引用可点击核对。"));
   let group = null;
   const flow = chatFlow(r);
   flow.forEach((f, i) => {
+    if (f.kind === "case") { box.append(el("div", "banner", f.text)); group = null; return; }
     if (f.kind === "user") { const u = el("div", "u"); u.append(el("div", "", f.text)); box.append(u); group = null; return; }
     if (f.kind === "compact") return box.append(renderCompact(f.call));
     if (!group) box.append(group = el("div", "a"));
@@ -1168,10 +1359,16 @@ function renderShell() {
 }
 function syncComposer() {
   const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && r.exit && r.exit !== "exit 0";
-  $("send").disabled = ui.sending || !!busy || !!broken || !!ui.replay || !$("query").value.trim();
+  const lab = r?.query === RAG_LAB_TITLE;
+  $("rag").disabled = !!r;
+  if (r?.calls.length) $("rag").checked = (r.calls.at(-1).req.tools || []).some((t) => t.function?.name === "search_docs");
+  $("embedding").hidden = !$("rag").checked;
+  $("embedding").disabled = !!r;
+  if (r?.embedding) $("embedding").value = r.embedding;
+  $("send").disabled = ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
   $("mode-chip").textContent = r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算";
-  $("hint").textContent = !r ? "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型" : ui.replay ? "回放中，结束后可继续提问" :
+  $("hint").textContent = !r ? ($("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? "agent 正在回复，本轮结束后可以继续提问" : broken ? "上次运行未正常结束，请新建对话" : "Enter 发送，会延续这条对话的上下文";
 }
 function relTime(id) {
@@ -1198,7 +1395,7 @@ async function loadRuns() {
     }
     const b = el("button"), q = el("span", "q");
     if (!r.done) q.append(el("span", "live"));
-    q.append(r.query === LAB_TITLE ? "⚗ Day 3 上下文实验" : r.query || "（无问题）");
+    q.append(r.query === LAB_TITLE ? "⚗ Day 3 上下文实验" : r.query === RAG_LAB_TITLE ? "⌕ Day 4 检索对比" : r.query || "（无问题）");
     b.title = r.query;
     b.append(q, el("small", "", relTime(r.id)));
     b.onclick = () => { document.body.classList.remove("nav-open"); if (ui.tab === "compare") ui.tab = "trace"; show(r.id); };
@@ -1252,11 +1449,25 @@ $("lab").onclick = () => {
   document.body.classList.remove("nav-open");
   if (!ui.sending && confirm("自动进行33轮真实对话和一次大工具输出实验，最多60次模型请求（minimal推理）。开始？")) start("/runs", { context_lab: true });
 };
+$("rag-lab").onclick = () => {
+  document.body.classList.remove("nav-open");
+  if (ui.sending) return;
+  $("new-chat").click();
+  const box = $("thread");
+  ui.page = "chat"; renderShell();
+  const notice = el("div", "banner", "运行10题检索检查与20次真实问答（minimal推理，每题每组最多6次模型请求）。检索由Agent进程自动初始化。结果逐条显示在同一实验记录中。");
+  const model = el("select"); model.setAttribute("aria-label", "实验向量模型");
+  for (const [value, label] of [["ark", "线上方舟"], ["local", "本地 MiniLM"]]) { const option = el("option", "", label); option.value = value; model.append(option); }
+  const button = el("button", "ghost", "开始 Day 4 对比（真实调用模型）");
+  button.onclick = () => { button.disabled = true; start("/runs", { rag_lab: true, embedding: model.value }); };
+  notice.append(el("p"), model, button); box.replaceChildren(notice);
+};
+$("rag").onchange = () => { syncComposer(); renderChat(); };
 $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", { query });
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value });
 };
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };

@@ -22,17 +22,19 @@ import (
 var page []byte
 
 const contextLabTitle = "Day 3 上下文实验（33轮对话 + 大工具输出）"
+const ragLabTitle = "Day 4 检索实验（10题无检索 / 有检索对比）"
 
 // 观测系统不读取 agent 源码：它代理模型请求、转发终端输出，从协议数据还原过程。
 type event struct {
-	Seq    int             `json:"seq"`
-	Time   time.Time       `json:"time"`
-	Kind   string          `json:"kind"` // request、response、stdout、stderr、exit
-	Call   int             `json:"call,omitempty"`
-	Status int             `json:"status,omitempty"`
-	Millis int64           `json:"ms,omitempty"`
-	Body   json.RawMessage `json:"body,omitempty"`
-	Text   string          `json:"text,omitempty"`
+	Seq       int             `json:"seq"`
+	Time      time.Time       `json:"time"`
+	Kind      string          `json:"kind"` // request、response、stdout、stderr、exit
+	Call      int             `json:"call,omitempty"`
+	Status    int             `json:"status,omitempty"`
+	Millis    int64           `json:"ms,omitempty"`
+	Body      json.RawMessage `json:"body,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	Embedding string          `json:"embedding,omitempty"`
 }
 
 type run struct {
@@ -71,6 +73,7 @@ func main() {
 	s := &server{upstream: upstream, agentDir: dir, addr: *addr}
 	s.loadRuns()
 	mux := http.NewServeMux()
+	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(page)
@@ -107,21 +110,42 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	var input struct {
 		Query      string `json:"query"`
 		ContextLab bool   `json:"context_lab"`
+		RAG        bool   `json:"rag"`
+		RAGLab     bool   `json:"rag_lab"`
+		Embedding  string `json:"embedding"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
 		return
 	}
 	input.Query = strings.TrimSpace(input.Query)
-	if (!input.ContextLab && input.Query == "") || (input.ContextLab && input.Query != "") {
-		http.Error(w, "普通问答需要query；上下文实验不接受query", http.StatusBadRequest)
+	if input.Embedding == "" {
+		input.Embedding = "ark"
+	}
+	if input.Embedding != "ark" && input.Embedding != "local" {
+		http.Error(w, "embedding须为ark或local", http.StatusBadRequest)
+		return
+	}
+	lab := input.ContextLab || input.RAGLab
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && input.RAG) {
+		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
 		return
 	}
 	args := []string{"run", ".", "-question", input.Query}
+	if input.RAG {
+		args = append(args, "-rag")
+	}
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
 		args = []string{"run", ".", "-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
 		input.Query = contextLabTitle
+	}
+	if input.RAGLab {
+		args = []string{"run", ".", "-rag-lab", "-max-steps", "6", "-reasoning-effort", "minimal"}
+		input.Query = ragLabTitle
+	}
+	if input.RAG || input.RAGLab {
+		args = append(args, "-embedding", input.Embedding)
 	}
 	id := time.Now().Format("20060102-150405.000")
 	file, err := os.OpenFile(filepath.Join("runs", id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -133,7 +157,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query})
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding})
 	s.launch(r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -172,10 +196,13 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query)})
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding})
 	args := []string{"run", ".", "-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
+	}
+	if history.RAG {
+		args = append(args, "-rag", "-embedding", history.Embedding)
 	}
 	s.launch(r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
@@ -221,6 +248,8 @@ type resumeInput struct {
 	WithTools bool              `json:"with_tools"`
 	Model     string            `json:"-"`
 	Effort    string            `json:"-"`
+	RAG       bool              `json:"-"`
+	Embedding string            `json:"-"`
 }
 
 // 调用方持有r.mu。请求里的View已经包含摘要，直接延续它，不重新拼接所有旧请求。
@@ -284,16 +313,44 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 		}
 		messages := append(append([]json.RawMessage(nil), request.Messages...), choice.Message)
 		result = &resumeInput{Messages: messages, Usage: response.Usage, WithTools: len(request.Tools) > 0, Model: request.Model, Effort: request.Effort}
+		for _, rawTool := range request.Tools {
+			var tool struct{ Function struct{ Name string } }
+			if json.Unmarshal(rawTool, &tool) == nil && tool.Function.Name == "search_docs" {
+				result.RAG = true
+			}
+		}
 	}
 	if result == nil {
 		return nil, errors.New("存档没有完整的回答，无法恢复续聊上下文")
+	}
+	result.Embedding = "ark"
+	// 新存档明确记录选择；旧存档从实际检索结果恢复backend，无法确定时沿用默认ark。
+	for i := len(r.events) - 1; i >= 0; i-- {
+		e := r.events[i]
+		if e.Embedding == "ark" || e.Embedding == "local" {
+			result.Embedding = e.Embedding
+			return result, nil
+		}
+	}
+	for _, raw := range result.Messages {
+		var m struct{ Role, Content string }
+		if json.Unmarshal(raw, &m) != nil || m.Role != "tool" {
+			continue
+		}
+		var observation struct {
+			Tool   string
+			Result struct{ Backend string }
+		}
+		if json.Unmarshal([]byte(m.Content), &observation) == nil && observation.Tool == "search_docs" && (observation.Result.Backend == "ark" || observation.Result.Backend == "local") {
+			result.Embedding = observation.Result.Backend
+		}
 	}
 	return result, nil
 }
 
 // 调用方持有r.mu；失败或中断的任务不能被当作已完成对话重放。
 func (r *run) canContinue() bool {
-	return r.Done && r.calls > 0 && len(r.events) > 0 && r.events[len(r.events)-1].Kind == "exit" && r.events[len(r.events)-1].Text == "exit 0"
+	return r.Query != ragLabTitle && r.Done && r.calls > 0 && len(r.events) > 0 && r.events[len(r.events)-1].Kind == "exit" && r.events[len(r.events)-1].Text == "exit 0"
 }
 
 // 启动时读回 runs/*.jsonl，重启后仍能查看、回放和对比历史运行。
