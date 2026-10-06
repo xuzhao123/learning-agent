@@ -65,6 +65,27 @@ func runTool(ctx context.Context, call ToolCall) (result any, err error) {
 			return nil, errors.New("query 需要是字符串，k 需要是整数")
 		}
 		return searchDocs(ctx, args.Query, args.K)
+	case "search_memory", "forget_memory", "remember_memory":
+		if memories == nil {
+			return nil, errors.New("请使用 -memory 开启长期记忆")
+		}
+		var args struct{ Query, ID, Reason, Quote, Kind string }
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return nil, errors.New("参数需要是字符串")
+		}
+		if call.Function.Name == "remember_memory" {
+			return memories.remember(args.Quote, args.Kind)
+		}
+		if call.Function.Name == "search_memory" {
+			if strings.TrimSpace(args.Query) == "" {
+				return nil, errors.New("query 需要是非空字符串")
+			}
+			return memories.search(ctx, args.Query)
+		}
+		if strings.TrimSpace(args.ID) == "" || strings.TrimSpace(args.Reason) == "" {
+			return nil, errors.New("id 和 reason 需要是非空字符串")
+		}
+		return memories.forget(strings.TrimSpace(args.ID), args.Reason)
 	case "read_day3_notes":
 		if !contextLabEnabled {
 			return nil, errors.New("上下文实验工具未启用")
@@ -102,7 +123,7 @@ func runTool(ctx context.Context, call ToolCall) (result any, err error) {
 		}
 		return map[string]any{"result": value}, nil
 	case "get_current_datetime":
-		now := time.Now().In(time.FixedZone("Asia/Shanghai", 8*60*60))
+		now := time.Now().In(shanghai)
 		weekdays := []string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"}
 		return map[string]any{"datetime": now.Format(time.RFC3339), "date": now.Format("2006-01-02"), "weekday": weekdays[now.Weekday()]}, nil
 	case "search_notes":

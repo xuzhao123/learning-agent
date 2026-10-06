@@ -102,6 +102,24 @@ button { cursor: pointer; }
 .doc-hit .meta { font-size: 11px; }
 .cite { color: var(--accent); font-size: inherit; border: 0; padding: 0 2px; background: var(--soft); border-radius: 3px; }
 .cite.bad { color: var(--err); text-decoration: line-through dotted; cursor: help; }
+.step .mem { color: var(--think); }
+.mem-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; overflow-wrap: anywhere; }
+.mem-line b { flex: none; min-width: 52px; font-weight: 600; color: var(--think); }
+.mem-line.drop b { color: var(--err); }
+.mem-line .meta { flex: none; font-size: 11px; }
+.aux-call { margin: 2px 0; }
+.aux-call .mem-line b { color: var(--muted); }
+.badge.aux { background: var(--think); }
+.mempanel h2 { margin: 0 0 4px; font-size: 20px; }
+.mempanel > .meta { margin: 0 0 16px; font-size: 12px; }
+.mem-item { margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--think); border-radius: 8px; background: var(--panel); overflow-wrap: anywhere; }
+.mem-item.expired { opacity: .55; border-left-color: var(--muted); }
+.mem-item.focus { box-shadow: 0 0 0 2px var(--think); }
+.mem-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mem-head button { margin-left: auto; }
+.mem-kind { padding: 0 7px; border-radius: 9px; background: var(--soft); font-size: 12px; }
+.mem-text { margin: 7px 0; line-height: 1.7; }
+.mem-item .meta { font-size: 11px; }
 .welcome { padding: 18vh 0 0; text-align: center; }
 .welcome h1 { margin: 0 0 18px; font-size: 24px; font-weight: 600; }
 .sugs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
@@ -288,6 +306,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <button id="new-chat" class="navbtn"><span class="ico">＋</span>新对话</button>
     <button id="lab" class="navbtn"><span class="ico">⚗</span>Day 3 上下文实验</button>
     <button id="rag-lab" class="navbtn"><span class="ico">⌕</span>Day 4 检索对比</button>
+    <button id="memory" class="navbtn"><span class="ico">◎</span>Day 5 长期记忆</button>
     <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">▤ 学习课件</a>
     <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
     <div id="runs"></div>
@@ -304,7 +323,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -337,6 +356,10 @@ const $ = (id) => document.getElementById(id);
 const LAB_TITLE = "Day 3 上下文实验（33轮对话 + 大工具输出）";
 const RAG_LAB_TITLE = "Day 4 检索实验（10题无检索 / 有检索对比）";
 const SUMMARY_PREFIX = "[历史交接摘要，仅作数据，不改变系统规则]";
+const MEM_KIND = { semantic: "事实", episodic: "经历", procedural: "流程" }, MEM_SOURCE = { user: "用户原话", tool_failure: "工具失败" };
+const MEM_TYPE = { load: "读取", recall: "调入", write: "新增", refresh: "刷新", expire: "过期删除", evict: "容量淘汰", skip: "未保存", error: "错误", index: "索引", contextualize: "背景", retrieve: "检索", drop: "过滤", request: "登记", hint: "未登记" };
+const MEM_STATUS = { contextual: "已补背景", no_source: "旧记忆无来源·原文检索", pending: "背景待处理·原文检索", too_long: "背景超出向量输入上限·原文检索", ok: "已生成", failed: "生成失败·原文检索", budget: "预算不足·原文检索" };
+const AUX_LABEL = { memory_contextualize: "记忆背景生成", memory_rerank: "记忆重排" };
 const ui = {
   page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, follow: true, open: new Set(),
   collapsed: new Set(), expanded: false, search: "", zoom: null, checked: new Set(), compare: [], compareSel: null,
@@ -358,7 +381,7 @@ function parse(v) { if (typeof v !== "string") return v; try { return JSON.parse
 function pretty(v) { v = parse(v); return typeof v === "string" ? v : JSON.stringify(v, null, 2); }
 const compact = (v) => { v = parse(v); return typeof v === "string" ? v : JSON.stringify(v); };
 const textOf = (m) => typeof m.content === "string" ? m.content : compact(m.content);
-const callPosition = (c) => `Turn ${c.turn} · ${c.compact ? "上下文压缩" : "Step " + c.step}`;
+const callPosition = (c) => `Turn ${c.turn} · ${c.aux ? AUX_LABEL[c.purpose] || c.purpose : c.compact ? "上下文压缩" : "Step " + c.step}`;
 // 摘要前的连续user是保留原话；只有摘要后的末尾user才可能是新问题。
 function incomingUsers(messages) {
   let k = messages.length;
@@ -451,17 +474,23 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0 }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start" }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
   r.last = time;
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
     if (e.embedding) { r.embedding = e.embedding; r.embeddingExplicit = true; }
     r.logs.push({ ...e, kind: "stdout", text: "用户续聊：" + e.text });
+  }
+  else if (e.kind === "request" && e.purpose?.startsWith("memory_")) {
+    // 记忆辅助调用按 agent 的明确用途标记分开：不开新 Turn、不占 Step、不参与续聊恢复和最终回答判断。
+    const turn = r.turnPending || !r.turns.length ? r.turns.length + 1 : r.turns.at(-1).n;
+    r.aux.push({ aux: true, purpose: e.purpose, n: e.call, turn, req: e.body || {}, start: time, tools: [], usage: {} });
   }
   else if (e.kind === "request") {
     const messages = (e.body && e.body.messages) || [];
@@ -469,7 +498,7 @@ function apply(r, e) {
     const shared = prefixLength(r.prevMessages, messages);
     const prev = r.calls[r.calls.length - 1];
     const lastMessage = messages[messages.length - 1];
-    const isCompact = !!lastMessage && lastMessage.role === "user" && String(lastMessage.content).startsWith("[上下文压缩请求]");
+    const isCompact = e.purpose === "compact" || (!!lastMessage && lastMessage.role === "user" && String(lastMessage.content).startsWith("[上下文压缩请求]"));
     const users = isCompact ? [] : incomingUsers(messages), lastMain = r.calls.findLast((c) => !c.compact);
     let turn = r.turns.at(-1);
     // start/continue是明确的回合边界；实验与旧存档依据新user和上次最终响应恢复边界。
@@ -481,6 +510,7 @@ function apply(r, e) {
       r.turns.push(turn);
     }
     const step = isCompact ? 0 : ++turn.steps;
+    r.memPhase = "end";
     const prompt = compact({ system: messages.filter((m) => m.role === "system"), tools: e.body?.tools || [] });
     const promptChanged = prompt !== r.prompt;
     r.prompt = prompt; r.turnPending = false; r.pendingTime = null; r.pending = "";
@@ -495,17 +525,19 @@ function apply(r, e) {
     if (!isCompact) r.lastMainMessages = messages;
     if (!r.query) { const u = messages.find((m) => m.role === "user"); if (u) r.query = u.content; }
     r.prevMessages = messages;
-    r.calls.push({ compact: isCompact, rebuilt, shared, caseLabel: r.caseLabel, caseStart: r.caseStart, turn: turn.n, step, userMessage, promptChanged,
+    r.calls.push({ i: r.calls.length + 1, compact: isCompact, rebuilt, shared, caseLabel: r.caseLabel, caseStart: r.caseStart, turn: turn.n, step, userMessage, promptChanged,
       n: e.call, req: e.body || {}, start: time, tools: [], usage: {} });
     r.caseStart = false;
   } else if (e.kind === "response") {
-    const c = r.calls[e.call - 1];
+    // 请求编号包含辅助调用，不能再当作 r.calls 的下标。
+    const c = r.calls.find((x) => x.n === e.call) || r.aux.find((x) => x.n === e.call);
     if (!c) return;
     const body = e.body || {};
     Object.assign(c, { res: body, rawBody: e.body, end: time, ms: e.ms, status: e.status, errorText: e.text,
       choice: (body.choices || [])[0], usage: body.usage || {} });
     const m = (c.choice && c.choice.message) || {};
     c.invalidSummary = c.compact && (m.tool_calls || []).length > 0;
+    if (c.aux) return;
     c.tools = (c.compact ? [] : (m.tool_calls || [])).map((t, i) => ({ id: t.id, name: t.function.name, args: t.function.arguments, start: time, call: c, index: i }));
   } else if (e.kind === "stdout" || e.kind === "stderr") {
     r.logs.push(e);
@@ -515,6 +547,9 @@ function apply(r, e) {
       r.caseStart = true;
       r.prevMessages = []; r.lastMainMessages = []; // 对比实验每题独立，不能误标为压缩。
     }
+    // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
+    const mem = /^Memory (\w+): (.*)$/.exec(e.text || "");
+    if (mem && !["search", "forget", "hit"].includes(mem[1]) && !/^phase=(search|cli) /.test(mem[2])) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: mem[1], text: mem[2], fields: memFields(mem[2]) });
     const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
     if (capacity) r.inputCapacity = Number(capacity[1]);
   }
@@ -548,17 +583,20 @@ function analyze(r) {
     if (t.retryOf) backtracks.push({ from: prior, to: t });
     if (t.detour && t.state !== "running") failed.set(t.name, t); else if (t.state === "ok") failed.delete(t.name);
   }
-  const sum = (f) => r.calls.reduce((s, c) => s + (f(c.usage) || 0), 0);
+  // 成本总量包含记忆辅助调用；主路径、绕路等行为分析只看主任务调用。
+  const all = [...r.calls, ...r.aux];
+  const sum = (f, list = all) => list.reduce((s, c) => s + (f(c.usage) || 0), 0);
   const toolCount = r.calls.reduce((s, c) => s + c.tools.length, 0);
   const last = r.calls.filter((c) => !c.compact).at(-1);
   return {
     detours, backtracks, toolCount,
     answer: last && last.choice && !last.tools.length ? last.choice.message.content || "" : "",
     mainLen: r.calls.length + toolCount - detours.length,
-    tokens: sum((u) => u.total_tokens),
+    calls: all.length, auxCalls: r.aux.length,
+    tokens: sum((u) => u.total_tokens), auxTokens: sum((u) => u.total_tokens, r.aux),
     cached: sum((u) => u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens),
     reasoning: sum((u) => u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens),
-    modelMs: r.calls.reduce((s, c) => s + (c.ms || 0), 0),
+    modelMs: all.reduce((s, c) => s + (c.ms || 0), 0), auxMs: r.aux.reduce((s, c) => s + (c.ms || 0), 0),
     totalMs: (r.tEnd || r.last || r.t0) - r.t0,
     clean: detours.length === 0 && backtracks.length === 0,
     failed: !!r.exit && r.exit !== "exit 0",
@@ -577,6 +615,9 @@ function toolSummary(t) {
   const v = parse(t.result);
   if (t.state === "error") return args + " → 错误：" + clip(v.error, 40);
   const shown = v && typeof v === "object" && "result" in v ? v.result : v;
+  if (t.name === "search_memory" && shown?.memories) return args + ` → ${shown.memories.length} 条记忆 · ` + shown.memories.map((m) => m.id).join(" / ");
+  if (t.name === "forget_memory" && shown?.deleted) return args + ` → 已删除 ${shown.deleted}`;
+  if (t.name === "remember_memory" && shown) return args + (shown.accepted ? " → 已登记，本轮结束时保存" : ` → 未登记：${shown.reason || ""}`);
   if (t.name === "search_docs" && shown?.hits) return args + ` → ${shown.hits.filter((h) => h.accepted).length}/${shown.hits.length} 片段过阈值 · ` + shown.hits.map((h) => `${h.id} ${h.score.toFixed(3)}`).join(" / ");
   return args + " → " + clip(compact(shown), 60);
 }
@@ -605,7 +646,15 @@ function items(r) {
   const list = [];
   const first = r.calls[0];
   if (!first) list.push({ id: "q", type: "user", turn: 1, run: r, label: "USER", sum: r.query });
-  for (const c of r.calls) {
+  for (const c of [...r.calls, ...r.aux].sort((x, y) => x.n - y.n)) {
+    if (c.aux) {
+      const m = (c.choice && c.choice.message) || {};
+      list.push({ id: "in" + c.n, type: "input", turn: c.turn, step: 0, run: r, call: c, hidden: true, label: "模型输入", sum: `${(c.req.messages || []).length} 条 messages` });
+      list.push({ id: "m" + c.n, type: "aux", turn: c.turn, step: 0, run: r, call: c, label: c.purpose.toUpperCase(), bad: !!(c.end && !c.choice),
+        sum: !c.end ? "等待模型响应…" : !c.choice ? `HTTP ${c.status} ` + clip(c.errorText || compact(c.res), 80) : AUX_LABEL[c.purpose] + "：" + clip(m.content, 100),
+        start: c.start, stop: c.end, running: !c.end, tokens: c.usage.total_tokens });
+      continue;
+    }
     const where = { turn: c.turn, step: c.step, run: r, call: c };
     const messages = c.req.messages || [];
     if (c.promptChanged) list.push({ id: "system" + c.n, type: "system", ...where, step: c.userMessage ? 0 : c.step,
@@ -667,12 +716,12 @@ function renderStats(r, a) {
   box.replaceChildren();
   const add = (k, v, cls) => { const s = el("span", "", k + " "); s.append(el("b", cls || "", v)); box.append(s); };
   add("用户回合", r.turns.length);
-  add("模型调用", r.calls.length);
+  add("模型调用", a.calls + (a.auxCalls ? `（主任务 ${r.calls.length} + 辅助 ${a.auxCalls}）` : ""));
   add("工具调用", a.toolCount);
   add("主路径", a.mainLen + " 步");
   add("绕路", a.detours.length, a.detours.length ? "bad" : "");
   add("回退", a.backtracks.length, a.backtracks.length ? "bad" : "");
-  add("tokens", kfmt(a.tokens) + (a.cached ? `（缓存 ${kfmt(a.cached)}）` : ""));
+  add("tokens", kfmt(a.tokens) + (a.cached ? `（缓存 ${kfmt(a.cached)}）` : "") + (a.auxTokens ? `（辅助 ${kfmt(a.auxTokens)}）` : ""));
   add("模型耗时", sec(a.modelMs));
   add("总耗时", sec(a.totalMs));
   if (ui.replay) add("状态", "回放中");
@@ -709,7 +758,7 @@ function renderTrace(r, a, list) {
     if (query && !(it.label + " " + it.sum + (it.message ? " " + compact(it.message) : "")).toLowerCase().includes(query)) continue;
     if (it.turn !== turn) {
       turn = it.turn; group = null;
-      const calls = r.calls.filter((c) => c.turn === turn), info = r.turns[turn - 1];
+      const calls = [...r.calls, ...r.aux].filter((c) => c.turn === turn), info = r.turns[turn - 1];
       const open = query || ui.expanded || !ui.collapsed.has(turn);
       const t = el("div", "turn");
       t.append(el("span", "", (open ? "▾ " : "▸ ") + `Turn ${turn}`));
@@ -721,11 +770,11 @@ function renderTrace(r, a, list) {
     }
     if (!query && !ui.expanded && ui.collapsed.has(it.turn)) continue;
     const c = it.call;
-    const key = it.step ? "step" + c.n : it.type === "compacted" ? "compact" + c.n : null;
+    const key = it.type === "aux" ? "aux" + c.n : it.step ? "step" + c.n : it.type === "compacted" ? "compact" + c.n : null;
     if (key && key !== group) {
       group = key;
       const h = el("div", "step-header");
-      h.append(el("strong", "", c.compact ? "上下文压缩" : `Step ${c.step}`), el("span", "", `请求 #${c.n}${c.ms ? " · " + sec(c.ms) : " · 进行中"}`));
+      h.append(el("strong", "", c.aux ? "辅助调用 · " + AUX_LABEL[c.purpose] : c.compact ? "上下文压缩" : `Step ${c.step}`), el("span", "", `请求 #${c.n}${c.ms ? " · " + sec(c.ms) : " · 进行中"}`));
       const input = el("button", "input-link", `${(c.req.messages || []).length} 条 messages`);
       input.setAttribute("aria-label", `${callPosition(c)} · 请求 #${c.n} 查看模型输入`);
       input.onclick = () => select("in" + c.n);
@@ -746,7 +795,7 @@ function renderTrace(r, a, list) {
         const bar = el("div", `bar ${it.type === "tool" ? "tool" : "model"}${it.bad ? " bad" : ""}${it.running ? " running" : ""}`);
         bar.style.left = Math.max(0, left) * 100 + "%";
         bar.style.width = (Math.min(1, left + width) - Math.max(0, left)) * 100 + "%";
-        bar.title = `开始 +${sec(it.start - r.t0)} · 持续 ${sec(end - it.start)}` + (["message", "compacted"].includes(it.type) ? "（非流式响应，无法拆分 TTFT / decode）" : "");
+        bar.title = `开始 +${sec(it.start - r.t0)} · 持续 ${sec(end - it.start)}` + (["message", "compacted", "aux"].includes(it.type) ? "（非流式响应，无法拆分 TTFT / decode）" : "");
         track.append(bar);
       }
     }
@@ -796,16 +845,16 @@ function renderMaze(r, a, list) {
   const pos = new Map();
   for (const c of r.calls) {
     const main = c.tools.filter((t) => !t.detour), det = c.tools.filter((t) => t.detour);
-    const x = colX(c.n) + COL / 2;
+    const x = colX(c.i) + COL / 2;
     main.forEach((t, i) => pos.set(t, [x, spineY + (i - (main.length - 1) / 2) * GAP]));
     const base = spineY + (main.length ? ((main.length - 1) / 2) * GAP : 0) + GAP + 8;
     det.forEach((t, j) => pos.set(t, [x, base + j * GAP]));
   }
   const parts = [];
-  for (const c of r.calls) parts.push(`<text class="muted" x="${colX(c.n) + COL / 2}" y="16" text-anchor="middle">T${c.turn} · ${c.compact ? "压缩" : "S" + c.step}</text>`);
+  for (const c of r.calls) parts.push(`<text class="muted" x="${colX(c.i) + COL / 2}" y="16" text-anchor="middle">T${c.turn} · ${c.compact ? "压缩" : "S" + c.step}</text>`);
   parts.push(`<line class="spine" x1="${colX(1)}" y1="${spineY}" x2="${tailX}" y2="${spineY}" opacity=".15"/>`);
   for (const c of r.calls) {
-    const x0 = colX(c.n), x1 = c.n < n ? colX(c.n + 1) : tailX;
+    const x0 = colX(c.i), x1 = c.i < n ? colX(c.i + 1) : tailX;
     // 没有有效工具的一轮，主干直接连到下一次模型调用
     if (c.tools.every((t) => t.detour)) parts.push(`<line class="spine" x1="${x0}" y1="${spineY}" x2="${x1}" y2="${spineY}"/>`);
     for (const t of c.tools) {
@@ -821,7 +870,7 @@ function renderMaze(r, a, list) {
   }
   const node = (id, cls, inner) => `<g class="n ${cls}${id === ui.selected ? " sel" : ""}" data-id="${id}">${inner}</g>`;
   for (const c of r.calls) {
-    const x = colX(c.n), it = list.find((i) => i.id === "m" + c.n);
+    const x = colX(c.i), it = list.find((i) => i.id === "m" + c.n);
     parts.push(node("m" + c.n, "model" + (it.running ? " running" : "") + (it.bad ? " bad" : ""),
       `<circle cx="${x}" cy="${spineY}" r="13"/><text class="white" x="${x}" y="${spineY + 4}" text-anchor="middle">M${c.n}</text>` +
       `<text class="muted" x="${x}" y="${spineY - 20}" text-anchor="middle">${c.ms ? sec(c.ms) : "…"}</text>` +
@@ -862,7 +911,7 @@ function dataTracks(r, width) {
   let s = baseline;
   for (const c of r.calls) {
     if (!c.tools.length) continue;
-    const x = colX(c.n) + COL / 2 - 10, unit = (H - 2 * pad) / maxTools;
+    const x = colX(c.i) + COL / 2 - 10, unit = (H - 2 * pad) / maxTools;
     const det = c.tools.filter((t) => t.detour).length, ok = c.tools.length - det;
     s += `<rect class="f-main" x="${x}" y="${H - pad - ok * unit}" width="20" height="${ok * unit}"/>`;
     s += `<rect class="f-detour" x="${x}" y="${H - pad - c.tools.length * unit}" width="20" height="${det * unit}"/>`;
@@ -879,9 +928,9 @@ function dataTracks(r, width) {
     for (const [cls, v, name] of [["f-cache", p.cached, "缓存命中输入"], ["f-input", p.input, "未缓存输入"], ["f-think", p.reasoning, "推理"], ["f-out", p.output, "输出"]]) {
       if (v <= 0) continue;
       y -= v * unit;
-      t += `<rect class="${cls}" x="${colX(c.n) - 11}" y="${y}" width="22" height="${v * unit}"><title>${name} ${v} tokens</title></rect>`;
+      t += `<rect class="${cls}" x="${colX(c.i) - 11}" y="${y}" width="22" height="${v * unit}"><title>${name} ${v} tokens</title></rect>`;
     }
-    if (c.usage.total_tokens) t += `<text x="${colX(c.n) + 16}" y="${y + 10}">${kfmt(c.usage.total_tokens)}</text>`;
+    if (c.usage.total_tokens) t += `<text x="${colX(c.i) + 16}" y="${y + 10}">${kfmt(c.usage.total_tokens)}</text>`;
   }
   const h2 = el("div", "trackhead");
   h2.append(el("span", "", "Token 脉冲"), legend([["var(--cache)", "缓存命中输入"], ["color-mix(in srgb, var(--accent) 55%, var(--panel))", "未缓存输入"], ["var(--think)", "推理"], ["var(--ok)", "输出"]]));
@@ -890,7 +939,7 @@ function dataTracks(r, width) {
   const y = (v) => bottom - Math.min(1, v / W) * (bottom - top);
   let p = `<line class="grid" x1="${x0}" y1="${bottom}" x2="${x1}" y2="${bottom}"/>`;
   for (const [cls, f] of [["lim70", 0.7], ["lim90", 0.9]]) p += `<line class="${cls}" x1="${x0}" y1="${y(W * f)}" x2="${x1}" y2="${y(W * f)}"/><text class="muted" x="${x0}" y="${y(W * f) - 3}">${f * 100}%</text>`;
-  const pts = r.calls.filter((c) => c.usage.prompt_tokens).map((c) => [colX(c.n), y(c.usage.prompt_tokens), c.usage.prompt_tokens, c]);
+  const pts = r.calls.filter((c) => c.usage.prompt_tokens).map((c) => [colX(c.i), y(c.usage.prompt_tokens), c.usage.prompt_tokens, c]);
   if (pts.length) p += `<polyline class="curve" points="${pts.map((q) => q[0] + "," + q[1]).join(" ")}"/>`;
   pts.forEach(([x, py, v, c]) => {
     p += `<circle class="dot" cx="${x}" cy="${py}" r="3"><title>${v} / ${W}</title></circle><text x="${x + 6}" y="${py - 5}">${(v / W * 100).toFixed(1)}%</text>`;
@@ -929,15 +978,18 @@ function renderCompare() {
   const rows = [
     ["问题", (r) => clip(r.query, 40)],
     ["用户回合", (r) => r.turns.length],
-    ["模型调用", (r) => r.calls.length, true],
+    ["模型调用（含辅助）", (r, s) => s.calls, true],
+    ["其中记忆辅助调用", (r, s) => s.auxCalls],
     ["工具调用", (r, s) => s.toolCount, true],
     ["主路径步数", (r, s) => s.mainLen],
     ["绕路", (r, s) => s.detours.length, true],
     ["回退", (r, s) => s.backtracks.length, true],
-    ["总 tokens", (r, s) => s.tokens, true],
+    ["总 tokens（含辅助）", (r, s) => s.tokens, true],
+    ["其中辅助 tokens", (r, s) => s.auxTokens],
     ["缓存命中", (r, s) => s.cached],
     ["推理 tokens", (r, s) => s.reasoning],
-    ["模型耗时", (r, s) => s.modelMs, true, sec],
+    ["模型耗时（含辅助）", (r, s) => s.modelMs, true, sec],
+    ["其中辅助耗时", (r, s) => s.auxMs, false, sec],
     ["总耗时", (r, s) => s.totalMs, true, sec],
     ["结果", (r, s) => r.exit ? (s.failed ? "失败" : s.clean ? "完成 · 干净" : "完成 · 有绕路") : "运行中"],
     ["回答摘要", (r, s) => clip(s.answer || "—", 60)],
@@ -960,7 +1012,7 @@ function renderCompare() {
   const head = el("div", "lane");
   head.style.gridTemplateColumns = cols;
   head.append(el("div", "lanehead", "运行 \\ 请求"));
-  for (let k = 1; k <= rounds; k++) head.append(el("div", "lanehead", `请求 #${k}`));
+  for (let k = 1; k <= rounds; k++) head.append(el("div", "lanehead", `主任务第 ${k} 次`));
   lanes.append(head);
   for (const r of runs) {
     const lane = el("div", "lane");
@@ -974,23 +1026,23 @@ function renderCompare() {
       if (!c) { lane.append(el("div", "cell none")); continue; }
       const cell = el("div", "cell");
       cell.append(el("div", "meta", `${callPosition(c)} · ${c.ms ? sec(c.ms) : "…"} · ${kfmt(c.usage.total_tokens || 0)} tok`));
-      cell.onclick = () => select("m" + k, r);
+      cell.onclick = () => select("m" + c.n, r);
       for (const t of c.tools) {
         const chip = el("span", "chip" + (t.detour ? " detour" : ""), (t.retryOf ? "↺ " : "") + t.name);
         chip.title = t.reason || toolSummary(t);
-        chip.onclick = (ev) => { ev.stopPropagation(); select(`t${k}-${t.index}`, r); };
+        chip.onclick = (ev) => { ev.stopPropagation(); select(`t${c.n}-${t.index}`, r); };
         cell.append(chip);
       }
       if (!c.compact && !c.tools.length && c.choice) {
         const chip = el("span", "chip answer", "回答");
-        chip.onclick = (ev) => { ev.stopPropagation(); select("m" + k, r); };
+        chip.onclick = (ev) => { ev.stopPropagation(); select("m" + c.n, r); };
         cell.append(chip);
       }
       lane.append(cell);
     }
     lanes.append(lane);
   }
-  view.append(el("div", "trackhead", "按请求序号对齐；各格标注 Turn / Step（红色为绕路，↺ 为回退重试）"), lanes);
+  view.append(el("div", "trackhead", "按主任务请求的先后对齐（记忆辅助调用计入上方总量，不占格子）；各格标注 Turn / Step（红色为绕路，↺ 为回退重试）"), lanes);
   const inv = el("div", "list");
   inv.append(el("div", "label", "各运行绕路清单"));
   runs.forEach((r, i) => inv.append(el("div", "meta", `${r.id}：` + (stats[i].detours.length ? stats[i].detours.map((t) => `${callPosition(t.call)} ${t.name}（${t.reason}）`).join("；") : "无绕路"))));
@@ -1024,7 +1076,7 @@ function renderInspector(it) {
   box.replaceChildren();
   if (!it) return box.append(el("div", "empty", "点击事件或节点查看详情"));
   const r = it.run, c = it.call;
-  const titles = { system: "SYSTEM · 系统规则与工具定义", user: "USER · 用户问题", input: `模型输入 · 请求 #${c?.n}`, message: `ASSISTANT · 模型输出 #${c?.n}`, compacted: `COMPACTED · 上下文摘要 #${c?.n}`, tool: "TOOL · " + it.label, answer: "最终回答", process: "agent 进程" };
+  const titles = { system: "SYSTEM · 系统规则与工具定义", user: "USER · 用户问题", input: `模型输入 · 请求 #${c?.n}`, message: `ASSISTANT · 模型输出 #${c?.n}`, compacted: `COMPACTED · 上下文摘要 #${c?.n}`, aux: `${it.label} · 辅助调用 #${c?.n}`, tool: "TOOL · " + it.label, answer: "最终回答", process: "agent 进程" };
   const top = el("div", "top");
   top.append(el("strong", "", titles[it.type]), el("div", "meta", `${r.id} · ${c && it.type !== "user" && it.type !== "system" ? callPosition(c) + " · 请求 #" + c.n : "Turn " + it.turn}` + (it.start ? ` · +${sec(it.start - r.t0)}` : "")));
   box.append(top);
@@ -1049,9 +1101,9 @@ function renderInspector(it) {
       ["raw", "请求 JSON", section("请求参数与原文", fold("请求参数", params), fold("完整请求 JSON", c.req, true))],
     ]);
   }
-  if (["message", "compacted"].includes(it.type)) {
+  if (["message", "compacted", "aux"].includes(it.type)) {
     const u = c.usage, p = tokenParts(u), m = (c.choice && c.choice.message) || {};
-    add("用途", c.compact ? "上下文摘要（不执行工具）" : "任务决策");
+    add("用途", c.aux ? `${AUX_LABEL[c.purpose]}（${c.purpose}，无工具，不是用户回合或最终回答）` : c.compact ? "上下文摘要（不执行工具）" : "任务决策");
     add("公共前缀", `${c.shared || 0} 条消息（实际缓存看usage）`);
     add("耗时", c.ms ? `${c.ms} ms（非流式，无 TTFT 拆分）` : "等待响应");
     if (c.status) add("HTTP", String(c.status));
@@ -1061,7 +1113,7 @@ function renderInspector(it) {
     input.onclick = () => select("in" + c.n, r);
     const output = [];
     if (m.reasoning_content) output.push(section(`Thinking · ${m.reasoning_content.length} 字`, el("div", "msg think text", m.reasoning_content)));
-    if (m.content) output.push(section(c.compact ? "交接摘要" : "回答内容", el("div", "text", m.content)));
+    if (m.content) output.push(section(c.aux ? "辅助输出（原文）" : c.compact ? "交接摘要" : "回答内容", el(c.aux ? "pre" : "div", "text", m.content)));
     if (c.tools.length) output.push(section(`工具调用请求 · ${c.tools.length} 项`, ...c.tools.map((t) => fold(`${t.name} · ${t.id}`, t.args, true))));
     if (c.end && !c.choice) output.push(section("错误", el("pre", "err", c.errorText || pretty(c.res))));
     if (!output.length) output.push(section("输出", el("div", "meta", c.end ? "没有文本或工具请求" : "等待模型响应…")));
@@ -1199,20 +1251,73 @@ function md(text) {
   box.innerHTML = out.join("");
   return box;
 }
+// agent 终端行形如 "Memory recall: id=M1 kind=semantic score=0.48 content=…"；content 放在最后，可含空格。
+function memFields(text) {
+  const out = {}, at = text.indexOf("content=");
+  if (at >= 0) out.content = text.slice(at + 8);
+  for (const part of (at >= 0 ? text.slice(0, at) : text).trim().split(" ")) {
+    const k = part.indexOf("=");
+    if (k > 0) out[part.slice(0, k)] = part.slice(k + 1);
+  }
+  return out;
+}
+function memoryCard(r, turn, phase) {
+  const list = r.mem.filter((m) => m.turn === turn && m.phase === phase);
+  const aux = phase === "start" ? r.aux.filter((c) => c.turn === turn && !r.calls.some((x) => x.turn === turn && x.n < c.n)) : [];
+  if (!list.length && !aux.length) return null;
+  const count = (type) => list.filter((m) => m.type === type && m.text !== "none").length;
+  const load = list.find((m) => m.type === "load"), ret = list.find((m) => m.type === "retrieve")?.fields, idx = list.find((m) => m.type === "index" && m.fields.plan)?.fields;
+  let label = phase === "start"
+    ? (load?.fields.skipped ? "续聊沿用首轮调入的长期记忆" : `调入长期记忆 · ${count("recall")}/${load?.fields.total ?? "?"} 条写进 system`)
+    : count("write") || count("refresh") ? `写入长期记忆 · 新增 ${count("write")}` + (count("refresh") ? ` · 刷新 ${count("refresh")}` : "") : "本轮没有写入长期记忆";
+  if (ret) label += ` · 向量 ${ret.vector} / BM25 ${ret.bm25} → 融合 ${ret.fused} → 重排 ${ret.rerank === "ok" ? "完成" : ret.rerank === "failed" ? "失败" : "跳过"}`;
+  if (count("expire")) label += ` · 过期 ${count("expire")}`;
+  if (count("evict")) label += ` · 淘汰 ${count("evict")}`;
+  if (count("skip") || count("error")) label += " · 有未保存内容";
+  if (ret && ret.content !== "无") label += " · 有降级";
+  const rows = [];
+  if (idx) rows.push(el("div", "meta", `索引（${idx.plan}）：${idx.chunks} 个片段 · 已补背景 ${idx.contextual} · 旧记忆无来源 ${idx.no_source} · 背景待处理 ${idx.pending}` + (Number(idx.too_long) ? ` · 背景超限 ${idx.too_long}` : "") + ` · 向量缓存 ${idx.vectors_cached} / 新算 ${idx.vectors_built}`));
+  if (ret && ret.content !== "无") rows.push(el("div", "err", "降级：" + ret.content));
+  for (const m of list.filter((m) => !["load", "index", "retrieve"].includes(m.type) && m.text !== "none")) {
+    const row = el("div", "mem-line" + (["expire", "evict", "skip", "error", "drop", "hint"].includes(m.type) || (m.type === "contextualize" && m.fields.status !== "ok") ? " drop" : ""));
+    const f = m.fields, meta = [f.id, MEM_KIND[f.kind] || f.kind, f.status && (MEM_STATUS[f.status] || f.status), f.vector && "向量 " + f.vector, f.bm25 && "BM25 " + f.bm25, f.rrf && "RRF " + f.rrf, f.rerank && "重排 " + f.rerank, f.final && "最终 " + f.final, f.backup && "保守规则选入", f.score && "score " + f.score, f.retention && "保留分 " + f.retention, f.expire && f.expire !== "never" && "过期 " + new Date(f.expire).toLocaleTimeString("zh-CN", { hour12: false })].filter(Boolean).join(" · ");
+    row.append(el("b", "", MEM_TYPE[m.type] || m.type), el("span", "", f.content || f.reason || m.text), el("span", "meta", meta));
+    if (f.id) { row.style.cursor = "pointer"; row.title = "查看这条记忆的原文、背景与来源"; row.onclick = () => openMemory(f.id); }
+    rows.push(row);
+  }
+  if (phase === "start" && !load?.fields.skipped && !count("recall")) rows.push(el("div", "meta", "没有相关记忆；system 中注明“没有取回相关记忆”。"));
+  if (aux.length) rows.push(el("div", "meta", "分数说明：向量是余弦相似度、BM25 是原始分、RRF 只看名次、重排是模型给的0–100相对分；都不是正确概率。"));
+  for (const c of aux) rows.push(auxCard(r, c));
+  const all = el("button", "link", "查看全部记忆");
+  all.onclick = () => openMemory();
+  return step(`mem-${phase}-${turn}`, [el("span", "ico mem", "◎"), el("span", "", label)], [...rows, all]);
+}
+// 记忆辅助调用：保留原始输入输出与 token 用量，显示为卡片中的一行，不当作 assistant 回答。
+function auxCard(r, c) {
+  const box = el("div", "aux-call"), raw = rawIO(c, r.id), m = (c.choice && c.choice.message) || {};
+  const state = !c.end ? "进行中…" : !c.choice ? `失败 · HTTP ${c.status}` : `${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`;
+  const head = el("div", "mem-line");
+  head.append(el("b", "", AUX_LABEL[c.purpose] || c.purpose), el("span", "", `请求 #${c.n} · ${c.purpose} · ${state}` + (m.content ? " · " + clip(m.content, 60) : "")), raw.button);
+  box.append(head, raw.panel);
+  return box;
+}
 // 聊天页与轨迹页共用同一份回合归属，避免在两处重复推测用户边界。
 function chatFlow(r) {
-  const flow = [];
-  for (const c of r.calls) {
+  const flow = [], shown = new Set();
+  [...r.calls, ...r.aux].sort((x, y) => x.n - y.n).forEach((c) => {
+    if (c.aux) { if (shown.has(c.turn)) flow.push({ kind: "aux", call: c }); return; } // 开场的辅助调用在记忆卡片里显示
     if (c.caseStart) flow.push({ kind: "case", text: c.caseLabel });
-    if (c.userMessage) flow.push({ kind: "user", text: textOf(c.userMessage) });
-    if (c.compact) { flow.push({ kind: "compact", call: c }); continue; }
-    flow.push({ kind: "call", call: c });
-  }
+    if (c.userMessage) { flow.push({ kind: "user", text: textOf(c.userMessage) }, { kind: "memory", turn: c.turn, phase: "start" }); shown.add(c.turn); }
+    if (c.compact) flow.push({ kind: "compact", call: c });
+    else flow.push({ kind: "call", call: c });
+    const next = r.calls.find((x) => x.n > c.n);
+    if (next?.turn !== c.turn) flow.push({ kind: "memory", turn: c.turn, phase: "end" });
+  });
   return flow;
 }
-// 折叠状态按稳定 key 记住，实时刷新时不会被收起。
 function step(key, head, body) {
   const box = el("details", "step");
+  box.dataset.key = key;
   box.open = ui.open.has(key);
   box.ontoggle = () => box.open ? ui.open.add(key) : ui.open.delete(key);
   const sum = el("summary");
@@ -1255,21 +1360,29 @@ function renderCall(box, r, c, last) {
     for (const earlier of r.calls.filter((x) => x.n >= caseStart && x.n <= c.n)) for (const t of earlier.tools) {
       const result = parse(t.result)?.result;
       if (t.name === "search_docs") for (const h of result?.hits || []) if (h.accepted) sources.set(h.id, t);
+      if (t.name === "search_memory") for (const m of result?.memories || []) sources.set(m.id, `t${t.call.n}-${t.index}`);
     }
+    // [Mxx] 指向本对话开头调入的记忆卡片或 search_memory 结果；不是本对话取回的编号标红。
+    for (const m of r.mem) if (m.type === "recall" && m.fields.id && !sources.has(m.fields.id)) sources.set(m.fields.id, `mem-start-${m.turn}`);
     const walker = document.createTreeWalker(answer, NodeFilter.SHOW_TEXT), nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     for (const node of nodes) {
       if (node.parentElement.closest("code,pre")) continue;
-      const parts = node.textContent.split(/(\[D\d+\])/g);
+      const parts = node.textContent.split(/(\[[DM]\d+\])/g);
       if (parts.length < 2) continue;
       const frag = document.createDocumentFragment();
       for (const part of parts) {
         const t = sources.get(part.slice(1, -1));
-        if (!t && /^\[D\d+\]$/.test(part)) {
-          const bad = el("span", "cite bad", part); bad.title = "本题没有取回这条，或它低于阈值：不能作为证据";
+        if (!t && /^\[[DM]\d+\]$/.test(part)) {
+          const bad = el("span", "cite bad", part); bad.title = part[1] === "M" ? "本对话没有取回这条记忆：不能作为依据" : "本题没有取回这条，或它低于阈值：不能作为证据";
           frag.append(bad); continue;
         }
         if (!t) { frag.append(part); continue; }
+        if (typeof t === "string") {
+          const link = el("button", "cite", part); link.title = "查看本对话取回的这条记忆";
+          link.onclick = () => { ui.open.add(t); renderChat(); document.querySelector(`[data-key="${t}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }); };
+          frag.append(link); continue;
+        }
         const link = el("button", "cite", part); link.title = "查看本题检索到的原始片段";
         link.onclick = () => observeAt(`t${t.call.n}-${t.index}`); frag.append(link);
       }
@@ -1299,7 +1412,7 @@ function renderCompact(c) {
 function welcome() {
   const box = el("div", "welcome"), sugs = el("div", "sugs");
   box.append(el("h1", "", "想让 agent 做什么？"), sugs);
-  const suggestions = $("rag").checked ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"];
+  const suggestions = $("mem").checked ? ["记住：我偏好 Go 而不是 Python", "你还记得我偏好什么语言吗？", "记住流程：代码评审先跑构建，再看逻辑"] : $("rag").checked ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"];
   for (const q of suggestions) {
     const b = el("button", "", q);
     b.onclick = () => { $("query").value = q; syncComposer(); $("query").focus(); };
@@ -1322,11 +1435,15 @@ function renderChat() {
     if (f.kind === "case") { box.append(el("div", "banner", f.text)); group = null; return; }
     if (f.kind === "user") { const u = el("div", "u"); u.append(el("div", "", f.text)); box.append(u); group = null; return; }
     if (f.kind === "compact") return box.append(renderCompact(f.call));
+    if (f.kind === "aux") { if (!group) box.append(group = el("div", "a")); group.append(auxCard(r, f.call)); return; }
+    if (f.kind === "memory") { const card = memoryCard(r, f.turn, f.phase); if (card) { if (!group) box.append(group = el("div", "a")); group.append(card); } return; }
     if (!group) box.append(group = el("div", "a"));
     renderCall(group, r, f.call, i === flow.length - 1);
   });
   if (r.pending) {
     const u = el("div", "u"); u.append(el("div", "", r.pending)); box.append(u);
+    const card = memoryCard(r, r.turns.length + 1, "start") || memoryCard(r, r.memTurn, "start");
+    if (card) { const a = el("div", "a"); a.append(card); box.append(a); }
     box.append(el("div", "shimmer", "正在启动 agent…"));
   } else if (!r.exit && !r.calls.length) box.append(el("div", "shimmer", "正在启动 agent…"));
   const last = r.calls.filter((c) => !c.compact).at(-1);
@@ -1355,20 +1472,25 @@ function renderShell() {
   $("title").textContent = ui.tab === "compare" && !chat ? `对比 ${ui.checked.size} 条运行` : r ? r.query || r.id : "新对话";
   const status = $("status");
   status.className = r && r.exit && r.exit !== "exit 0" ? "bad" : "";
-  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? `运行中 · 模型调用 ${r.calls.length} 次` : r.exit === "exit 0" ? `完成 · 模型调用 ${r.calls.length} 次` : "未正常结束";
+  const calls = r ? r.calls.length + r.aux.length + (r.aux.length ? `（含辅助 ${r.aux.length}）` : "") : "";
+  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? `运行中 · 模型调用 ${calls} 次` : r.exit === "exit 0" ? `完成 · 模型调用 ${calls} 次` : "未正常结束";
 }
 function syncComposer() {
   const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && r.exit && r.exit !== "exit 0";
   const lab = r?.query === RAG_LAB_TITLE;
   $("rag").disabled = !!r;
   if (r?.calls.length) $("rag").checked = (r.calls.at(-1).req.tools || []).some((t) => t.function?.name === "search_docs");
-  $("embedding").hidden = !$("rag").checked;
+  $("embedding").hidden = !$("rag").checked && !$("mem").checked;
   $("embedding").disabled = !!r;
   if (r?.embedding) $("embedding").value = r.embedding;
+  $("mem").disabled = !!r;
+  if (r) { $("mem").checked = !!r.memory; $("mem-ttl").value = r.memoryTTL || ""; }
+  $("mem-ttl").hidden = !$("mem").checked;
+  $("mem-ttl").disabled = !!r;
   $("send").disabled = ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
-  $("mode-chip").textContent = r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算";
-  $("hint").textContent = !r ? ($("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "");
+  $("hint").textContent = !r ? ($("mem").checked ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : $("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? "agent 正在回复，本轮结束后可以继续提问" : broken ? "上次运行未正常结束，请新建对话" : "Enter 发送，会延续这条对话的上下文";
 }
 function relTime(id) {
@@ -1463,11 +1585,49 @@ $("rag-lab").onclick = () => {
   notice.append(el("p"), model, button); box.replaceChildren(notice);
 };
 $("rag").onchange = () => { syncComposer(); renderChat(); };
+$("mem").onchange = () => { syncComposer(); renderChat(); };
+$("memory").onclick = () => openMemory();
+// 记忆面板只读 .data/memory.json；删除由 agent 的 -memory-forget 执行，与 agent 共用文件锁。
+async function openMemory(focus) {
+  document.body.classList.remove("nav-open");
+  if (ui.sending) return;
+  $("new-chat").click();
+  const panel = el("div", "mempanel"), when = (t) => new Date(t).toLocaleString("zh-CN", { hour12: false });
+  $("thread").replaceChildren(panel);
+  panel.append(el("div", "meta", "读取中…"));
+  let data;
+  try { const res = await fetch("/memory"); if (!res.ok) throw new Error(await res.text()); data = await res.json(); }
+  catch (err) { panel.replaceChildren(el("div", "err", "读取失败：" + err.message)); return; }
+  const list = data.file.memories || [], now = Date.parse(data.now);
+  const chunks = Object.values(data.index?.chunks || {});
+  panel.replaceChildren(el("h2", "", "长期记忆"), el("p", "meta", `${data.path} · 共 ${list.length} 条 · 新对话勾选“长期记忆”后，开头经两路召回、融合和重排，最多注入 5 条；过期条目在 agent 下次读写时删除。原文与来源是依据，背景说明是模型生成的派生数据，可重建`));
+  if (!list.length) panel.append(el("div", "empty", "还没有记忆。新对话勾选“长期记忆”，让 agent 记住一件事，例如“别忘了我对花生过敏”。"));
+  for (const m of [...list].reverse()) {
+    const expired = m.expire_at && Date.parse(m.expire_at) <= now;
+    const card = el("article", "mem-item" + (expired ? " expired" : "") + (m.id === focus ? " focus" : "")), head = el("div", "mem-head");
+    const del = el("button", "ghost", "删除");
+    del.onclick = async () => {
+      if (!confirm(`删除 ${m.id}？会写回 .data/memory.json，无法撤销。`)) return;
+      del.disabled = true;
+      const res = await fetch(`/memory/${m.id}/forget`, { method: "POST" });
+      if (!res.ok) alert(await res.text());
+      openMemory();
+    };
+    head.append(el("strong", "", m.id), el("span", "mem-kind", MEM_KIND[m.kind] || m.kind), el("span", "meta", `${MEM_SOURCE[m.source] || m.source} · 重要性 ${m.importance}`), del);
+    const derived = chunks.filter((c) => c.memory_id === m.id).sort((a, b) => a.plan.localeCompare(b.plan) || a.chunk - b.chunk);
+    const details = [];
+    for (const c of derived) details.push(el("div", "meta", `[${c.plan} · 片段 ${c.chunk}/${c.chunks} · ${MEM_STATUS[c.status] || c.status}] ` + (c.context ? "背景：" + c.context : c.reason || "") + (c.chunks > 1 ? " ｜ 片段：" + c.text : "")));
+    if (!derived.length) details.push(el("div", "meta", "还没有索引：下次检索时建立"));
+    details.push(m.source_context ? fold(`来源上下文 · ${when(m.source_context.time)}` + (m.source_context.truncated ? " · 已省略更早部分" : ""), m.source_context.text) : el("div", "meta", "来源：无（升级前写入的旧记忆，不猜测来源，按原文检索）"));
+    card.append(head, el("div", "mem-text", m.content), ...details, el("div", "meta", `创建 ${when(m.created_at)} · 最近访问 ${when(m.last_access)} · ` + (m.expire_at ? (expired ? "已过期，下次读写时删除" : "过期于 " + when(m.expire_at)) : "不过期")));
+    panel.append(card);
+  }
+}
 $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value });
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "" });
 };
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -75,21 +74,16 @@ type retriever struct {
 	docs                  []document
 	provider, fingerprint string
 	threshold             float64
-	mu                    sync.Mutex // 本地pipeline串行使用；线上embedding请求可并行。
 }
 
 func newRetriever(ctx context.Context, provider string, threshold float64) (*retriever, error) {
-	cache := filepath.Join(".cache", "retrieval-go")
-	if err := os.MkdirAll(cache, 0700); err != nil {
-		return nil, err
-	}
-	embedding, err := newEmbedder(provider, cache)
+	// 向量模型按进程共享（长期记忆也用它），由 main 退出时统一释放。
+	embedding, err := sharedEmbedder(provider)
 	if err != nil {
 		return nil, err
 	}
-	docs, fingerprint, err := buildIndex(ctx, cache, embedding)
+	docs, fingerprint, err := buildIndex(ctx, filepath.Join(".cache", "retrieval-go"), embedding)
 	if err != nil {
-		embedding.Close()
 		return nil, err
 	}
 	fmt.Fprintf(indexLog, "Index ready: documents=%d dimensions=%d model=%s corpus=%s backend=%s\n", len(docs), embedding.Dimensions, embedding.Model, fingerprint[:12], provider)
@@ -103,10 +97,6 @@ func searchDocs(ctx context.Context, query string, k int) (searchResult, error) 
 	r := docsRetriever
 	if r == nil {
 		return searchResult{}, errors.New("知识库未初始化，请使用-rag或-search-docs")
-	}
-	if r.provider == "local" {
-		r.mu.Lock()
-		defer r.mu.Unlock()
 	}
 	vector, err := r.embedding.Encode(ctx, query, true)
 	if err != nil {

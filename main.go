@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 )
 
@@ -43,6 +44,14 @@ func run() error {
 	threshold := flag.Float64("min-score", minScore, "检索余弦相似度阈值，-1到1")
 	searchQuery := flag.String("search-docs", "", "只执行检索；不调用聊天模型，local模式无需密钥")
 	searchK := flag.Int("k", 3, "search-docs 返回的候选数，1到6")
+	memoryEnabled := flag.Bool("memory", false, "Day 5：启用跨进程长期记忆（.data/memory.json）")
+	memoryTTL := flag.Duration("memory-ttl", 0, "本轮“记住”写入的有效期，如 1m；0 表示不过期")
+	memoryLimit := flag.Int("memory-limit", 200, "长期记忆总量上限；超出时淘汰重要性×新近度最低的一条")
+	memoryForget := flag.String("memory-forget", "", "只删除指定编号的长期记忆后退出（人工修正）")
+	memorySearch := flag.String("memory-search", "", "只执行一次长期记忆检索并输出各阶段JSON，用于对比；会真实调用模型生成背景与重排")
+	memoryMode := flag.String("memory-mode", "rerank", "memory-search 的检索方式：keyword（旧关键词）、vector、bm25、hybrid（RRF）、rerank（完整流程）")
+	memoryContextCalls := flag.Int("memory-context-calls", 4, "本次运行最多发起几次记忆背景生成，0 表示不生成（全部按原文检索）")
+	memoryTokens := flag.Int("memory-tokens", 800, "开场注入或 search_memory 返回的记忆估算 token 预算")
 	flag.Parse()
 	if flag.NArg() != 0 || *parallel < 1 || *parallel > 16 {
 		return errors.New("使用 -question 提供问题，-parallel 范围为 1 到 16")
@@ -63,6 +72,55 @@ func run() error {
 		if *searchK < 1 || *searchK > 6 {
 			return errors.New("k范围为1到6")
 		}
+	}
+	if *memoryTTL < 0 || *memoryLimit < 1 || *memoryLimit > 10000 || *memoryContextCalls < 0 || *memoryTokens < 100 {
+		return errors.New("memory-ttl与memory-context-calls不能为负，memory-limit范围为1到10000，memory-tokens至少100")
+	}
+	if !slices.Contains([]string{"keyword", "vector", "bm25", "hybrid", "rerank"}, *memoryMode) {
+		return errors.New("memory-mode取keyword、vector、bm25、hybrid或rerank")
+	}
+	if *memoryEnabled && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
+		return errors.New("memory用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
+	}
+	if *memoryEnabled || *memoryForget != "" || *memorySearch != "" {
+		memories = &memoryStore{limit: *memoryLimit, ttl: *memoryTTL, provider: *embeddingMode, tokens: *memoryTokens}
+		memories.contextLeft.Store(int64(*memoryContextCalls))
+	}
+	// 向量模型按需加载、进程内共享；退出时统一释放。
+	defer closeEmbedders()
+	if *memoryForget != "" || *memorySearch != "" {
+		if *question != "" || *historyStdin || *contextLab || *ragLab || *searchQuery != "" || ragEnabled || (*memoryForget != "" && *memorySearch != "") {
+			return errors.New("memory-forget和memory-search请单独使用")
+		}
+		if *memoryForget != "" {
+			// 删除不做容量淘汰：一次性命令的默认上限不能顺带删掉其他记忆。
+			_, err := memories.forget(*memoryForget, "人工删除")
+			return err
+		}
+		if strings.TrimSpace(*memorySearch) == "" {
+			return errors.New("memory-search需要非空问题")
+		}
+		// 没有密钥时 vector/bm25/hybrid 仍可在本地对比；背景生成与重排会按降级处理并写明原因。
+		if config, err := loadConfig(); err == nil {
+			config.Effort = *effort
+			memories.client = &modelClient{Config: config, Limit: *maxSteps}
+		} else {
+			fmt.Fprintln(os.Stderr, "Memory search: model=unavailable reason="+err.Error())
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		// 与 -search-docs 一样：过程日志改到 stderr，stdout 只有 JSON 结果。
+		stdout := os.Stdout
+		os.Stdout = os.Stderr
+		result, err := memories.retrieve(ctx, "cli", strings.TrimSpace(*memorySearch), *memoryMode)
+		os.Stdout = stdout
+		if err != nil {
+			return err
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		encoder.SetEscapeHTML(false)
+		return encoder.Encode(result.report())
 	}
 	options := contextOptions{Window: *window, Output: *output, ReasoningReserve: *reserve, ToolOutput: *toolOutput, KeepGroups: *keepGroups}
 	if *effort != "minimal" && *effort != "low" && *effort != "medium" && *effort != "high" {
@@ -86,7 +144,6 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		defer docsRetriever.embedding.Close()
 	}
 	if *searchQuery != "" {
 		result, err := searchDocs(ctx, *searchQuery, *searchK)
@@ -112,6 +169,9 @@ func run() error {
 	}
 	if ragEnabled {
 		toolDefinitions = append(toolDefinitions, searchDocsDefinition)
+	}
+	if memories != nil {
+		toolDefinitions = append(toolDefinitions, memoryToolDefinitions...)
 	}
 	if !*contextLab && !*ragLab && strings.TrimSpace(*question) == "" {
 		fmt.Print("请输入任务： ")

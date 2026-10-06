@@ -1,14 +1,14 @@
-# 学习 agent：Day 1 → Day 2 → Day 3 → Day 4
+# 学习 agent：Day 1 → Day 2 → Day 3 → Day 4 → Day 5
 
 想先看动画讲解，打开 [课件入口](docs/slides/index.html)：每节课一份可翻页、按步骤播放的 HTML 课件。
 
-每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)。
+每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)。
 
 用 Go 手写最小 ReAct loop，重点是看懂流程：
 
 `问题 → 选择本轮上下文 → 请求模型 → 读取 tool_calls → 并行执行 → tool 结果写回历史 → 下一轮或结束`
 
-使用方舟原生 Tool Calling。普通模式的 system prompt 只说明工具助手角色；Day 4 的 `-rag` 模式补充检索、引用与资料不足规则。回答仍可自由表达，工具定义通过 `tools` 提供，调用参数由模型生成。
+使用方舟原生 Tool Calling。普通模式的 system prompt 只说明工具助手角色；Day 4 的 `-rag` 模式补充检索、引用与资料不足规则；Day 5 的 `-memory` 模式补充记忆规则与开场调入的记忆块。回答仍可自由表达，工具定义通过 `tools` 提供，调用参数由模型生成。
 
 ## 运行
 
@@ -43,11 +43,19 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | `-reasoning-effort` | high | 所有请求统一的推理强度：minimal、low、medium、high |
 | `-context-lab` | false | 33轮召回与约束保留，再运行真实大工具输出实验 |
 | `-rag` | false | 增加 search_docs，项目知识回答先检索并引用来源 |
-| `-embedding` | ark | 向量模型：ark线上方舟，local本地纯Go MiniLM |
+| `-embedding` | ark | 向量模型：ark线上方舟，local本地纯Go MiniLM；search_docs 与长期记忆共用 |
 | `-min-score` | 0.40 | 检索相似度阈值，范围−1到1 |
 | `-search-docs` | 空 | 只执行检索，不调用聊天模型；local无需密钥，ark使用同一ARK_API_KEY |
 | `-k` | 3 | 配合 search-docs，最多返回1–6条候选 |
 | `-rag-lab` | false | 10题直接检索检查，再做20次独立真实问答；max-steps对每题每组分别生效 |
+| `-memory` | false | 跨进程长期记忆：开头经背景补充、两路召回、RRF、重排后调入，结尾写入原文与来源，增加 remember_memory、search_memory 与 forget_memory |
+| `-memory-ttl` | 0 | 本轮“记住”写入的有效期，如 `1m`；0 不过期 |
+| `-memory-limit` | 200 | 记忆总量上限，超出时淘汰重要性×新近度最低的一条 |
+| `-memory-forget` | 空 | 只删除指定编号的记忆后退出，如 `M3`；不做容量淘汰，不需要密钥 |
+| `-memory-search` | 空 | 只执行一次记忆检索，stdout 输出各阶段 JSON；配合 `-memory-mode` 对比 |
+| `-memory-mode` | rerank | memory-search 的方式：keyword（旧关键词）、vector、bm25、hybrid（RRF）、rerank（完整流程） |
+| `-memory-context-calls` | 4 | 本次运行最多几次背景生成；0 表示全部按原文检索 |
+| `-memory-tokens` | 800 | 注入或返回的记忆估算 token 预算，另有最多5条的上限 |
 
 工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。
 
@@ -64,6 +72,8 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | [retrieval.go](retrieval.go) | search_docs定义、进程内索引、点积排序、低分过滤与文件缓存 |
 | [rag_lab.go](rag_lab.go) | 10题真实检索与无检索/有检索对比；不写死模型回答 |
 | [embedding.go](embedding.go) | 本地纯Go推理 / 线上方舟embedding |
+| [memory.go](memory.go) | 长期记忆依据层：原文与来源上下文、文件锁事务、规则写入、过期与淘汰、删除 |
+| [memory_retrieval.go](memory_retrieval.go) | Contextual Retrieval：切块、背景生成与缓存、向量与BM25召回、RRF、LLM重排、预算与降级 |
 
 默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail 和 check_task_status 两个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
 
@@ -123,6 +133,29 @@ go -C observer run .
 知识库为[24条FAQ](retrieval/corpus.md)，按标题切块，标题与正文一起embedding，来源作为元信息。仅启用RAG、检索检查或RAG实验时初始化向量模型；普通ReAct不加载。本地模型共享实例时串行推理，线上请求可并行。每个Agent进程初始化一次，退出时释放；新进程复用.cache/retrieval-go/磁盘缓存。修改语料或模型后，根据指纹选择或重建索引，不能混用不同模型的向量。
 
 默认k=3，最多6；余弦相似度阈值0.40是教学起点，用-min-score调整，本地和线上分别校准。低分片段仅返回元信息，accepted=true仍需核对正文。BM25、rerank和LLM背景小抄讲清原理，基础实验实现向量召回。原理见[Day 4笔记](docs/day-04/day-04-notes.md)，本项目实现与10题实验见[Day 4项目实践](docs/day-04/day-04-lab.md)。`-search-docs`的stdout只有JSON，建索引日志写到stderr。
+
+## Day 5：跨会话长期记忆
+
+```sh
+# 第一个进程：模型调用 remember_memory 登记原话，程序校验后在本轮结束时连同来源写进 .data/memory.json
+go run . -memory -question '记住：错误码 ERR-4012 表示索引过期'
+# 第二个进程：开头补背景 → 向量+BM25召回 → RRF → 重排，相关的写进 system，回答引用 [M编号]
+go run . -memory -question 'ERR-4012 是什么意思？'
+go run . -memory -embedding local -question 'ERR-4012 是什么意思？'
+# 只看检索各阶段（对比旧关键词、纯向量、BM25、混合、加重排）
+go run . -memory-search '我现在用什么编程语言？' -memory-mode hybrid
+# TTL：本轮写入1分钟后过期；容量：上限2条时观察淘汰
+go run . -memory -memory-ttl 1m -question '记住：今天下午三点在 3 号会议室开周会'
+go run . -memory -memory-limit 2 -question '记住流程：代码评审先跑构建，再看逻辑'
+# 人工删除
+go run . -memory-forget M3
+```
+
+写入只来自两处：用户希望记住的原话，以及本轮重试耗尽仍失败的工具（经历，7天过期）。要不要记由模型判断：用户说“记住……”“别忘了……”“以后都……”等时，模型调用 `remember_memory(quote, kind)`；`quote` 必须逐字出自本次会话的用户消息，程序校验后再做长度与敏感信息检查（每轮最多3条），本轮结束时连同来源保存。模型不能写入用户没说过的内容或工具结果；用户明说“记住”而模型没有登记时，终端打印 `Memory hint`，不自动写入。新记忆同时保存来源上下文（本次会话的用户原话与实际工具结果）。
+
+检索按 Anthropic《Introducing Contextual Retrieval》的流程实现：每个片段用"来源 + 片段"请求当前方舟模型生成背景说明，"背景 + 原文"同时建向量与 BM25 索引；查询时两路各取前10个片段，按记忆去重后 RRF 融合前20条，当前方舟模型重排，只注入相关的完整原文（最多5条、800估算token），允许0条。背景和向量缓存在 `.data/memory-index/`（派生数据，可删除重建）；旧记忆没有来源时按原文检索并标记。背景生成与重排计入 `-max-steps`，并给主任务至少留2次请求。模型、重排器和参数与 Anthropic 实验不同，差异与手动验证方法见 [Day 5 项目实践](docs/day-05/day-05-lab.md)。`.data/` 已排除提交。
+
+观测台：新对话勾选“长期记忆”并选择向量模型，续聊沿用。回答前的“◎”卡片显示两路候选数、融合数、重排结果、选中数和降级原因，以及背景生成与重排两类辅助调用的原始输入输出；点记忆行查看原文、背景与来源。原理见 [Day 5 笔记](docs/day-05/day-05-notes.md)。
 
 ## 配置与学习
 

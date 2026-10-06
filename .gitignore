@@ -2,3 +2,4 @@
 .cache/
 bin/
 observer/runs/
+.data/

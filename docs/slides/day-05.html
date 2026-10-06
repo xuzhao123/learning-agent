@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day 5 长期记忆</title>
+<link rel="stylesheet" href="deck.css">
+<style>
+.hd{display:block;height:82px}.hd .kicker{display:block;font-size:13px;margin-bottom:9px}.hd h2{font-size:34px;line-height:1.2}.canvas{top:138px;height:448px}.says{top:628px}.say{font-size:20px}
+.grid{display:grid;gap:22px}.two{grid-template-columns:repeat(2,1fr)}.three{grid-template-columns:repeat(3,1fr)}.four{grid-template-columns:repeat(4,1fr);gap:16px}
+.card{padding:22px;background:var(--card);border:1.5px solid var(--line);border-radius:14px;min-width:0}.card h3{font-size:23px;line-height:1.35;margin:12px 0}.card p{font-size:18px;line-height:1.6}.eyebrow{font:600 14px/1.5 var(--font-mono);color:var(--muted)}
+.purple{border-color:var(--model);background:var(--model-soft)}.green{border-color:var(--go);background:var(--go-soft)}.blue{border-color:var(--user);background:var(--user-soft)}.red{border-color:var(--err);background:var(--err-soft)}.amber{border-color:var(--warn);background:var(--warn-soft)}.muted{color:var(--muted)}
+.callout{margin-top:24px;padding:16px 22px;background:var(--code);border-left:4px solid var(--model);border-radius:0 12px 12px 0;font-size:22px;line-height:1.55}.callout small{font-size:17px;color:var(--muted)}
+.hero h1{font-size:68px;line-height:1.2;margin:18px 0}.hero em{font-style:normal;color:var(--model)}.lead{font-size:23px;color:var(--muted)}
+.route{display:flex;gap:16px;align-items:center;margin-top:30px;font-size:20px;flex-wrap:wrap}.route span{padding:11px 18px;border:1px solid var(--line);border-radius:10px;background:var(--card)}.route b{color:var(--go)}
+.stack{display:grid;gap:12px}.layer{display:grid;grid-template-columns:150px 1fr 230px;gap:18px;align-items:center;padding:15px 20px;border:1.5px solid var(--line);border-radius:12px;font-size:19px;background:var(--card)}.layer b{font:600 16px/1.3 var(--font-mono);color:var(--muted)}.layer i{font-style:normal;font-size:16px;color:var(--muted);text-align:right}
+.table{display:grid;gap:9px}.row{display:grid;grid-template-columns:160px 1fr 1fr;gap:16px;padding:12px 18px;border:1px solid var(--line);border-radius:10px;font-size:18px;line-height:1.45;background:var(--card)}.row.head{background:none;border:0;padding:0 18px;font:600 14px/1.4 var(--font-mono);color:var(--muted)}.row strong{color:var(--model)}
+.bars{display:grid;gap:22px;margin-top:8px}.bar-row{display:grid;grid-template-columns:150px 1fr 120px;gap:18px;align-items:center;font-size:20px}.track{height:22px;background:var(--code);border-radius:6px;overflow:hidden}.fill{height:100%;width:var(--w);border-radius:6px;background:var(--model)}.fill.g{background:var(--go)}.fill.u{background:var(--user)}.bar-row span{font:600 18px/1 var(--font-mono);color:var(--muted)}
+.formula{margin-top:26px;padding:16px 22px;font:600 22px/1.5 var(--font-mono);background:var(--code);border-radius:12px}.formula small{display:block;font:400 16px/1.5 var(--font-body);color:var(--muted)}
+.log{padding:16px 20px;background:var(--code);border-radius:12px;font:500 15.5px/1.65 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}.log .k{color:var(--model);font-weight:700}.log .g{color:var(--go)}.log .r{color:var(--err)}.log .m{color:var(--muted)}
+.proc{font:600 14px/1.4 var(--font-mono);color:var(--muted);margin:0 0 8px}
+.scoreboard{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.scoreboard div{padding:16px 18px;background:var(--code);border-radius:12px}.scoreboard b{display:block;font:700 24px/1.4 var(--font-body);color:var(--go)}.scoreboard b.r{color:var(--err)}.scoreboard span{font-size:16px;line-height:1.5;color:var(--muted)}
+.scale{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:stretch}.pan{padding:22px;border-radius:14px;border:1.5px solid var(--line)}.pan h3{font-size:24px;margin:0 0 12px}.pan p{font-size:18px;line-height:1.6}
+.answer{display:grid;gap:10px}.answer div{padding:12px 18px;border-left:4px solid var(--model);background:var(--card);border-radius:0 10px 10px 0;font-size:19px;line-height:1.5}.answer b{color:var(--model)}
+.flow{display:flex;align-items:stretch;gap:8px;margin:0 0 14px}.flow .lab{flex:none;width:52px;font:600 14px/1.3 var(--font-mono);color:var(--muted);align-self:center}.node{flex:1;padding:11px 13px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);font-size:15.5px;line-height:1.45;min-width:0;transition:box-shadow .3s}.node b{display:block;font:600 12.5px/1.4 var(--font-mono);color:var(--muted);margin-bottom:4px}.node.marked{box-shadow:0 0 0 3px var(--model)}.arrow{flex:none;align-self:center;color:var(--muted);font-size:20px}.pair{flex:1.2;display:grid;gap:6px;min-width:0}.pair .node{padding:8px 12px}
+.calc{font:500 17px/1.7 var(--font-mono);padding:14px 18px;background:var(--code);border-radius:12px}.calc b{color:var(--go)}
+.row.marked{border-color:var(--go);background:var(--go-soft)}.row.bad.marked{border-color:var(--err);background:var(--err-soft)}.row.cols7{grid-template-columns:60px repeat(6,1fr);font-size:17px;padding:10px 16px}
+.mini{font-size:16px;line-height:1.55;margin-top:10px}.mini b{color:var(--model)}
+code{font-size:.85em;word-break:break-word}
+</style>
+</head>
+<body>
+<div class="progress">
+</div>
+<main class="deck">
+<div class="stage">
+
+<section class="slide" data-title="进程一退出，Agent 就失忆">
+<header class="hd">
+<span class="kicker">DAY 05 · 记忆系统</span>
+<h2>进程一退出，Agent 就失忆</h2>
+</header>
+<div class="canvas">
+<div class="hero">
+<p class="eyebrow">从“一次会话之内”走到“会话之间”</p>
+<h1>上下文是工作记忆<br><em>长期记忆留在窗口外</em></h1>
+<p class="lead">写什么 · 什么时候读 · 什么时候忘 · 记错了怎么改</p>
+</div>
+<div class="route" data-step="1">
+<span>新对话：调入</span><b>→</b><span>本轮工作</span><b>→</b><span>结束：写入</span><b>→</b><span>过期 / 淘汰 / 删除</span>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">前四天做的都是一次会话内的事；进程一退出，消息历史就没了。</p>
+<p class="say" data-step="1">今天在原来的循环两端各加一个交接点：开头调入，结尾写入。</p>
+</div>
+</section>
+
+<section class="slide" data-title="短期记忆与长期记忆的分工">
+<header class="hd">
+<span class="kicker">01 · 分工</span>
+<h2>短期记忆与长期记忆的分工</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<article class="card purple" data-step="0" data-fx="rise">
+<span class="eyebrow">短期 · 上下文管理（Day 3）</span>
+<h3>这一次请求放进什么</h3>
+<p>范围：一次会话<br>位置：进程内存中的消息列表<br>操作：截断、裁剪、摘要<br>失败：本次会话忘了前文</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">长期 · 记忆模块（Day 5）</span>
+<h3>哪些留下、下次取回哪些</h3>
+<p>范围：跨会话、跨进程<br>位置：文件、数据库、向量库<br>操作：写入、检索、更新、遗忘<br>失败：以后所有会话都受影响</p>
+</article>
+</div>
+<div class="callout" data-step="2">交接点在上下文组装：取回的记忆一旦进入窗口，就和普通消息一样受预算约束。<br>
+<small>与 Day 4 的区别：知识库只读、由人维护；记忆由 Agent 自己写，还要处理更新和删除。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">短期记忆决定模型这一次读到什么。</p>
+<p class="say" data-step="1" data-until="1">长期记忆决定会话之间留下什么；记错的代价也会延续到以后。</p>
+<p class="say" data-step="2">两者只在“组装上下文”这一步交接。</p>
+</div>
+</section>
+
+<section class="slide" data-title="把模型当作操作系统">
+<header class="hd">
+<span class="kicker">02 · MemGPT</span>
+<h2>把模型当作操作系统：上下文是内存，外部存储是磁盘</h2>
+</header>
+<div class="canvas">
+<div class="stack">
+<div class="layer purple" data-step="0" data-fx="rise"><b>RAM</b><span>主上下文：系统指令 + 核心记忆 + 最近消息</span><i>模型直接看到 · 容量有限</i></div>
+<div class="layer" data-step="1" data-fx="rise"><b>PAGING</b><span>函数调用：检索、插入、编辑记忆（由模型决定何时换入换出）</span><i>自我编辑</i></div>
+<div class="layer green" data-step="2" data-fx="rise"><b>DISK</b><span>外部上下文：完整对话记录 + 归档记忆</span><i>容量大 · 必须先取回</i></div>
+</div>
+<div class="callout" data-step="3">换页策略本身成了模型能力的一部分。<br>
+<small>灵活，但模型判断失误时会写错或漏查，所以需要约束与修正通道。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">快而小的放上层：模型每次请求都能直接看到。</p>
+<p class="say" data-step="1" data-until="1">MemGPT 把换入换出做成工具，交给模型自己决定。</p>
+<p class="say" data-step="2" data-until="2">大而慢的放下层，需要时先检索再放进窗口。</p>
+<p class="say" data-step="3">本项目只让模型检索和删除，写入仍由规则决定。</p>
+</div>
+</section>
+
+<section class="slide" data-title="四类记忆">
+<header class="hd">
+<span class="kicker">03 · 分类</span>
+<h2>四类记忆，各存一种东西</h2>
+</header>
+<div class="canvas">
+<div class="grid four">
+<article class="card purple" data-step="0" data-fx="rise"><span class="eyebrow">WORKING</span><h3>工作记忆</h3><p>本轮消息、工具结果、压缩摘要<br><span class="muted">= 上下文窗口</span></p></article>
+<article class="card blue" data-step="1" data-fx="rise"><span class="eyebrow">EPISODIC</span><h3>情景记忆</h3><p>发生过的事，带时间<br><span class="muted">“上次调用某接口超时三次”</span></p></article>
+<article class="card green" data-step="2" data-fx="rise"><span class="eyebrow">SEMANTIC</span><h3>语义记忆</h3><p>蒸馏后的事实<br><span class="muted">“用户偏好 Go”</span></p></article>
+<article class="card amber" data-step="3" data-fx="rise"><span class="eyebrow">PROCEDURAL</span><h3>程序性记忆</h3><p>可复用的做法<br><span class="muted">“评审先跑构建再看逻辑”</span></p></article>
+</div>
+<div class="callout" data-step="4">经历会被蒸馏：多次相似的情景 → 一条事实；反复成功的做法 → 一条流程。<br>
+<small>Generative Agents 的“反思”就是在重要性累计到阈值时做这种蒸馏。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">工作记忆就是 Day 3 管理的上下文。</p>
+<p class="say" data-step="1" data-until="1">情景记忆像日记，按时间追加。</p>
+<p class="say" data-step="2" data-until="2">语义记忆是稳定的事实，最常被调入。</p>
+<p class="say" data-step="3" data-until="3">程序性记忆告诉 Agent 怎么做事。</p>
+<p class="say" data-step="4">分类决定存储方式、读取方式和寿命。</p>
+</div>
+</section>
+
+<section class="slide" data-title="写：写策略决定上限">
+<header class="hd">
+<span class="kicker">04 · 写</span>
+<h2>写：写得越多，读的噪声越大</h2>
+</header>
+<div class="canvas">
+<div class="table">
+<div class="row head"><span>策略</span><span>做法</span><span>代价</span></div>
+<div class="row" data-step="0" data-fx="rise"><strong>全量记录</strong><span>每轮都存</span><span>很快变成垃圾场</span></div>
+<div class="row green" data-step="1" data-fx="rise"><strong>规则触发</strong><span>“记住……”、工具失败时写</span><span>简单可预测，但记不住没明说的偏好</span></div>
+<div class="row" data-step="2" data-fx="rise"><strong>模型抽取</strong><span>每轮后判断值不值得记，再增、改、删</span><span>多一次调用；会把推测当事实</span></div>
+<div class="row" data-step="3" data-fx="rise"><strong>自我编辑</strong><span>写记忆做成工具，模型决定</span><span>时机灵活；判断失误就写错</span></div>
+<div class="row" data-step="4" data-fx="rise"><strong>后台整理</strong><span>会话外合并、去重、蒸馏</span><span>不加延迟；记忆有滞后</span></div>
+</div>
+<div class="callout" data-step="5">本项目：只写<b>用户原话</b>和<b>程序观察到的失败</b>，并记录来源。<br>
+<small>同内容只刷新；疑似密钥、超长内容拒绝保存，并在开始时告诉模型。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">什么都记，读的时候就全是噪声。</p>
+<p class="say" data-step="1" data-until="1">规则版最笨，但每条记忆的来源都清楚。</p>
+<p class="say" data-step="2" data-until="3">越依赖模型判断越灵活，也越需要防止写错。</p>
+<p class="say" data-step="4" data-until="4">写入不一定在回答路径上，可以放到后台。</p>
+<p class="say" data-step="5">项目先用规则版：来源确定，出了问题能追溯。</p>
+</div>
+</section>
+
+<section class="slide" data-title="读：三项打分">
+<header class="hd">
+<span class="kicker">05 · 读</span>
+<h2>读：相关度为主，重要性与新近度为辅</h2>
+</header>
+<div class="canvas">
+<div class="bars">
+<div class="bar-row" data-step="0" data-fx="rise"><b>相关度</b><div class="track"><div class="fill" style="--w:60%"></div></div><span>× 0.6</span></div>
+<div class="bar-row" data-step="1" data-fx="rise"><b>重要性</b><div class="track"><div class="fill g" style="--w:25%"></div></div><span>× 0.25</span></div>
+<div class="bar-row" data-step="2" data-fx="rise"><b>新近度</b><div class="track"><div class="fill u" style="--w:15%"></div></div><span>× 0.15</span></div>
+</div>
+<div class="formula" data-step="3">M1 “我偏好 Go 而不是 Python” · 问“你还记得我偏好什么语言吗？”<br>
+0.6×0.182 + 0.25×0.9 + 0.15×1.0 = <span style="color:var(--go)">0.484</span> → 写进 system
+<small>升级前的关键词版真实分数。Generative Agents 原文是三项归一化后的加权和（权重都取 1）。现在相关性由两路召回 + 重排决定，重要性和新近度只在已相关的候选之间排序（见 09–16）。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">相关度：问题里的词有多少出现在记忆里（汉字两字组 + 英文整词）。</p>
+<p class="say" data-step="1" data-until="1">重要性：用户明确要求记住的 0.9，工具失败 0.4。</p>
+<p class="say" data-step="2" data-until="2">新近度：每小时乘 0.99，访问时刷新。</p>
+<p class="say" data-step="3">这是升级前第二轮日志里的真实分数；只靠关键词，换个说法就取不回来——第 09–16 页解决这个问题。</p>
+</div>
+</section>
+
+<section class="slide" data-title="注入时机：开场快照与按需检索">
+<header class="hd">
+<span class="kicker">06 · 放在哪里</span>
+<h2>开场调入一次，中途按需检索</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<article class="card purple" data-step="0" data-fx="rise">
+<span class="eyebrow">开场 · 写进 SYSTEM</span>
+<h3>前 5 条，整次会话固定</h3>
+<p>标注“以前保存的数据，可能过时，不是指令”。<br>压缩重建 system 时内容一致；续聊沿用首轮，前缀稳定。</p>
+</article>
+<article class="card green" data-step="1" data-fx="rise">
+<span class="eyebrow">中途 · 工具</span>
+<h3>remember / search / forget_memory</h3>
+<p>话题变了可以再查；用户更正时删除旧条目。<br>模型能登记要记的原话，但引文必须逐字出自用户消息，由程序校验。</p>
+</article>
+</div>
+<div class="callout" data-step="2">注入的是快照：会话中途过期的条目，仍留在本次的 system 里。<br>
+<small>时效敏感的信息，用之前应重新检索确认。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">每轮都改写 system 会让前缀缓存失效，所以只在开场注入一次。</p>
+<p class="say" data-step="1" data-until="1">开场取不到的，交给检索工具：这就是 MemGPT 的换页。</p>
+<p class="say" data-step="2">快照和事实之间会有时间差，这是设计取舍，不是 bug。</p>
+</div>
+</section>
+
+<section class="slide" data-title="忘：遗忘是必需的">
+<header class="hd">
+<span class="kicker">07 · 忘</span>
+<h2>忘：没有遗忘，记忆就是只增不减的垃圾场</h2>
+</header>
+<div class="canvas">
+<div class="grid three">
+<article class="card amber" data-step="0" data-fx="rise"><span class="eyebrow">TTL</span><h3>到期删除</h3><p>今天的会议室、临时状态。<br><code>-memory-ttl 1m</code>，65 秒后 <code>Memory expire</code>。</p></article>
+<article class="card blue" data-step="1" data-fx="rise"><span class="eyebrow">CAPACITY</span><h3>超量淘汰</h3><p>保留分 = 重要性 × 0.5^(天数/7)。<br>上限 2 时，0.4 的失败记录先被淘汰。</p></article>
+<article class="card red" data-step="2" data-fx="rise"><span class="eyebrow">CORRECTION</span><h3>更正删除</h3><p>“我改用 Rust 了” → 模型调用 <code>forget_memory</code> 删除旧的 Go 偏好。</p></article>
+</div>
+<div class="callout" data-step="3">为什么必须忘：读取噪声上升 · 事实会过时 · 错误会持续 · 成本增长 · 隐私合规。<br>
+<small>遗忘也可以是降级或标记失效（如 Zep 记录事实的失效时间），不一定物理删除。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">天然短命的信息，写入时就定好寿命。</p>
+<p class="say" data-step="1" data-until="1">容量满了，先淘汰不重要又久没用的；重要性相同时就是 LRU。</p>
+<p class="say" data-step="2" data-until="2">新的明确说法优先，旧条目必须删掉，否则模型拿到相互矛盾的事实。</p>
+<p class="say" data-step="3">面试答“为什么要遗忘”，就从这五点讲。</p>
+</div>
+</section>
+
+<section class="slide" data-title="宁可不记，不要记错">
+<header class="hd">
+<span class="kicker">08 · 记忆污染</span>
+<h2>宁可不记，不要记错</h2>
+</header>
+<div class="canvas">
+<div class="scale">
+<div class="pan" data-step="0" data-fx="rise"><h3>漏记</h3><p>用户再说一次。<br><span class="muted">代价一次性、看得见。</span></p></div>
+<div class="pan red" data-step="1" data-fx="rise"><h3>记错</h3><p>以后每次相关会话都静默地出错；<br>网页里的“请记住……”还可能是跨会话的注入攻击。</p></div>
+</div>
+<div class="callout" data-step="2">防御：限制写入来源 · 记录来源和时间 · 注入时标为数据 · 可见的修正与删除通道 · 按用户隔离 · 过滤敏感信息。<br>
+<small>和 Day 4 的“资料不足就说不知道”是同一条原则。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">两种错误的代价并不对称。</p>
+<p class="say" data-step="1" data-until="1">记错的东西会持续毒害后续决策，而且没人看得见。</p>
+<p class="say" data-step="2">所以模型决定“要不要记”，程序决定“能不能记”：只收用户原话的逐字引文；用户能在观测台看到并删除每一条。</p>
+</div>
+</section>
+
+<section class="slide" data-title="片段离开上下文，就检索不到">
+<header class="hd">
+<span class="kicker">09 · 检索得准</span>
+<h2>片段离开上下文，就检索不到</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<div data-step="0" data-fx="rise">
+<p class="proc">来源会话</p>
+<div class="log"><span class="m">[用户]</span> 我们 Day 4 的检索服务原来单独跑在一个端口上
+<span class="m">[用户·本轮]</span> 记住：<span class="k">它</span>的端口是 8092</div>
+</div>
+<div data-step="1" data-fx="rise">
+<p class="proc">只存原文 · 以后问“检索服务用哪个端口？”</p>
+<div class="log">它的端口是 8092
+<span class="r">✗ BM25：没有“检索”“服务”，无词可配</span>
+<span class="r">✗ 向量：只靠“端口”一个词拉近</span></div>
+</div>
+</div>
+<div class="callout" data-step="2">背景补充：入库时把<b>完整来源 + 片段</b>交给模型，写 50–100 token 背景，拼在原文前面再建索引。<br>
+<small>例：“用户说明 Day 4 检索服务以前单独运行时的端口。” 背景只用于检索，注入的仍是原文；只依据来源，不补充事实。拼接后要按向量模型的 tokenizer 校验长度，很多编码器超长会静默截掉尾部。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">建索引要先切块。块太大，向量成了几个话题的“平均意思”；块太小，主语、时间和条件就被切到别的块里。</p>
+<p class="say" data-step="1" data-until="1">“它”指什么只有来源知道。检索算法再好，也找不出文本里不存在的词：问题出在被检索的文本本身。</p>
+<p class="say" data-step="2">Anthropic 的 Contextual Retrieval 就是补这一步：背景对 BM25 是直接加词，对向量是把意思推向正确的话题。</p>
+</div>
+</section>
+
+<section class="slide" data-title="完整流程：原文 → 背景 → 两个索引 → 召回 → 融合 → 重排 → 注入">
+<header class="hd">
+<span class="kicker">10 · Contextual Retrieval</span>
+<h2>原文 → 背景 → 两个索引 → 召回 → 融合 → 重排 → 注入</h2>
+</header>
+<div class="canvas">
+<div class="flow">
+<span class="lab">入库</span>
+<div class="node blue" data-step="0" data-fx="rise" data-mark="0"><b>① 原文 + 来源</b>它的端口是 8092<br><span class="muted">来源：用户原话，原样保存</span></div>
+<span class="arrow" data-step="1">→</span>
+<div class="node purple" data-step="1" data-fx="rise"><b>② 背景说明 · LLM</b>Day 4 检索服务以前单独运行时的端口<br><span class="muted">缓存；内容/来源/配置变了才重生成</span></div>
+<span class="arrow" data-step="2">→</span>
+<div class="pair" data-step="2" data-fx="rise"><div class="node green"><b>③ 向量索引</b>背景 + 原文</div><div class="node amber"><b>③ BM25 索引</b>背景 + 原文</div></div>
+</div>
+<div class="flow">
+<span class="lab">查询</span>
+<div class="node blue" data-step="3" data-fx="rise"><b>问题</b>检索服务用哪个端口？</div>
+<span class="arrow" data-step="3">→</span>
+<div class="pair" data-step="3" data-fx="rise"><div class="node green"><b>④ 向量召回</b>同义改写</div><div class="node amber"><b>④ BM25 召回</b>编号、精确词</div></div>
+<span class="arrow" data-step="4">→</span>
+<div class="node" data-step="4" data-fx="rise"><b>⑤ 去重 + RRF</b>按记忆合并<br>只看名次</div>
+<span class="arrow" data-step="5">→</span>
+<div class="node purple" data-step="5" data-fx="rise"><b>⑥ 重排 · LLM</b>能不能回答？<br>允许 0 条</div>
+<span class="arrow" data-step="6">→</span>
+<div class="node red" data-step="6" data-fx="rise"><b>⑦ 过滤 + 注入</b>条数上限<br>token 预算</div>
+</div>
+<div class="callout" data-step="7">漏斗：④⑤ 是第一阶段<b>召回</b>（便宜、宁多勿漏，决定上限）；⑥ 是第二阶段<b>重排</b>（贵、准，决定精度）。<br>
+<small>原文和来源是依据，不可改写；背景、块、向量是派生数据，删掉可以重建。开场结果写进 system，运行中的检索作为工具结果回填。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">写入时只保存原文和真实来源（用户原话、实际工具结果），不请求模型，也不让模型改写。</p>
+<p class="say" data-step="1" data-until="1">检索前补齐背景：来源放在标签里当作数据，其中的指令不执行；结果按“内容 + 来源 + 配置”的指纹缓存。</p>
+<p class="say" data-step="2" data-until="2">关键：两个索引用同一段“背景 + 原文”。只给向量加背景，BM25 这一路就看不到“检索服务”这几个词。</p>
+<p class="say" data-step="3" data-until="3">两路各取前若干个片段：向量补同义改写，BM25 补编号和精确词。它们的失败方式几乎不重叠。</p>
+<p class="say" data-step="4" data-until="4">同一条记忆的多个块先去重，只按最好的块计一次名次；再用 RRF 合并两路名次，不相加分数。</p>
+<p class="say" data-step="5" data-until="5">重排器同时读问题和候选全文，判断否定、条件、时间和更新；都不相关就返回 0 条。</p>
+<p class="say" data-step="6" data-until="6">注入完整原文，受条数和 token 两道上限；放不下就整条跳过，不截断，免得截掉“不”“除非”。</p>
+<p class="say" data-step="7">第一阶段漏掉的，第二阶段看不到；第二阶段不严，无关内容就进了上下文。两段各管一件事。</p>
+</div>
+</section>
+
+<section class="slide" data-title="向量与 BM25：两种不同的“相似”">
+<header class="hd">
+<span class="kicker">11 · 两路召回</span>
+<h2>向量与 BM25：两种完全不同的“相似”</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<article class="card green" data-step="0" data-fx="rise">
+<span class="eyebrow">向量 · 双编码器</span>
+<h3>比较整体意思</h3>
+<p>问题、文档<b>分别</b>编码成向量；文档向量可提前算好。<br><code>cos(a,b) = a·b / (|a||b|)</code>，归一化后就是点积。</p>
+<p class="mini">✓ “用哪门语言写代码” ≈ “改用 Rust 了”<br>✗ <code>ERR-4012</code> 与 <code>ERR-4013</code> 几乎是同一个点<br>分数随模型而变，不同模型的向量不能混用</p>
+</article>
+<article class="card amber" data-step="1" data-fx="rise">
+<span class="eyebrow">BM25 · 词项打分</span>
+<h3>比较共享的词，以及词有多稀有</h3>
+<p class="mini"><b>① IDF</b>：词越稀有越有区分力。N=3 时只在 1 篇出现 → 0.98，3 篇都有 → 0.13<br>
+<b>② 词频饱和</b>：tf 1→1.00，2→1.38，10→1.96，上限 k1+1=2.2<br>
+<b>③ 长度归一化</b>：长度为平均的 2 倍，同样出现 1 次只算 0.71</p>
+<p class="mini">中文相邻两字切分；<code>ERR-4012</code> 这类编号整词保留</p>
+</article>
+</div>
+<div class="formula" data-step="2">score(D,Q) = Σ IDF(q) · tf·(k1+1) / (tf + k1·(1 − b + b·|D|/avgdl))
+<small>k1≈1.2 控制词频饱和速度，b≈0.75 控制长度打折力度；都是初始值，要用自己的数据校准。只判断“词是否出现”的关键词集合不是 BM25。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">双编码器把每段文本压成一个固定长度的向量再比较：懂同义，但会把只差一个字符的编号看成同一个意思。</p>
+<p class="say" data-step="1" data-until="1">BM25 看的是具体的词：稀有词权重高，重复出现有上限，长文档要打折。编号、错误码正是它的强项。</p>
+<p class="say" data-step="2">两种分数量纲完全不同：余弦约 0–1、因模型而变；BM25 没有上限、因语料而变。所以后面不能直接相加。</p>
+</div>
+</section>
+
+<section class="slide" data-title="BM25 算例：背景让相关记忆拉开差距">
+<header class="hd">
+<span class="kicker">12 · 算一遍</span>
+<h2>BM25 算例：背景让相关记忆拉开差距</h2>
+</header>
+<div class="canvas">
+<div class="formula" data-step="0" style="margin-top:0">问题“报销系统支持什么发票” → 报销 · 销系 · 系统 · 统支 · 支持 · 持什 · 什么 · 么发 · 发票
+<small>D1“它现在只接受PDF发票”（相关）　D2“差旅报销需要附上行程单”（无关）　D3“我偏好用Go写后端服务”（无关）</small>
+</div>
+<div class="bars" style="margin-top:22px">
+<div class="bar-row" data-step="1" data-fx="rise"><b>不加背景 D1</b><div class="track"><div class="fill g" style="--w:33%"></div></div><span>1.050</span></div>
+<div class="bar-row" data-step="1" data-fx="rise"><b>不加背景 D2</b><div class="track"><div class="fill u" style="--w:29%"></div></div><span>0.907</span></div>
+<div class="bar-row" data-step="2" data-fx="rise"><b>加背景 D1</b><div class="track"><div class="fill g" style="--w:98%"></div></div><span>3.126</span></div>
+<div class="bar-row" data-step="2" data-fx="rise"><b>加背景 D2</b><div class="track"><div class="fill u" style="--w:16%"></div></div><span>0.514</span></div>
+</div>
+<div class="callout" data-step="3">D1 前面加上“公司报销系统升级后的发票要求：”：新命中“销系”“系统”（IDF 0.98），“发票”tf 变成 2。<br>
+<small>D1 变长被长度归一化打了折，但新命中的词远远抵消；“报销”现在出现在两篇里，IDF 从 0.98 降到 0.47，D2 的分数也跟着降。D3 两次都是 0。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">中文用相邻两字切词：“销系”这种跨词组合是噪声，但它在别处很少出现，对排序影响不大，好处是不需要词典。</p>
+<p class="say" data-step="1" data-until="1">不加背景时，D1 只命中“发票”，D2 只命中“报销”，各得一个词：相关和无关几乎打平，名次靠运气。</p>
+<p class="say" data-step="2" data-until="2">加上背景后，D1 一下子命中四个词。这就是 Contextual BM25：背景必须也进 BM25 索引。</p>
+<p class="say" data-step="3">IDF 是相对整批文档算的：一篇文档的改动，会改变其他文档的分数。所以 BM25 分数只能在同一批里比较。</p>
+</div>
+</section>
+
+<section class="slide" data-title="融合：为什么用名次而不是分数">
+<header class="hd">
+<span class="kicker">13 · 融合</span>
+<h2>融合：min-max 归一化会放大噪声，RRF 只看名次</h2>
+</header>
+<div class="canvas">
+<div class="table" data-step="0" data-fx="rise">
+<div class="row head cols7"><span>记忆</span><span>余弦（名次）</span><span>BM25（名次）</span><span>min-max 相加</span><span>RRF</span><span>几路召回</span><span></span></div>
+<div class="row cols7" data-mark="2"><strong>A</strong><span>0.83（1）</span><span>3.1（2）</span><span>1.021</span><span>0.0325</span><span>两路</span><span></span></div>
+<div class="row cols7" data-mark="2"><strong>D</strong><span>0.62（4）</span><span>12.4（1）</span><span>1.000</span><span>0.0320</span><span>两路</span><span></span></div>
+<div class="row bad cols7" data-mark="1"><strong>B</strong><span>0.82（2）</span><span>—</span><span>0.952</span><span>0.0161</span><span>一路</span><span></span></div>
+<div class="row cols7"><strong>C</strong><span>0.81（3）</span><span>—</span><span>0.905</span><span>0.0159</span><span>一路</span><span></span></div>
+<div class="row cols7"><strong>E</strong><span>—</span><span>2.9（3）</span><span>0.000</span><span>0.0159</span><span>一路</span><span></span></div>
+</div>
+<div class="formula" data-step="2">RRF(d) = Σ 1 / (k + 名次)　　A = 1/61 + 1/62 = 0.0325　　D = 1/64 + 1/61 = 0.0320
+<small>k 常取 60：k 越大名次差距越平，越看重“有几路召回”。同一记忆的多个块先去重。RRF 分只用于排序，不是概率。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">min-max 把每一路缩放到 0–1 再相加：(分数 − 最低) / (最高 − 最低)。看起来公平，其实取决于这批候选里恰好有谁。</p>
+<p class="say" data-step="1" data-until="1">0.83、0.82、0.81 几乎没区别，却被拉成 1.0、0.95、0.90：只被一路召回的 B，几乎和两路都认可的 D 一样高。</p>
+<p class="say" data-step="2">RRF 不管分数的量纲，只看名次：两路都认可的 A、D 自然排在前面，一路召回的都在 0.016 左右。</p>
+</div>
+</section>
+
+<section class="slide" data-title="重排：让模型把问题和全文一起读">
+<header class="hd">
+<span class="kicker">14 · 重排</span>
+<h2>重排：召回回答“像不像”，重排回答“有没有用”</h2>
+</header>
+<div class="canvas">
+<div class="grid three">
+<article class="card green" data-step="0" data-fx="rise"><span class="eyebrow">双编码器（召回）</span><h3>分别编码，再比较</h3><p>文档向量提前算好，一次查询只编码问题。快，但问题和文档编码时互相看不见。</p></article>
+<article class="card purple" data-step="0" data-fx="rise"><span class="eyebrow">交叉编码器（重排）</span><h3>拼在一起读</h3><p>问题和文档一起输入，注意力在两者之间直接对齐，看得出“不再”。N 个候选要算 N 次，只能用在召回之后。</p></article>
+<article class="card amber" data-step="1" data-fx="rise"><span class="eyebrow">通用大模型重排</span><h3>逐条 / 成对 / 列表</h3><p>能写理由、懂否定和更新；更慢更贵。列表式一次看全部候选，能发现冲突，但有位置偏差。</p></article>
+</div>
+<div class="table" data-step="2" data-fx="rise" style="margin-top:18px">
+<div class="row"><strong>否定</strong><span>“不再偏好 Go” · 问“我偏好 Go 吗”</span><span>相关：答案是否定的</span></div>
+<div class="row"><strong>更新</strong><span>旧“用 Go”，新“改用 Rust”</span><span>旧条：已被新条更新，不注入</span></div>
+<div class="row"><strong>无关</strong><span>问天气，候选全是编程偏好</span><span>全部不相关 → 返回 0 条</span></div>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">漏斗的两段用不同结构：召回用双编码器，追求快和全；重排用交叉编码器，追求准，所以只处理几十条候选。</p>
+<p class="say" data-step="1" data-until="1">大模型重排的输出是生成的文本：只收现有编号，重复取第一条，漏判按不相关，JSON 无效就判失败。</p>
+<p class="say" data-step="2">删掉“重要性高就算不相关也注入”的兜底：相关性决定进不进，重要性和新近度只在相关候选之间排先后。</p>
+</div>
+</section>
+
+<section class="slide" data-title="一致性：缓存键与锁外计算">
+<header class="hd">
+<span class="kicker">15 · 一致性</span>
+<h2>一致性：缓存键要全，慢操作不能持锁</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<div data-step="0" data-fx="rise">
+<p class="proc">内容寻址：影响结果的输入全部进哈希</p>
+<div class="log"><span class="k">背景</span> = hash(原文, 来源, 块, 提示词版本, 生成模型)
+<span class="k">向量</span> = hash(背景+原文, 向量模型, 维度, 指令)
+<span class="m">任一输入变化 → 键变化 → 旧缓存不再命中</span>
+<span class="r">漏掉“向量模型” → 两个模型的向量被混着比较</span></div>
+</div>
+<div data-step="1" data-fx="rise">
+<p class="proc">快照 → 锁外计算 → 锁内校验</p>
+<div class="log"><span class="m">P</span> 加锁 读快照 解锁 → <span class="k">[网络：算向量、重排 · 数秒]</span>
+<span class="m">Q</span>        加锁 <span class="r">删除 M，清掉 M 的索引和向量</span> 解锁
+<span class="m">P</span> 加锁 → <span class="g">M 还在吗？内容变了吗？</span>
+      <span class="g">向量还被当前索引引用吗？</span> → 写入 解锁</div>
+</div>
+</div>
+<div class="callout" data-step="2">不校验会出两种错：结果里返回已删除的 M；P 把 M 的向量写回，Q 刚清掉的数据又“复活”。<br>
+<small>锁内只做毫秒级的文件读写。删除、过期、淘汰时，块、背景和向量在同一个事务里一起删掉：只在查询时过滤，派生文件里仍有已删除内容的副本。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">缓存失效靠键，不靠人记得清缓存：把所有会影响结果的输入一起算哈希，少一项就会悄悄用到旧结果。</p>
+<p class="say" data-step="1" data-until="1">网络请求一次就是几秒，持锁做会让所有会话排队。所以先取快照、放锁，回来写之前再确认数据没变。</p>
+<p class="say" data-step="2">这就是乐观并发控制：假设冲突很少，冲突发生时由校验发现它，而不是一直占着锁。</p>
+</div>
+</section>
+
+<section class="slide" data-title="预算、降级与原文数字">
+<header class="hd">
+<span class="kicker">16 · 预算与降级</span>
+<h2>预算与降级：失败也要看得见</h2>
+</header>
+<div class="canvas">
+<div class="grid three">
+<article class="card amber" data-step="0" data-fx="rise"><span class="eyebrow">BUDGET</span><h3>先给主任务留额度</h3><p>背景生成、重排和主任务共享请求上限；辅助调用前先确认还够主任务完成一次工具调用和回答。背景生成有次数上限，不在收尾时悄悄批量调用。</p></article>
+<article class="card red" data-step="1" data-fx="rise"><span class="eyebrow">FALLBACK</span><h3>保守降级</h3><p>背景失败 → 原文检索，标“待处理”<br>背景超出向量上限 → 不截断，退回原文<br>向量不可用 → 只用 BM25<br>重排失败 → 只留两路都召回的，最多 3 条</p></article>
+<article class="card blue" data-step="2" data-fx="rise"><span class="eyebrow">COST</span><h3>提示词缓存</h3><p>8000 token 文档切 10 块：不缓存 80000；缓存后 8000×1.25 + 9×8000×0.1 = 17200，约 22%。结果另外缓存，否则每次重建都要重新生成。</p></article>
+</div>
+<div class="callout" data-step="3">Anthropic 实验（自家数据，1 − recall@20 = 前 20 条里漏掉的相关片段比例）：5.7% → 背景向量 3.7%（−35%）→ +BM25 2.9%（−49%）→ +重排 1.9%（−67%）。<br>
+<small>条件：Claude 3 Haiku 写背景，Gemini/Voyage 向量，Cohere 重排，约 150 条候选取 20。换了数据和模型，要用自己的问题测 recall@k 和 precision@k，不能直接引用这些百分比。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">辅助调用不直接回答用户，却和主任务抢同一份预算。并行时计数和用量要加锁，观测时要分开显示、合计成本。</p>
+<p class="say" data-step="1" data-until="1">原则：原始记忆永远保留，降级原因写进日志，未完成的不报告为成功。没有重排时，“两路都认可”是最可靠的信号。</p>
+<p class="say" data-step="2" data-until="2">提示词缓存省的是一次建索引内部的重复输入：同一篇文档的 n 次调用共享“文档”这段前缀。</p>
+<p class="say" data-step="3">区分三件事：方法原理（可以迁移）、工程参数（要校准）、实验结果（只对原实验成立）。</p>
+</div>
+</section>
+
+<section class="slide" data-title="两个进程，一次召回">
+<header class="hd">
+<span class="kicker">17 · 真实运行（升级前）</span>
+<h2>两个进程，一次召回</h2>
+</header>
+<div class="canvas">
+<div class="grid two">
+<div data-step="0" data-fx="rise">
+<p class="proc">进程 1 · 记住</p>
+<div class="log"><span class="m">Memory load: total=0 injected=0</span>
+<span class="m">Model request: 1/10</span>
+好的，我已经记住你的偏好了……
+<span class="k">Memory write: id=M1 kind=semantic</span>
+<span class="k">  source=user expire=never</span>
+<span class="k">  content=我偏好 Go 而不是 Python</span></div>
+</div>
+<div data-step="1" data-fx="rise">
+<p class="proc">进程 2 · 新进程提问</p>
+<div class="log"><span class="g">Memory load: total=1 injected=1</span>
+<span class="g">Memory recall: id=M1 score=0.484</span>
+<span class="g">  relevance=0.182</span>
+<span class="m">Model request: 1/10</span>
+记得，你偏好 Go 而不是 Python [M1]。
+<span class="m">Memory write: none</span></div>
+</div>
+</div>
+<div class="callout" data-step="2">对照：不开记忆时，模型查了 4 次笔记仍答不出，还许诺“告诉我，我会记下来”。<br>
+<small>没有长期记忆，这个许诺无法兑现。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">第一个进程结束时，规则把用户原话写进 memory.json。</p>
+<p class="say" data-step="1" data-until="1">第二个进程开场就把它调入 system，模型直接回答并引用编号。</p>
+<p class="say" data-step="2">同一个问题，有没有长期记忆，结果完全不同。</p>
+</div>
+</section>
+
+<section class="slide" data-title="验证与调试发现">
+<header class="hd">
+<span class="kicker">18 · 验证（升级前）</span>
+<h2>验证通过，也暴露了三个真问题</h2>
+</header>
+<div class="canvas">
+<div class="scoreboard">
+<div data-step="0" data-fx="rise"><b>跨进程召回 ✓</b><span>新进程答出偏好并引用 [M1]</span></div>
+<div data-step="0" data-fx="rise"><b>TTL 过期 ✓</b><span>65 秒后删除，模型说无法确定</span></div>
+<div data-step="0" data-fx="rise"><b>更正 ✓</b><span>forget_memory 删除旧条目，新条目生效</span></div>
+<div data-step="1" data-fx="rise"><b class="r">时区不一致</b><span>记忆用本地时区、日期工具用上海时区 → 统一为上海</span></div>
+<div data-step="1" data-fx="rise"><b class="r">嘴上说“已记下”</b><span>拒存密钥但模型不知道 → 开始时就告知</span></div>
+<div data-step="1" data-fx="rise"><b class="r">多进程交错</b><span>两条演示并发时，过期出现在另一个进程里 → 读写都在文件锁事务内，演示改为顺序运行</span></div>
+</div>
+<div class="callout" data-step="2">观测台：开场“调入”卡片、结尾“写入”卡片、可点击的 [M编号]、记忆面板与删除。<br>
+<small>Playwright 无头浏览器走完整流程，页面无 JS 错误。</small>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="0">三个基础验收都有真实日志。</p>
+<p class="say" data-step="1" data-until="1">这些问题都是跑真实流程才发现的，单看代码看不出来。</p>
+<p class="say" data-step="2">记忆是隐形状态，所以观测台必须让它看得见、删得掉。</p>
+</div>
+</section>
+
+<section class="slide" data-title="面试：你们的 Agent 怎么记住用户？">
+<header class="hd">
+<span class="kicker">19 · 回顾</span>
+<h2>“你们的 Agent 怎么记住用户？”</h2>
+</header>
+<div class="canvas">
+<div class="answer">
+<div data-step="0" data-fx="rise"><b>分层：</b>上下文是工作记忆，管一次请求；长期记忆持久化，管会话之间。</div>
+<div data-step="1" data-fx="rise"><b>写：</b>只写来源确定的内容，记录来源；去重；过滤敏感信息。</div>
+<div data-step="2" data-fx="rise"><b>读：</b>召回—重排漏斗。背景补充后向量 + BM25 两路召回（一个懂同义，一个懂编号），RRF 按名次融合，重排判断“有没有用”，允许 0 条；锁外计算、锁内校验。</div>
+<div data-step="3" data-fx="rise"><b>忘：</b>TTL、加权淘汰、更正删除；否则噪声、过时、错误都会累积。</div>
+<div data-step="4" data-fx="rise"><b>防污染：</b>宁可不记不要记错；记忆是数据不是指令；修正通道对用户可见。</div>
+<div data-step="5" data-fx="rise"><b>下一步：</b>用真实问题建记忆评估集校准参数、模型抽取 + 冲突合并、反思蒸馏、按用户隔离。</div>
+</div>
+</div>
+<div class="says">
+<p class="say" data-step="0" data-until="4">按“分层、写、读、忘、防污染”五步回答，每一步都给出取舍。</p>
+<p class="say" data-step="5">最后说清楚当前实现的边界，以及下一步怎么改。</p>
+</div>
+</section>
+
+</div>
+</main>
+<nav class="bar" aria-label="翻页">
+<button type="button" data-act="prev" aria-label="上一步">←</button>
+<button type="button" data-act="next" aria-label="下一步">→</button>
+<span class="where">
+</span>
+<span class="dots">
+</span>
+<span class="title">
+</span>
+<span class="hint">← → 翻页 · P 自动播放 · F 全屏</span>
+<button type="button" data-act="play" aria-pressed="false">自动播放</button>
+<button type="button" data-act="toc" aria-pressed="false">目录</button>
+<button type="button" data-act="full">全屏</button>
+</nav>
+<div class="toc" hidden>
+</div>
+<script src="deck.js">
+</script>
+</body>
+</html>

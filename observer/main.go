@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,9 @@ type event struct {
 	Body      json.RawMessage `json:"body,omitempty"`
 	Text      string          `json:"text,omitempty"`
 	Embedding string          `json:"embedding,omitempty"`
+	Purpose   string          `json:"purpose,omitempty"` // 请求用途：main、compact、memory_contextualize、memory_rerank
+	Memory    bool            `json:"memory,omitempty"`
+	MemoryTTL string          `json:"memory_ttl,omitempty"`
 }
 
 type run struct {
@@ -83,6 +87,8 @@ func main() {
 	mux.HandleFunc("POST /runs/{id}/messages", s.continueRun)
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
+	mux.HandleFunc("GET /memory", s.listMemory)
+	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
 	fmt.Printf("观测页面：http://%s\nagent 目录：%s\n模型上游：%s\n", *addr, dir, upstream)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
@@ -113,6 +119,8 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		RAG        bool   `json:"rag"`
 		RAGLab     bool   `json:"rag_lab"`
 		Embedding  string `json:"embedding"`
+		Memory     bool   `json:"memory"`
+		MemoryTTL  string `json:"memory_ttl"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -127,14 +135,19 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lab := input.ContextLab || input.RAGLab
-	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && input.RAG) {
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory)) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
+		return
+	}
+	if ttl, err := time.ParseDuration(input.MemoryTTL); input.MemoryTTL != "" && (err != nil || ttl <= 0 || !input.Memory) {
+		http.Error(w, "memory_ttl须为正的时长（如1m），且需开启长期记忆", http.StatusBadRequest)
 		return
 	}
 	args := []string{"run", ".", "-question", input.Query}
 	if input.RAG {
 		args = append(args, "-rag")
 	}
+	args = appendMemoryArgs(args, input.Memory, input.MemoryTTL)
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
 		args = []string{"run", ".", "-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
@@ -144,7 +157,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		args = []string{"run", ".", "-rag-lab", "-max-steps", "6", "-reasoning-effort", "minimal"}
 		input.Query = ragLabTitle
 	}
-	if input.RAG || input.RAGLab {
+	if input.RAG || input.RAGLab || input.Memory {
 		args = append(args, "-embedding", input.Embedding)
 	}
 	id := time.Now().Format("20060102-150405.000")
@@ -157,7 +170,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding})
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL})
 	s.launch(r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -194,16 +207,27 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "无法追加对话记录", http.StatusInternalServerError)
 		return
 	}
+	// 续聊沿用这条对话开始时的记忆设置：最近一次 start/continue 事件为准。
+	memory, ttl := false, ""
+	for _, e := range r.events {
+		if e.Kind == "start" || e.Kind == "continue" {
+			memory, ttl = e.Memory, e.MemoryTTL
+		}
+	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding})
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl})
 	args := []string{"run", ".", "-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
 	}
 	if history.RAG {
-		args = append(args, "-rag", "-embedding", history.Embedding)
+		args = append(args, "-rag")
 	}
+	if history.RAG || memory {
+		args = append(args, "-embedding", history.Embedding)
+	}
+	args = appendMemoryArgs(args, memory, ttl)
 	s.launch(r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -242,6 +266,54 @@ func (s *server) launch(r *run, args []string, history *resumeInput) {
 	}
 }
 
+func appendMemoryArgs(args []string, memory bool, ttl string) []string {
+	if memory {
+		args = append(args, "-memory")
+	}
+	if memory && ttl != "" {
+		args = append(args, "-memory-ttl", ttl)
+	}
+	return args
+}
+
+// 记忆文件由 agent 写入；观测台只读展示。删除走 agent 的 -memory-forget，与 agent 共用文件锁和事务。
+// 派生索引（背景说明、块状态）只用来展示，缺失或损坏时显示为空，不影响原始记忆。
+func (s *server) listMemory(w http.ResponseWriter, _ *http.Request) {
+	data, err := os.ReadFile(filepath.Join(s.agentDir, ".data", "memory.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		data, err = []byte(`{"next":0,"memories":[]}`), nil
+	}
+	if err != nil || !json.Valid(data) {
+		http.Error(w, "无法读取 .data/memory.json", http.StatusInternalServerError)
+		return
+	}
+	index, err := os.ReadFile(filepath.Join(s.agentDir, ".data", "memory-index", "contexts.json"))
+	if err != nil || !json.Valid(index) {
+		index = []byte(`{"chunks":{}}`)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"path": ".data/memory.json", "now": time.Now(), "file": json.RawMessage(data), "index": json.RawMessage(index)})
+}
+
+var memoryID = regexp.MustCompile(`^M[0-9]{1,9}$`)
+var purposePattern = regexp.MustCompile(`^[a-z_]{1,32}$`)
+
+func (s *server) forgetMemory(w http.ResponseWriter, req *http.Request) {
+	id := req.PathValue("id")
+	if !memoryID.MatchString(id) {
+		http.Error(w, "记忆编号格式为M加数字", http.StatusBadRequest)
+		return
+	}
+	cmd := exec.Command("go", "run", ".", "-memory-forget", id)
+	cmd.Dir = s.agentDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		http.Error(w, strings.TrimSpace(string(output)), http.StatusConflict)
+		return
+	}
+	w.Write(output)
+}
+
 type resumeInput struct {
 	Messages  []json.RawMessage `json:"messages"`
 	Usage     json.RawMessage   `json:"usage,omitempty"`
@@ -278,6 +350,10 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 	call, compact := 0, false
 	var result *resumeInput
 	for _, e := range r.events[start:end] {
+		// 记忆背景生成与重排是辅助调用：它们的输入不是对话，输出也不是 assistant 的回答，续聊不能从它们恢复。
+		if strings.HasPrefix(e.Purpose, "memory_") {
+			continue
+		}
 		if e.Kind == "request" {
 			request.Messages, request.Tools = nil, nil
 			if json.Unmarshal(e.Body, &request) != nil || len(request.Messages) == 0 {
@@ -285,7 +361,7 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 			}
 			var last struct{ Content string }
 			json.Unmarshal(request.Messages[len(request.Messages)-1], &last)
-			call, compact = e.Call, strings.HasPrefix(last.Content, "[上下文压缩请求]")
+			call, compact = e.Call, e.Purpose == "compact" || strings.HasPrefix(last.Content, "[上下文压缩请求]")
 			if !compact {
 				result = nil
 			}
@@ -425,7 +501,12 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	r.calls++
 	call := r.calls
 	r.mu.Unlock()
-	r.add(event{Kind: "request", Call: call, Body: raw(body)})
+	// 用途由 agent 在请求头明确标记，只记录、不转发给上游；旧版本 agent 没有这个头。
+	purpose := req.Header.Get("X-Agent-Purpose")
+	if !purposePattern.MatchString(purpose) {
+		purpose = ""
+	}
+	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose})
 
 	start := time.Now()
 	upstream, err := http.NewRequestWithContext(req.Context(), http.MethodPost, s.upstream, bytes.NewReader(body))
@@ -436,7 +517,7 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 		if response, err = http.DefaultClient.Do(upstream); err == nil {
 			defer response.Body.Close()
 			data, readErr := io.ReadAll(response.Body)
-			r.add(event{Kind: "response", Call: call, Status: response.StatusCode, Millis: time.Since(start).Milliseconds(), Body: raw(data)})
+			r.add(event{Kind: "response", Call: call, Status: response.StatusCode, Millis: time.Since(start).Milliseconds(), Body: raw(data), Purpose: purpose})
 			if readErr == nil {
 				w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 				w.WriteHeader(response.StatusCode)
@@ -446,7 +527,7 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 			err = readErr
 		}
 	}
-	r.add(event{Kind: "response", Call: call, Status: http.StatusBadGateway, Millis: time.Since(start).Milliseconds(), Text: err.Error()})
+	r.add(event{Kind: "response", Call: call, Status: http.StatusBadGateway, Millis: time.Since(start).Milliseconds(), Text: err.Error(), Purpose: purpose})
 	http.Error(w, err.Error(), http.StatusBadGateway)
 }
 

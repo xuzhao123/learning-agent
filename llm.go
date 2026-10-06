@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,6 +58,10 @@ func callModel(ctx context.Context, config modelConfig, history []Message, withT
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+config.APIKey)
+	if local {
+		// 观测台按这个明确标记区分主任务、摘要和记忆辅助调用，不靠回答内容猜测；代理不转发给上游。
+		request.Header.Set("X-Agent-Purpose", purpose)
+	}
 	client := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
@@ -118,30 +123,55 @@ func modelTools() []map[string]any {
 	return tools
 }
 
-// 只有请求计数器，不做另一层重试。所有实际请求（含摘要、超窗重试）共享上限。
+// 只有请求计数器，不做另一层重试。所有实际请求（含摘要、超窗重试、记忆背景生成与重排）共享上限。
+// 并行的 search_memory 也会请求模型，计数与用量统计由 mu 保护。
 type modelClient struct {
 	Config                                                   modelConfig
 	Calls, Limit, Output                                     int
 	SummaryCalls, Input, Completion, Cached, CacheKnownInput int
 	SummaryInput, SummaryCached                              int
+	AuxCalls, AuxInput, AuxCompletion                        int
+	mu                                                       sync.Mutex
 }
 
+// 记忆辅助调用不需要主任务的高推理强度；固定较低强度以控制延迟和用量。
+const memoryEffort = "low"
+
 func (c *modelClient) call(ctx context.Context, history []Message, withTools bool, purpose string) (modelReply, error) {
+	return c.callKeeping(ctx, history, withTools, purpose, 0)
+}
+
+// keep：发出这次请求后至少还要为主任务留下的请求次数；辅助调用用它保证主任务仍能回答。
+func (c *modelClient) callKeeping(ctx context.Context, history []Message, withTools bool, purpose string, keep int) (modelReply, error) {
 	if err := ctx.Err(); err != nil {
 		return modelReply{}, err
-	}
-	if c.Calls >= c.Limit {
-		return modelReply{}, errModelBudget
 	}
 	if _, err := contextGroups(history); err != nil {
 		return modelReply{}, err
 	}
+	aux := strings.HasPrefix(purpose, "memory_")
+	c.mu.Lock()
+	if c.Limit-c.Calls <= keep {
+		c.mu.Unlock()
+		return modelReply{}, errModelBudget
+	}
 	c.Calls++
+	n := c.Calls
 	if purpose == "compact" {
 		c.SummaryCalls++
 	}
-	fmt.Printf("Model request: %d/%d purpose=%s input_est=%d\n", c.Calls, c.Limit, purpose, contextTokens(history, withTools))
-	reply, err := callModel(ctx, c.Config, history, withTools, c.Output, purpose)
+	if aux {
+		c.AuxCalls++
+	}
+	c.mu.Unlock()
+	config := c.Config
+	if aux {
+		config.Effort = memoryEffort
+	}
+	fmt.Printf("Model request: %d/%d purpose=%s input_est=%d\n", n, c.Limit, purpose, contextTokens(history, withTools))
+	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if u := reply.Usage; u != nil {
 		c.Input += u.Prompt
 		c.Completion += u.Completion
@@ -156,6 +186,10 @@ func (c *modelClient) call(ctx context.Context, history []Message, withTools boo
 			if u.Details.Cached != nil {
 				c.SummaryCached += *u.Details.Cached
 			}
+		}
+		if aux {
+			c.AuxInput += u.Prompt
+			c.AuxCompletion += u.Completion
 		}
 		fmt.Printf("Usage: purpose=%s prompt_tokens=%d completion_tokens=%d cached_tokens=%s\n", purpose, u.Prompt, u.Completion, cache)
 	} else {
