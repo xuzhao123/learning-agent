@@ -1,8 +1,10 @@
 # 阅读材料
 
-每日推送的阅读材料按天整理，已去重。之后提到的新材料会持续追加到对应的天。链接一栏写"待补"的，表示推送里只有标题，等拿到原链接再补上。
+先理解当天笔记，再选择原始资料延伸阅读。Day 1–7 保留任务最初提供的材料清单；后续课程链接到笔记的参考部分，原始链接在该处维护，避免两份清单不同步。缺少原始链接的材料保留“待补”，不猜测来源。完整课程导航见 [README](../README.md#学习目录)。
 
 ## Day 1 · Tool Calling
+
+学习入口：[当天笔记](day-01/day-01-notes.md)。
 
 | 材料 | 链接 |
 | --- | --- |
@@ -12,29 +14,37 @@
 
 ## Day 2 · ReAct 进阶
 
+学习入口：[当天笔记](day-02/day-02-notes.md)。
+
 | 材料 | 链接 |
 | --- | --- |
 | Anthropic《Building Effective Agents》 | https://www.anthropic.com/engineering/building-effective-agents |
 | OpenAI《A Practical Guide to Building Agents》 | https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf |
-| 中文《Agent Loop 的循环控制流》 | 待补 |
+| 中文《Agent Loop 的循环控制流》 | https://github.com/joshuayang228/my-agent/blob/HEAD/methodology/m01-agent-loop.md |
 
 ## Day 3 · 上下文工程（上）
+
+学习入口：[当天笔记](day-03/day-03-notes.md)。
 
 | 材料 | 链接 |
 | --- | --- |
 | Anthropic《Effective context engineering for AI agents》 | https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents |
-| LangChain Short-term memory 文档 | 待补 |
-| 上文中文翻译解读 | 待补 |
+| LangChain Short-term memory 文档 | https://docs.langchain.com/oss/python/langchain/short-term-memory |
+| 上文中文翻译解读 | https://blog.csdn.net/qq_41185868/article/details/153544846 |
 
 ## Day 4 · 上下文工程（下）
+
+学习入口：[当天笔记](day-04/day-04-notes.md)。
 
 | 材料 | 链接 |
 | --- | --- |
 | Anthropic《Introducing Contextual Retrieval》 | https://www.anthropic.com/news/contextual-retrieval |
 | Manus 官方博客《Context Engineering for AI Agents: Lessons from Building Manus》 | https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus |
-| 上文完整中文翻译 | 待补 |
+| 上文完整中文翻译 | https://github.com/xinyuliucs/ai-agent-articles-zh/blob/HEAD/context-engineering-for-ai-agents-lessons-from-building-manus-zh.md |
 
 ## Day 5 · 记忆系统
+
+学习入口：[当天笔记](day-05/day-05-notes.md)。
 
 | 材料 | 链接 |
 | --- | --- |
@@ -44,6 +54,8 @@
 
 ## Day 6 · MCP 协议（上）
 
+学习入口：[当天笔记](day-06/day-06-notes.md)。
+
 | 材料 | 链接 |
 | --- | --- |
 | MCP 官方文档与 spec（先看 Concepts → Tools） | https://modelcontextprotocol.io |
@@ -51,6 +63,8 @@
 | mcp-go（Go SDK，client + server） | https://github.com/mark3labs/mcp-go |
 
 ## Day 7 · MCP 协议（下）
+
+学习入口：[当天笔记](day-07/day-07-notes.md)。
 
 | 材料 | 链接 |
 | --- | --- |
@@ -60,12 +74,38 @@
 
 ## Bonus · Agent Skills
 
+学习入口：[Skills 笔记](bonus-skills/skills-notes.md)。
+
 | 材料 | 链接 |
 | --- | --- |
 | Agent Skills 官方站（spec、frontmatter 字段、三级加载） | https://agentskills.io |
 | mcode 的 skills 实现文档 | https://github.com/immutex/mcode/blob/HEAD/docs/08-skills-and-agents-md.md |
 | 《Agent Skills Explained: SKILL.md vs MCP》 | https://www.alekseialeinikov.com/en/blog/topics/ai/agent-skills-explained-skill-md-vs-mcp |
 
----
+## Day 8 · 取消、超时与重试
 
-补救日的推送里，ReAct 论文重复出现过一次，没有重复收录。
+先读 [学习笔记](day-08/day-08-notes.md)，重点资料是 Go context、gRPC Deadlines、退避重试与级联故障。完整原始链接集中见该篇的 [参考](day-08/day-08-notes.md#参考)。
+
+## Day 9 · 检查点与恢复
+
+先读 [学习笔记](day-09/day-09-notes.md)，围绕写前日志、原子更新、任务锁与恢复语义阅读。完整资料见 [参考](day-09/day-09-notes.md#参考)。
+
+## Day 10 · 任务调度与幂等
+
+先读 [学习笔记](day-10/day-10-notes.md)，重点是队列、投递语义、幂等与并发容量。完整资料见 [参考](day-10/day-10-notes.md#参考)。
+
+## Day 11 · 浏览器自动化
+
+先读 [学习笔记](day-11/day-11-notes.md)，重点是 chromedp、CDP、等待条件、页面读取与安全边界。完整资料见 [参考](day-11/day-11-notes.md#参考)。
+
+## Day 12 · 代码执行沙箱
+
+先读 [学习笔记](day-12/day-12-notes.md)，重点是 bubblewrap、namespace、cgroup、seccomp 与组合工具风险。完整资料见 [参考](day-12/day-12-notes.md#参考)。
+
+## 扩展 · 子 agent
+
+先读 [学习笔记](bonus-subagents/subagents-notes.md)，重点是独立上下文、任务说明与权限继承。完整资料见 [参考](bonus-subagents/subagents-notes.md#参考)。
+
+## 扩展 · 模型路由
+
+先读 [学习笔记](bonus-routing/routing-notes.md)，重点是供应商差异、按用途路由与故障转移。完整资料见 [参考](bonus-routing/routing-notes.md#参考)。

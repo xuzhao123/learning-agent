@@ -54,30 +54,29 @@
 | C13 | 独立交付、技术判断与协作 | 职责 2、5；基本要求 3、4 | 问题与成功标准、方案取舍、设计评审与风险记录、实现和验证；AI 辅助工作的独立核验、真实上线与改进，以及实际协作证据 |
 | C14 | 中英文技术沟通与工程成果 | 基本要求 5；加分项 8 | 中文原理与设计说明、英文文档阅读与技术写作练习；可展示的代码、技术文章或非公开成果，沟通和发布情况如实记录 |
 
-## 当前进度
+## 当前覆盖与剩余缺口
 
-当前状态：Day 1 并行 ReAct loop 与 Day 2 护栏的实现和真实模型验收已完成；Day 3首版已通过真实模型对比，已按用户新设计重构并完成主要真实验证；Day 4 工具式检索与 Day 5 跨进程长期记忆已实现并真实运行；Day 5 记忆检索已升级为 Contextual Retrieval（背景补充、向量+BM25、RRF、LLM重排、预算与降级），已编译，真实模型验证待用户运行；Day 6–7 MCP client/server 与 Bonus 知识型 Skills 已实现并真实运行，Week 1 复盘已写；下表仅记录本次实际覆盖的能力部分，知识掌握情况待用户反馈。Week 2 的 Day 8（取消、超时与按错误类型重试）、Day 9（检查点与续跑）、Day 10（任务队列与幂等）和子 agent 已实现并真实运行，理解待反馈。Day 11 浏览器自动化（chromedp、实时画面）已实现并真实运行，去掉 UA 伪装后的模型端到端运行待方舟账户恢复，理解待反馈。
+课程进度统一维护在 [PROJECT.md](PROJECT.md)。本表只回答“哪些岗位能力已得到练习、还缺什么”；具体实验和验证证据链接到实践文档，用户理解未确认时不记为已掌握。
 
-| 能力 | 对应任务 | 实现与验证 | 理解与应用 | 学习入口 |
-| --- | --- | --- | --- | --- |
-| C01 | Day 1：Go 学习实现 | Go标准库实现，已编译；Day 1～3 真实场景通过 | 待反馈 | [Day 1 学习笔记](docs/day-01/day-01-notes.md) |
-| C02 | Day 1 + Day 2：循环与护栏；Day 8–9：运行时控制与恢复 | 原生调用、步数预算、重复动作熔断和未完成摘要已真实验证；Day 8：整次与单次时限、协作式取消、四种结局（含结果未知）、按错误类型重试、两段式 Ctrl+C 已真实验证；Day 9：检查点、写前日志、kill -9 后续跑（不重复请求模型、只读调用重做、其余回填未知）已真实验证 | 待反馈 | [Day 2 学习笔记](docs/day-02/day-02-notes.md)、[Day 8](docs/day-08/day-08-notes.md)、[Day 9](docs/day-09/day-09-notes.md) |
-| C03 | Day 1：消息历史；Day 3：窗口与压缩；Day 5：长期记忆 | 新设计实现Transcript/View、真实usage、集中清理与摘要配额；10步工具链压缩后仍使用早期结果；33轮正确召回账号和Day 3约束，完整记录不变；观测台可从存档恢复压缩View续聊，完整会话状态持久化待后续；已复核Codex官方源码afb436d，区分摘要请求裁剪与独立用户原话保留，以allo真实文本核算配额，未运行Codex对照实验；Day 3课件重排为14页，固定40%谷底改为按保留内容形成不同谷底，项目参数单列附录；Day 5：跨进程长期记忆（.data/memory.json），规则写入（用户“记住”原话、工具最终失败）、开场按相关度/重要性/新近度调入前5条写进system、search_memory按需检索、forget_memory更正删除、TTL与重要性加权淘汰、敏感信息拒存；真实验证跨进程召回、1分钟TTL过期、更正后新事实生效、上限2时淘汰低重要性失败记录；观测台显示调入/写入卡片与记忆面板，无头浏览器验证 | 用户已评审输出上限与配额，并指出姓名召回依赖裁剪边界、课件混用固定目标的问题；已补Codex两条压缩路径与预算区别，待复述确认 | [Day 3 学习笔记](docs/day-03/day-03-notes.md)、[Codex调研](docs/day-03/codex-context-research.md)、[Codex动画](docs/slides/day-03.html#s7)、[Day 5 学习笔记](docs/day-05/day-05-notes.md) |
-| C04 | Day 1：工具定义、解析与批量调度；Day 2：错误恢复分工；Bonus：Skills；Bonus：模型路由 | 已实际执行三工具的原生调用；分类错误与业务恢复仅讲解；Bonus：知识型 skill 三级加载（索引常驻、load_skill 按需），相关任务主动加载并照做、无关任务不加载已真实验证；模型路由：豆包 / DeepSeek 两家 OpenAI 兼容供应商的路由表、`-provider` 手动选择、观测台按 agent 声明的上游转发，DeepSeek 工具调用、子 agent 继承、续聊（含 reasoning_content 回传要求）已真实验证；按用途、级联与故障转移未做 | 已补充工具封装、执行器与模型的职责；理解待反馈 | [Day 1 学习笔记](docs/day-01/day-01-notes.md)、[Day 2 学习笔记](docs/day-02/day-02-notes.md) |
-| C05 | Day 1：原生函数调用协议；Day 6–7：MCP client 与 server | 已接入 tools、tool_calls、tool_call_id；Day 6：mcp-go client 连接示例 server（协商 2026-07-28，discover 优先、旧版退回 initialize），手写 JSON-RPC 对照两代协议，MCP 工具转换为 function 定义并由真实模型并行调用；Day 7：calculator MCP server，自举闭环与 agent→MCP→calculate 已真实运行，三层参数校验与两种错误已用手写请求验证；仅 stdio、单 server，Streamable HTTP 与鉴权待后续 | 待反馈（握手/capabilities 协商、信任边界待复述） | [Day 1 学习笔记](docs/day-01/day-01-notes.md)、[Day 6 学习笔记](docs/day-06/day-06-notes.md)、[Day 7 学习笔记](docs/day-07/day-07-notes.md) |
-| C06 | Day 4：本地向量检索与按需注入；Day 5：Contextual Retrieval | Day 4：本地向量检索与按需注入；Day 5：记忆检索加背景补充、Contextual 向量+BM25（Go实现词频/IDF/长度归一化）、RRF融合、LLM重排与过滤、缓存失效与降级，已编译，-memory-search提供keyword/vector/bm25/hybrid/rerank对比，真实对比待用户运行 | 24条FAQ、语义切块、纯Go向量检索与search_docs；检索已合并到Agent进程，移除8092服务；本地MiniLM / 线上Doubao embedding可选，网页续聊与重启恢复模型选择已验证；低分正文过滤、来源引用；本地与线上各8/8可答题召回，线上问答8/8答对且有效引用、2/2库外拒答；评估集已参与调试，不能视作生产效果保证，BM25/rerank/LLM背景生成仅讲解 | 待反馈 | [Day 4学习笔记](docs/day-04/day-04-notes.md) |
-| C07 | Day 1 + Day 2：并发与有限重试；Day 8–10：超时、检查点、任务队列与幂等 | 并行执行、指数退避、panic 转 error、错误回流已验证；Day 5记忆文件用进程内锁+flock串行化读-改-写、临时文件重命名原子写、损坏时停止不覆盖；Day 9：检查点原子写、flock 保证单一执行者（并发同ID第二个进程被拒）；Day 10：任务文件→channel→固定 worker→每任务一个子进程，任务ID即检查点ID：10任务3 worker 全部完成、真实 model_error 自动续跑、重跑全部 replayed 无新请求、中途 SIGINT 后再跑续上；单机实现，多机租约、死信队列与全局限流未做 | 已补充分类重试、超时、幂等与恢复原理；Day 8–10 理解待反馈 | [Day 2 学习笔记](docs/day-02/day-02-notes.md)、[Day 10 学习笔记](docs/day-10/day-10-notes.md) |
-| C08 | Day 1：实际运行与反馈；观测台运行对比 | 以真实模型请求与结果检查行为；观测台可并排比较多次运行的调用数、绕路、tokens 与耗时；Day 4新增10题固定集、无检索/有检索对比与人工评阅：线上RAG8/8答对、有效引用8/8，库外2/2拒答；记录195200.394；独立留出集与规模化评分待后续 | 待反馈 | [Day 1 学习笔记](docs/day-01/day-01-notes.md) |
-| C09 | Day 1：完整步骤轨迹；可视化观测台 | 已记录轮次、ID、工具、结果和终止；Day 2 补充重试次数、停止原因与步骤摘要；独立观测台在协议层关联运行、模型调用与工具结果，提供 Trajectory 账本与瀑布时间轴、确定性的绕路与回退分析、token 与上下文压力轨、多运行对比和回放，已真实运行；Day 3网页入口完整观测33轮对话、摘要和大工具结果，终端输出与输入容量可直接查看；续聊在同一轨迹追加，重启后调用编号连续且真实工具结果可复用；网页改为对话界面，同一份协议数据既还原成聊天流，也展开为观测视图；参考DeepSeek Harness按用户Turn→模型Step分组，主表展示SYSTEM/USER/ASSISTANT/TOOL/COMPACTED/EXIT事件，完整messages与原始请求响应放在Step详情；输入输出、参数结果和Schema使用标签页；单任务3步、续聊8回合、并行工具、长对话、独立实验、折叠回放和对比均用真实存档核对；每个Step保留原始输入/输出开关，完整请求与响应使用双栏JSON卡片、行号、着色和复制，可在对话页与轨迹页查看；顶栏显示对话ID，URL携带run参数，支持链接直达、刷新恢复和浏览器前进后退；文档与运行提示统一使用项目相对路径，启动日志不显示项目绝对目录；指标聚合与告警待后续 | 待反馈 | [Day 1 学习笔记](docs/day-01/day-01-notes.md)、[观测台笔记](docs/observer/observer-notes.md) |
-| C10 | Day 2：生产失败类型扩展；Day 7：MCP server 信任边界；Bonus：skill 安全边界；Day 11：浏览器 SSRF 与注入边界 | Day 11：open_page 拒绝回环/私有/链路本地地址（127.0.0.1、169.254.169.254 实测被拒），网页内容按数据处理的 system 规则，不伪装身份、不绕过验证码；只检查起始地址、Chrome 沙箱在本机关闭，均已记录为已知问题；Day 7：server 端 schema/取参/语义三层校验，手写恶意参数（多余 shell 字段、os.Exit）被拦截已验证；已知 MCP 子进程继承全部环境变量，最小权限待 Week 2；Bonus：skill 只读知识、按索引查表防路径注入、不执行脚本；沙箱与隔离待后续 | 已说明外部内容、权限校验与提示词注入边界；理解待反馈 | [Day 2 学习笔记](docs/day-02/day-02-notes.md) |
-| C11 | Day 11：浏览器自动化 | chromedp 驱动无头 Chrome：web_search / open_page 只读工具，每次调用一个标签页、取消即关闭，页面内轮询等待内容，innerText 截断与 find，CDP screencast 实时画面接入观测台；验证码如实报告、内网地址拦截、超时结果未知后重试、停止与续聊、子 agent 各自浏览已真实运行；操作型工具（点击、填表、登录）、会话保持、CI 与代码执行未做 | 待确认 | [Day 11 学习笔记](docs/day-11/day-11-notes.md) |
-| C12 | Bonus：子 agent | spawn_agent 以子进程运行全新上下文的子 agent，复用队列执行器；三个子 agent 并行后汇总、父 kill -9 后续跑（完成的子任务取存档、未完成的续跑）、Ctrl+C 传递已真实验证；成本对比只有单次观察（父2+子7次请求），没有与单 agent 的系统对比 | 待确认 | [子 agent 学习笔记](docs/bonus-subagents/subagents-notes.md) |
-| C13 | 待用户任务 | 未开始 | 待确认 | — |
-| C14 | 待用户任务 | 未开始 | 待确认 | — |
+| 能力 | 当前实践与证据 | 剩余缺口 | 理解情况 |
+| --- | --- | --- | --- |
+| C01 | Go 单入口与按功能分包；源码阅读和文档职责已整理。见 [Day 1](docs/day-01/day-01-lab.md)、[README](README.md) | 真实生产交付、经验年限与复杂系统责任需另行积累 | 待反馈 |
+| C02 | 工具调用、循环护栏、运行时与检查点。见 [Day 2](docs/day-02/day-02-lab.md)、[Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md) | 长任务规划、更多异常组合与稳定性评估 | 待反馈 |
+| C03 | Transcript/View、压缩和来源可追溯的长期记忆。见 [Day 3](docs/day-03/day-03-lab.md)、[Day 5](docs/day-05/day-05-lab.md) | 记忆检索升级的真实对比、写入与遗忘质量评估 | 用户已指出上下文设计问题；整体理解待确认 |
+| C04 | 原生工具编排、知识型 Skills、手动模型路由。见 [Day 1](docs/day-01/day-01-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)、[路由](docs/bonus-routing/routing-lab.md) | 按用途路由、级联与故障转移 | 待反馈 |
+| C05 | MCP client/server，stdio、Streamable HTTP 与多 server 接入；参数校验对照已有记录。见 [Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[观测台](docs/observer/observer-notes.md) | 远程鉴权、动态工具列表与第三方 server 最小环境权限 | 待反馈 |
+| C06 | Go 向量检索，本地/线上模型；记忆加入背景、BM25、RRF 与重排。见 [Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md) | 记忆升级的真实评估、独立语料与检索阈值校准 | 待反馈 |
+| C07 | 工具并发、有限重试、文件锁事务、检查点、任务队列与幂等。见 [Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md)、[Day 10](docs/day-10/day-10-lab.md) | 多机协调、全局限流、死信队列与持久化版本 | 待反馈 |
+| C08 | Day 4 固定题集、无检索/有检索对比与人工评阅；结果见 [对比报告](docs/day-04/day-04-lab.md) | 留出集、规模化评分、回归集与线上失败归因 | 待反馈 |
+| C09 | Turn/Step、原始请求响应、轨迹/迷宫/对比与续聊。见 [观测台](docs/observer/observer-notes.md) | 指标聚合、流式阶段、端到端 tracing 与告警 | 待反馈 |
+| C10 | MCP 参数与信任边界、只读 Skills、浏览器内网拦截、Bash 隔离及联网审批。见 [Day 7](docs/day-07/day-07-lab.md)、[Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 多租户、注入攻防、跨工具外发与完整审计；现有沙箱限制见 Day 12 边界 | 待反馈 |
+| C11 | chromedp 页面读取与画面，Bash 沙箱代码执行。见 [Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 操作型浏览器、会话保持、CI 执行器与生产使用 | 待反馈 |
+| C12 | 子 agent 的独立上下文、并行、继承与恢复。见 [子 agent](docs/bonus-subagents/subagents-lab.md) | 与单 agent 的系统成本/效果对比，复杂协作 | 待反馈 |
+| C13 | 用户已指出上下文输出上限、摘要配额和展示问题；方案与风险讨论见 [Day 3 设计](docs/day-03/context-system-design.md)、[深度问题](docs/deep-questions.md) | 独立项目交付、真实上线与改进、团队评审和协作证据 | 待确认 |
+| C14 | 中文学习文档、原始资料阅读入口与 Go 实现已整理。见 [学习目录](README.md#学习目录)、[阅读材料](docs/reading-list.md) | 独立技术写作、英文交流、成果发布与开源证据 | 待确认 |
 
 记录原则：
 
-- 功能状态依据真实实现与验证结果更新，保留未验证项。
-- 理解状态依据用户的解释、练习或独立修改证据更新；尚未反馈时保持“待确认”。
-- 各能力可能需要多个每日任务积累，完成一个例子时注明已覆盖范围和剩余缺口。
-- 真实上线、故障分析、团队协作和成果发布与本地实验分别记录，并保留可核查证据。
+- 实现与验证以源码和实践记录为依据，注明未验证范围，不把小样本当生产效果保证。
+- 理解状态以用户复述、练习或独立修改为依据。
+- 本地学习实践、真实上线、线上故障分析和团队协作分别记录。

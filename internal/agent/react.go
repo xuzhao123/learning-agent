@@ -13,6 +13,7 @@ import (
 	"learning-agent/internal/llm"
 	"learning-agent/internal/memory"
 	"learning-agent/internal/retrieval"
+	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/tools"
 )
@@ -25,7 +26,7 @@ var (
 
 // 结果未知时可以直接再执行一次的工具：只读，或带幂等键（spawn_agent 按子任务ID续跑或取回存档）。
 // 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
-var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true}
+var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "request_network_access": true} // bash 不在里面：命令可能有副作用
 
 // 主线：请求模型 → 读取 tool_calls → 执行工具 → 保存结果 → 下一轮。
 // D9：每个边界都写检查点（见 checkpoint.go）；Resume 不为空时从检查点接着跑，不重复已完成的轮次。
@@ -215,26 +216,39 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 }
 
 // 每个 goroutine 只写自己的结果；历史由主循环在整批结束后追加。
+// 有顺序依赖的工具在同一批里按调用顺序一个接一个执行：bash 的后一条命令常常要用前一条生成的文件，
+// 和 shell 里写 a; b 一样。其余工具照常并行。
+var sequential = map[string]bool{"bash": true}
+
 func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries int) []llm.Observation {
 	results := make([]llm.Observation, len(calls))
 	slots := make(chan struct{}, parallel)
-	var wg sync.WaitGroup
-	for i, call := range calls {
-		wg.Add(1)
-		go func(i int, call llm.ToolCall) {
-			defer wg.Done()
-			result := llm.Observation{ID: call.ID, Tool: call.Function.Name}
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-				result = runWithRetry(ctx, call, retries)
-			case <-ctx.Done():
-				// 还在排队就被取消：一次都没开始，可以放心重做。
-				result.Status, result.Error = "not_run", ctx.Err().Error()
-			}
-			results[i] = result
-		}(i, call)
+	run := func(call llm.ToolCall) llm.Observation {
+		result := llm.Observation{ID: call.ID, Tool: call.Function.Name}
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+			return runWithRetry(ctx, call, retries)
+		case <-ctx.Done():
+			// 还在排队就被取消：一次都没开始，可以放心重做。
+			result.Status, result.Error = "not_run", ctx.Err().Error()
+			return result
+		}
 	}
+	var wg sync.WaitGroup
+	var ordered []int
+	for i, call := range calls {
+		if sequential[call.Function.Name] {
+			ordered = append(ordered, i)
+			continue
+		}
+		wg.Go(func() { results[i] = run(call) })
+	}
+	wg.Go(func() {
+		for _, i := range ordered {
+			results[i] = run(calls[i])
+		}
+	})
 	wg.Wait()
 	return results
 }
@@ -417,6 +431,9 @@ func SystemPrompt() string {
 	}
 	if browser.Enabled {
 		prompt += browser.Rules
+	}
+	if sandbox.Enabled {
+		prompt += sandbox.Rules()
 	}
 	if SubagentArgs != nil {
 		prompt += subagentRules

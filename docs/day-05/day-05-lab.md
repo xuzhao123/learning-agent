@@ -1,6 +1,6 @@
 # Day 5 项目实践：给 Agent 加上跨进程的长期记忆
 
-原理见 [Day 5 学习笔记](day-05-notes.md)（Contextual Retrieval 在第 11 节）。本文只记录本项目怎样实现、怎样动手观察，以及真实运行结果。启动命令见根目录 [README](../../README.md#day-5跨会话长期记忆)。
+原理见 [Day 5 学习笔记](day-05-notes.md)（Contextual Retrieval 在第 11 节）。本文只记录本项目怎样实现、怎样动手观察，以及真实运行结果。公共启动与模型配置见根目录 [README](../../README.md#模型与工具配置)，本课动手步骤见下文。
 
 ## 1. 实现概览
 

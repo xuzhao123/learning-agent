@@ -50,6 +50,8 @@ type event struct {
 	Subagents bool            `json:"subagents,omitempty"` // 本对话允许 spawn_agent，续聊沿用
 	Browser   bool            `json:"browser,omitempty"`   // 本对话启用浏览器工具，续聊沿用
 	Provider  string          `json:"provider,omitempty"`  // 本对话的模型供应商（-provider），续聊沿用
+	Bash      bool            `json:"bash,omitempty"`      // 本对话启用 bash 沙箱，续聊沿用
+	NetAllow  []string        `json:"net_allow,omitempty"` // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
 	Task      string          `json:"task,omitempty"`      // 发出这次请求的 agent 任务ID（X-Agent-Task）
 	Sub       bool            `json:"sub,omitempty"`       // 请求来自子 agent：不进入父对话流、不参与续聊恢复
 }
@@ -120,6 +122,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /runs/{id}/messages", s.continueRun)
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
+	mux.Handle("POST /runs/{id}/network", sameOrigin(http.HandlerFunc(s.decideNetwork)))
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
 	mux.HandleFunc("GET /memory", s.listMemory)
@@ -186,6 +189,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		Subagents  bool   `json:"subagents"`
 		Browser    bool   `json:"browser"`
 		Provider   string `json:"provider"`
+		Bash       bool   `json:"bash"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -200,7 +204,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lab := input.ContextLab || input.RAGLab
-	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents || input.Browser)) {
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents || input.Browser || input.Bash)) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
 		return
 	}
@@ -243,6 +247,9 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if input.Provider != "" {
 		args = append(args, "-provider", input.Provider)
 	}
+	if input.Bash {
+		args = append(args, "-bash")
+	}
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
 		args = []string{"-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
@@ -267,7 +274,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider})
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider, Bash: input.Bash})
 	s.launch(r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -305,17 +312,17 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// 续聊沿用这条对话开始时的记忆、skill 与 MCP 设置：最近一次 start/continue 事件为准。
-	memory, ttl, subagents, browser, provider := false, "", false, false, ""
+	memory, ttl, subagents, browser, provider, bash := false, "", false, false, "", false
 	var skills []string
 	var servers []mcpServer
 	for _, e := range r.events {
 		if e.Kind == "start" || e.Kind == "continue" {
-			memory, ttl, skills, servers, subagents, browser, provider = e.Memory, e.MemoryTTL, e.Skills, e.MCP, e.Subagents, e.Browser, e.Provider
+			memory, ttl, skills, servers, subagents, browser, provider, bash = e.Memory, e.MemoryTTL, e.Skills, e.MCP, e.Subagents, e.Browser, e.Provider, e.Bash
 		}
 	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider})
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow()})
 	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
@@ -336,6 +343,12 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	}
 	if provider != "" {
 		args = append(args, "-provider", provider)
+	}
+	if bash {
+		args = append(args, "-bash")
+		for _, domain := range r.netAllow() {
+			args = append(args, "-net-allow", domain)
+		}
 	}
 	s.launch(r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
@@ -608,10 +621,15 @@ func (r *run) withEmbedding(result *resumeInput) *resumeInput {
 // 调用方持有r.mu。正常结束的对话从最后一个完整回答接着聊；
 // 中途停下的对话（停止按钮、超时、出错）只要 agent 写过检查点，就从检查点接着聊。
 func (r *run) canContinue() bool {
-	if r.Query == ragLabTitle || !r.Done || len(r.events) == 0 || r.events[len(r.events)-1].Kind != "exit" {
+	// 用户的网络审批（allow/deny）可能追加在 exit 之后，不算对话进程的事件。
+	i := len(r.events) - 1
+	for i >= 0 && (r.events[i].Kind == "allow" || r.events[i].Kind == "deny") {
+		i--
+	}
+	if r.Query == ragLabTitle || !r.Done || i < 0 || r.events[i].Kind != "exit" {
 		return false
 	}
-	if r.events[len(r.events)-1].Text == "exit 0" {
+	if r.events[i].Text == "exit 0" {
 		return r.calls > 0
 	}
 	return r.lastCheckpoint() != ""
@@ -819,6 +837,62 @@ func (s *server) streamEvents(w http.ResponseWriter, req *http.Request) {
 
 // 停止按钮：第一次向 agent 进程组发 SIGINT，agent 回填结果、写好检查点再退出（Day 8 的优雅停止）；
 // 第二次发 SIGKILL 强制结束。子 agent 在各自的进程组里，由父 agent 收到 SIGINT 后转发。
+// Day 12：沙箱网络白名单由用户审批。agent 的 request_network_access 只打印一行请求；
+// 用户在页面上点“允许 / 拒绝”，这里记一条 allow/deny 事件（存进对话记录），下一轮续聊时作为 -net-allow 传给 agent。
+// 模型自己无法调用这个接口：它在断网的沙箱里，也没有访问观测台的工具。
+var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+
+func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
+	r := s.find(req.PathValue("id"))
+	if r == nil {
+		http.Error(w, "找不到这条对话", http.StatusNotFound)
+		return
+	}
+	var input struct {
+		Domain string `json:"domain"`
+		Allow  bool   `json:"allow"`
+	}
+	if json.NewDecoder(req.Body).Decode(&input) != nil || len(input.Domain) > 253 || !domainPattern.MatchString(input.Domain) {
+		http.Error(w, "domain 需要是小写域名", http.StatusBadRequest)
+		return
+	}
+	kind := "deny"
+	if input.Allow {
+		kind = "allow"
+	}
+	r.mu.Lock()
+	if r.Done {
+		// 已结束的对话，记录文件已经关了：临时以追加方式打开，写完再关，保证重启后审批仍在。
+		file, err := os.OpenFile(filepath.Join(s.runsDir, r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			r.mu.Unlock()
+			http.Error(w, "无法写入对话记录", http.StatusInternalServerError)
+			return
+		}
+		r.file = file
+		defer file.Close()
+	}
+	r.mu.Unlock()
+	r.add(event{Kind: kind, Text: input.Domain})
+	json.NewEncoder(w).Encode(map[string]any{"net_allow": r.netAllow()})
+}
+
+// 当前允许的域名：按时间顺序处理 allow/deny，后一次决定覆盖前一次。
+func (r *run) netAllow() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := []string{}
+	for _, e := range r.events {
+		if e.Kind == "allow" && !slices.Contains(list, e.Text) {
+			list = append(list, e.Text)
+		}
+		if e.Kind == "deny" {
+			list = slices.DeleteFunc(list, func(d string) bool { return d == e.Text })
+		}
+	}
+	return list
+}
+
 func (s *server) stopRun(w http.ResponseWriter, req *http.Request) {
 	r := s.find(req.PathValue("id"))
 	if r == nil {

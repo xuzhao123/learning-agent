@@ -191,6 +191,17 @@ button { cursor: pointer; }
 .sp-task { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--soft); white-space: pre-wrap; word-break: break-word; font-size: 13px; }
 .sp-body .label { margin-top: 4px; }
 .sp-body .meta { overflow-wrap: anywhere; }
+/* Day 12 bash 沙箱：终端卡片与网络审批 */
+.term { margin: 4px 0 0; padding: 10px 12px; border-radius: 10px; background: #15171a; color: #e6e6e6; font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
+.term .cmd { color: #8fd18f; }
+.exit-chip { padding: 0 6px; border-radius: 4px; font: 600 10px/1.7 var(--mono); background: color-mix(in srgb, var(--ok) 14%, var(--panel)); color: var(--ok); }
+.exit-chip.bad { background: color-mix(in srgb, var(--err) 14%, var(--panel)); color: var(--err); }
+.net-card { margin: 6px 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 12px; background: var(--panel); }
+.net-card b { font: 600 13px var(--mono); }
+.net-card .why { margin: 4px 0 8px; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+.net-card .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.net-card button { padding: 3px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.net-card button.yes { border-color: var(--accent); background: var(--accent); color: #fff; }
 /* Day 11 浏览器：卡片缩略图 + 侧栏实时画面 */
 .web-card .av { overflow: hidden; width: 64px; height: 40px; border-radius: 6px; background: var(--soft); }
 .web-card .av img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
@@ -395,7 +406,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><select id="provider" aria-label="模型" title="模型路由：agent 用 -provider 选择供应商"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><label class="meta" title="允许 agent 调用 spawn_agent，把独立子任务交给子 agent"><input id="use-sub" type="checkbox"> 子 agent</label><label class="meta" title="增加 web_search 与 open_page：agent 用无头 Chrome 查资料，右侧可看实时画面"><input id="use-web" type="checkbox"> 浏览器</label><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><select id="provider" aria-label="模型" title="模型路由：agent 用 -provider 选择供应商"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><label class="meta" title="允许 agent 调用 spawn_agent，把独立子任务交给子 agent"><input id="use-sub" type="checkbox"> 子 agent</label><label class="meta" title="增加 bash：命令在 bubblewrap 沙箱里执行（断网、只可写 /workspace、资源有上限）；联网要经你批准"><input id="use-bash" type="checkbox"> Bash 沙箱</label><label class="meta" title="增加 web_search 与 open_page：agent 用无头 Chrome 查资料，右侧可看实时画面"><input id="use-web" type="checkbox"> 浏览器</label><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -548,7 +559,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", web: {}, stopRequested: false }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -561,7 +572,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.stopRequested = false; r.checkpoint = ""; }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.stopRequested = false; r.checkpoint = ""; }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -641,6 +652,7 @@ function apply(r, e) {
     const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
     if (capacity) r.inputCapacity = Number(capacity[1]);
   }
+  else if (e.kind === "allow" || e.kind === "deny") r.netDecision[e.text] = e.kind;
   else if (e.kind === "stop") { r.stopRequested = true; r.logs.push({ ...e, kind: "stdout", text: e.text }); }
   else if (e.kind === "exit") { r.exit = e.text || "exit"; r.tEnd = time; }
   if (e.kind === "stdout" || e.kind === "stderr") {
@@ -1483,6 +1495,8 @@ function renderCall(box, r, c, last) {
   for (const t of c.tools) {
     if (t.name === "spawn_agent" && !r.isSub) { box.append(agentCard(r, t)); continue; }
     if (WEB_TOOLS.includes(t.name)) { box.append(webCard(r, t)); continue; }
+    if (t.name === "bash") { box.append(bashCard(r, c, t)); continue; }
+    if (t.name === "request_network_access") { box.append(netCard(r, t)); continue; }
     const icon = t.state === "running" ? el("span", "ico") : el("span", "ico " + (t.detour ? "bad" : "ok"), t.detour ? "✕" : "✓");
     if (t.state === "running") icon.append(el("span", "spin"));
     const head = [icon, el("span", "tname", t.name), el("span", "targs", clip(compact(t.args), 90))];
@@ -1617,6 +1631,56 @@ function renderSubPanel() {
   if (st.key === "running" && sub?.calls.length && sub.calls.at(-1).end && sub.calls.at(-1).tools.every((t) => t.done)) body.append(el("div", "shimmer", "思考中…"));
   panel.replaceChildren(head, nav, body);
   body.scrollTop = sameAgent && !stick ? top : body.scrollHeight;
+}
+// ---------- Day 12 bash 沙箱 ----------
+function bashCard(r, c, t) {
+  const args = parse(t.args) || {}, res = parse(t.result), out = res?.result || {};
+  const running = !t.done && !r.exit;
+  const icon = running ? el("span", "ico") : el("span", "ico " + (res?.status === "ok" ? "ok" : "bad"), res?.status === "ok" ? "✓" : "✕");
+  if (running) icon.append(el("span", "spin"));
+  const head = [icon, el("span", "hub-chip", "BASH"), el("span", "targs", "$ " + clip(args.command || t.args, 90))];
+  if (res?.status === "ok") head.push(el("span", "exit-chip" + (out.exit_code === 0 ? "" : " bad"), out.signal ? out.signal : "exit " + out.exit_code));
+  if (t.done) head.push(el("span", "", sec(t.done - c.end)));
+  const term = el("pre", "term");
+  term.append(el("span", "cmd", "$ " + (args.command || t.args) + "\n"));
+  if (res?.status === "ok") term.append(out.output || "（无输出）");
+  else if (res) term.append(res.error || pretty(res));
+  else term.append(running ? "执行中…" : t.state === "lost" ? "进程已结束，没有结果" : "");
+  const body = [term];
+  const notes = [];
+  if (out.truncated) notes.push(`输出共 ${out.output_bytes} 字节，只保留开头和结尾各 8KB`);
+  if (out.note) notes.push(out.note);
+  if (out.network_denied) notes.push("被代理拒绝的主机：" + out.network_denied.join("、") + "（不在白名单）");
+  if (res?.status === "unknown") notes.push("超时或被停止：沙箱里的进程已全部结束；命令是否已经产生副作用不确定");
+  for (const n of notes) body.push(el("div", "meta", n));
+  return step(`t${c.n}-${t.index}`, head, body);
+}
+// 模型只能发起请求；“允许 / 拒绝”只有人在页面上点。决定记进对话记录，下一轮续聊时作为 -net-allow 传给 agent。
+function netCard(r, t) {
+  const args = parse(t.args) || {}, res = parse(t.result), domain = res?.result?.domain || args.domain || "";
+  const root = ui.run, decision = root.netDecision[domain];
+  const card = el("div", "net-card");
+  card.append(el("div", "", "沙箱请求访问 "), el("b", "", domain), el("div", "why", "理由：" + (args.reason || "")));
+  const acts = el("div", "acts");
+  if (res?.result?.status === "already_allowed") acts.append(el("span", "meta", "已在白名单中"));
+  else if (decision) acts.append(el("span", "meta", decision === "allow" ? "已允许：下一轮对话起，沙箱可经代理访问它及其子域名" : "已拒绝"));
+  else if (res?.status === "ok") {
+    const yes = el("button", "yes", "允许"), no = el("button", "", "拒绝");
+    yes.type = no.type = "button";
+    const decide = async (allow) => {
+      yes.disabled = no.disabled = true;
+      try {
+        const resp = await fetch(`/runs/${encodeURIComponent(root.id)}/network`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain, allow }) });
+        if (!resp.ok) throw new Error(await resp.text());
+        root.netDecision[domain] = allow ? "allow" : "deny";
+        renderChat();
+      } catch (err) { alert("操作失败：" + err.message); yes.disabled = no.disabled = false; }
+    };
+    yes.onclick = () => decide(true); no.onclick = () => decide(false);
+    acts.append(yes, no, el("span", "meta", "批准后下一轮生效"));
+  } else acts.append(el("span", "meta", res ? (res.error || "请求无效") : "等待中…"));
+  card.append(acts);
+  return card;
 }
 // ---------- Day 11 浏览器 ----------
 // agent 把 screencast 帧不断覆盖写到 .data/browser/<任务ID>/<调用ID>.jpg，结束时写入最终截图。
@@ -1849,6 +1913,8 @@ function syncComposer() {
   // 一条对话固定一个模型：续聊沿用开始时的选择（换模型请新建对话）。
   $("provider").disabled = !!r;
   $("provider").value = r ? r.provider || "ark" : load("provider") || "ark";
+  $("use-bash").disabled = !!r;
+  $("use-bash").checked = r ? r.bash : load("useBash") === "1";
   $("use-web").disabled = !!r;
   $("use-web").checked = r ? r.browser : load("useWeb") === "1";
   // 运行中发送键变成停止键（Codex 客户端的做法）：第一次优雅停止，第二次强制结束。
@@ -1860,7 +1926,7 @@ function syncComposer() {
   $("send").setAttribute("aria-label", running ? (r.stopRequested ? "强制结束" : "停止") : "发送");
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
-  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "") + ($("use-sub").checked ? " · 子 agent" : "") + ($("use-web").checked ? " · 浏览器" : "");
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "") + ($("use-sub").checked ? " · 子 agent" : "") + ($("use-web").checked ? " · 浏览器" : "") + ($("use-bash").checked ? " · Bash 沙箱" : "");
   $("hint").textContent = !r ? ($("mem").checked ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : $("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次 ■ 强制结束" : "agent 正在回复，点 ■ 停止；本轮结束后可以继续提问") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : r.exit !== "exit 0" ? "上一轮中途停下：继续提问会从检查点接着聊" : "Enter 发送，会延续这条对话的上下文";
 }
@@ -2135,7 +2201,7 @@ $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked, subagents: $("use-sub").checked, browser: $("use-web").checked, provider: $("provider").value });
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked, subagents: $("use-sub").checked, browser: $("use-web").checked, provider: $("provider").value, bash: $("use-bash").checked });
 };
 $("send").onclick = async (ev) => {
   if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交
@@ -2150,6 +2216,7 @@ $("send").onclick = async (ev) => {
 };
 $("use-sub").onchange = () => { save("useSub", $("use-sub").checked ? "1" : "0"); syncComposer(); };
 $("provider").onchange = () => { save("provider", $("provider").value); syncComposer(); };
+$("use-bash").onchange = () => { save("useBash", $("use-bash").checked ? "1" : "0"); syncComposer(); };
 $("use-web").onchange = () => { save("useWeb", $("use-web").checked ? "1" : "0"); syncComposer(); };
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };

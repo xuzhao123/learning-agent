@@ -24,6 +24,7 @@ import (
 	"learning-agent/internal/observer"
 	"learning-agent/internal/queue"
 	"learning-agent/internal/retrieval"
+	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/tools"
 )
@@ -33,6 +34,10 @@ func main() {
 	run := run
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
 		run = func() error { return observer.Run(os.Args[2:], mcp.Handler()) }
+	}
+	// 沙箱里的第一个程序（见 internal/sandbox）：转发代理端口后运行命令。不解析其他参数、不读配置。
+	if len(os.Args) > 1 && os.Args[1] == "sandbox-init" {
+		os.Exit(sandbox.Init(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "queue" {
 		run = func() error { return queue.Run(os.Args[2:]) }
@@ -88,6 +93,10 @@ func run() error {
 	taskID := flag.String("task-id", "", "Day 9：检查点ID（字母、数字和 ._-）；不给则生成随机 UUID")
 	resume := flag.String("resume", "", "Day 9：从这个ID的检查点续跑；配置取自检查点，须单独使用")
 	flag.BoolVar(&browser.Enabled, "browser", false, "Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料（CHROME_PATH 可指定浏览器）")
+	flag.BoolVar(&sandbox.Enabled, "bash", false, "Day 12：增加 bash 与 request_network_access，在 bubblewrap 沙箱里执行命令（仅 Linux）")
+	flag.BoolVar(&sandbox.ProjectRO, "bash-project-ro", false, "配合 -bash：把项目目录只读挂到 /project（.env、.data、.git 除外）")
+	var netAllow stringList
+	flag.Var(&netAllow, "net-allow", "配合 -bash：沙箱可经代理访问的域名（含子域名，可重复）；由用户批准后添加")
 	subagents := flag.Bool("subagents", false, "增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程）")
 	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
 	flag.Parse()
@@ -304,6 +313,19 @@ func run() error {
 		llm.Tools = append(llm.Tools, browser.Definitions...)
 		defer browser.Close()
 	}
+	if (sandbox.ProjectRO || len(netAllow) > 0) && !sandbox.Enabled {
+		return errors.New("bash-project-ro与net-allow需要配合-bash")
+	}
+	for _, domain := range netAllow {
+		if !sandbox.ValidDomain(strings.ToLower(domain)) {
+			return fmt.Errorf("net-allow 需要是小写域名（不含协议、路径和 IP）：%s", domain)
+		}
+		sandbox.Allow = append(sandbox.Allow, strings.ToLower(domain))
+	}
+	if sandbox.Enabled {
+		llm.Tools = append(llm.Tools, sandbox.Definitions...)
+		defer sandbox.Close()
+	}
 	if !*contextLab && !*ragLab && strings.TrimSpace(*question) == "" {
 		fmt.Print("请输入任务： ")
 		*question, _ = bufio.NewReader(os.Stdin).ReadString('\n')
@@ -347,7 +369,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true, "bash": true, "bash-project-ro": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {
@@ -359,6 +381,9 @@ func run() error {
 		}
 		for _, name := range skillNames {
 			agent.SubagentArgs = append(agent.SubagentArgs, "-skill", name)
+		}
+		for _, domain := range sandbox.Allow {
+			agent.SubagentArgs = append(agent.SubagentArgs, "-net-allow", domain)
 		}
 		llm.Tools = append(llm.Tools, agent.SpawnDefinition)
 	}
@@ -385,6 +410,8 @@ func run() error {
 	if browser.Enabled {
 		browser.FrameDir = filepath.Join(".data", "browser", agent.CheckpointID)
 	}
+	// 沙箱工作目录按任务ID分开：同一任务的多次调用、续跑共用；子 agent 有自己的目录。
+	sandbox.Dir = filepath.Join(".data", "sandbox", agent.CheckpointID)
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
 }

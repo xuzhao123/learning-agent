@@ -5,7 +5,7 @@
 - **第一部分是调研。** 看 Anthropic（Claude API、Claude Code）和 OpenAI（Codex）分别怎样管理上下文。
 - **第二部分是设计。** 在调研基础上，为本项目（Go + 方舟 Chat Completions）设计一个完整的上下文系统。
 
-文档第二部分已按用户要求落地，当前实现说明见 [Day 3学习笔记](day-03-notes.md)。完整记录暂存内存；真实用量与密文字节差异较大时，摘要前缀估算也使用usage校准。主要真实验证已完成：33轮账号与范围召回、10步计算中途压缩、写入截断及实际缓存命中。清理收益门槛、连续压缩熔断与上游超窗重试目前完成代码检查。其余研究结论保留原调研时间与来源。调研日期是 2026-10-03。Codex 的结论来自开源仓库 [openai/codex](https://github.com/openai/codex) 的源码（提交 `b741e48`，2026-10-03）；Claude 的结论来自官方文档。两家都在快速迭代，具体数值以当时的源码和文档为准。
+文档第二部分已落地。当前 Go 实现参数、操作和验证范围统一见 [Day 3 项目实践](day-03-lab.md)；通用知识见 [Day 3 学习笔记](day-03-notes.md)。第一部分是带时间范围的外部调研，原始日期为 2026-10-03，Codex 的版本与后续复核范围以 [独立调研](codex-context-research.md) 开头为准；它不代表当前桌面安装的实际分支。本文的触发线、配额与接受上限是本项目选择，不作为 Codex 的默认配置。
 
 ---
 
@@ -420,7 +420,7 @@ func (c *Context) Prepare(ctx context.Context, client *modelClient) error
 
 ## 资料来源
 
-- [Codex 上下文管理调研](codex-context-research.md)：基于 [openai/codex](https://github.com/openai/codex) 提交 `b741e48` 的源码，含完整源码索引
+- [Codex 上下文管理调研](codex-context-research.md)：版本、复核日期与范围以该文开头为准，保留完整源码索引
 - [Claude API：Context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)
 - [Claude API：Compaction overview](https://platform.claude.com/docs/en/build-with-claude/compaction)
 - [Claude API：Compaction at a token threshold](https://platform.claude.com/docs/en/build-with-claude/compaction-threshold)

@@ -12,6 +12,7 @@ import (
 	"learning-agent/internal/mcp"
 	"learning-agent/internal/memory"
 	"learning-agent/internal/retrieval"
+	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/tools"
 )
@@ -75,6 +76,8 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 			return nil, llm.Permanent(errors.New("name 需要是字符串"))
 		}
 		return skills.Load(strings.TrimSpace(args.Name))
+	case "bash", "request_network_access":
+		return sandbox.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
 	case "web_search", "open_page":
 		return browser.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
 	case "spawn_agent":

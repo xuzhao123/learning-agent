@@ -10,10 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
+	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
@@ -124,9 +127,17 @@ func inTab[T any](ctx context.Context, callID, address, script string) (T, error
 			}()
 		}
 	}
+	blocked, err := guard(tab, callID)
+	if err != nil {
+		return zero, err
+	}
 	var value T
 	if err = chromedp.Do(tab, chromedp.Navigate(address), chromedp.WaitReady("body")); err == nil {
 		value, err = chromedp.Run(tab, chromedp.Evaluate[T](script, chromedp.EvalAwaitPromise))
+	}
+	if err != nil && strings.Contains(err.Error(), "BLOCKED_BY_CLIENT") {
+		// 主页面本身被拦下：多半是公网页面跳转到了内网地址。同样的请求再试也一样。
+		err = llm.Permanent(fmt.Errorf("页面请求了本机或内网地址，已被拦截：%s", strings.Join(blocked(), "、")))
 	}
 	if file != "" && ctx.Err() == nil {
 		// screencast 只在页面重绘时发帧；补一张截图，保证每次调用都留下最终画面。
@@ -298,20 +309,80 @@ func paragraphs(text, find string) (string, int) {
 }
 
 // 只允许公网 http/https。模型给的地址如果指向本机或内网（127.0.0.1、10.x、169.254.169.254 云元数据），
-// 浏览器就成了替攻击者访问内网的跳板（SSRF）。这里只检查起始地址，页面里的跳转和子资源见 lab 已知边界。
+// 浏览器就成了替攻击者访问内网的跳板（SSRF）。打开前先查起始地址，给模型一个清楚的错误；
+// 跳转和页面里的子资源由 guard 在浏览器发出每个请求时再查一次。
 func checkURL(address string) error {
 	u, err := url.Parse(address)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return errors.New("url 需要是完整的 http 或 https 地址")
 	}
-	ips, err := net.LookupIP(u.Hostname())
+	return privateHost(u.Hostname())
+}
+
+func privateHost(host string) error {
+	ips, err := net.LookupIP(host)
 	if err != nil {
-		return fmt.Errorf("无法解析域名 %s", u.Hostname())
+		return fmt.Errorf("无法解析域名 %s", host)
 	}
 	for _, ip := range ips {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return fmt.Errorf("不允许访问本机或内网地址：%s → %s", u.Hostname(), ip)
+			return fmt.Errorf("不允许访问本机或内网地址：%s → %s", host, ip)
 		}
 	}
 	return nil
+}
+
+// guard 用 CDP 的 Fetch 域拦住标签页发出的每一个请求（主页面、跳转、图片、脚本、页面里的 fetch），
+// 解析目标主机，落在本机或内网就让请求失败，其余放行。同一主机的结论在本标签页内缓存。
+// 仍挡不住的：DNS 重绑定（我们解析时是公网、Chrome 自己解析时变成内网），以及 WebSocket（不经过 Fetch 拦截）。
+func guard(tab context.Context, callID string) (func() []string, error) {
+	paused := chromedp.Events(tab, fetch.RequestPaused)
+	if _, err := chromedp.Call(tab, fetch.Enable, fetch.EnableParams{Patterns: []*fetch.RequestPattern{{URLPattern: "*"}}}); err != nil {
+		return nil, err
+	}
+	var mu sync.Mutex
+	verdict := map[string]error{}
+	var blocked []string
+	go func() {
+		for event, err := range paused {
+			if err != nil {
+				return
+			}
+			go func() {
+				u, _ := url.Parse(event.Request.URL)
+				var reason error
+				if u != nil && (u.Scheme == "http" || u.Scheme == "https") {
+					mu.Lock()
+					cached, ok := verdict[u.Hostname()]
+					mu.Unlock()
+					if !ok {
+						cached = privateHost(u.Hostname())
+						mu.Lock()
+						verdict[u.Hostname()] = cached
+						mu.Unlock()
+					}
+					// 解析失败交给浏览器自己报错，只拦确定是内网的。
+					if cached != nil && strings.HasPrefix(cached.Error(), "不允许") {
+						reason = cached
+					}
+				}
+				if reason == nil {
+					chromedp.Call(tab, fetch.ContinueRequest, fetch.ContinueRequestParams{RequestID: event.RequestID})
+					return
+				}
+				mu.Lock()
+				if !slices.Contains(blocked, u.Host) {
+					blocked = append(blocked, u.Host)
+				}
+				mu.Unlock()
+				fmt.Printf("Browser [%s]: blocked url=%s reason=%v\n", callID, event.Request.URL, reason)
+				chromedp.Call(tab, fetch.FailRequest, fetch.FailRequestParams{RequestID: event.RequestID, ErrorReason: network.ErrorReasonBlockedByClient})
+			}()
+		}
+	}()
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), blocked...)
+	}, nil
 }
