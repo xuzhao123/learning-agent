@@ -168,6 +168,7 @@ No retry […]: reason=permanent attempts=1 error=页面请求了本机或内网
 - seccomp 是黑名单，不是白名单。
 - 白名单内的域名可以收发任意数据；白名单按域名放行，同一域名下的所有路径都可访问。
 - 只有 HTTP(S) 走代理；不支持其他协议，也不提供 DNS（工具都通过代理解析）。
+- 内网判断用 Go 的 `IsLoopback/IsPrivate/IsLinkLocalUnicast/IsUnspecified`，漏掉了 `100.64.0.0/10`（运营商级 NAT，阿里云元数据服务 `100.100.100.200` 就在其中）和 `198.18.0.0/15` 等特殊地址段；浏览器没有域名白名单，影响更直接。见 [Q18](../deep-questions.md#q18)。
 - 浏览器的 Fetch 拦截挡不住 DNS 重绑定（检查时是公网、Chrome 自己解析时变成内网），也不拦截 WebSocket。浏览器没有纳入 Bash 沙箱；当前代码默认保留 Chrome 自身沙箱，显式设置 `CHROME_NO_SANDBOX=1` 才会关闭它。
 - 浏览器加 bash 时，浏览器仍是外发通道（打开带参数的 URL），没有审批；高风险操作确认在 Week 3。
 - 工作目录不限总大小（`/tmp` 限 64MB）；没有 systemd 用户会话时不做资源限制（会打印提示）。

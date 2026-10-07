@@ -55,16 +55,16 @@
 | Skills | 触发准确率未系统评估 | 纳入评测集；知识内容与执行权限分开 |
 | 工具取消 | 不配合取消的工具可能在调用方放弃等待后继续执行；Bash 已使用 cgroup 清理 | 按工具检查取消和资源回收，见 [Day 8](docs/day-08/day-08-lab.md) |
 | 父子进程 | 父进程被 kill -9 后，子进程可能暂时继续执行并占有任务锁；task_id 引用靠模型遵守规则，模型若仍改写 task 重派，会新开子任务 | 父死亡信号或锁释放等待；续跑时把已派出的子任务列进上下文，见 [Q15](docs/deep-questions.md#q15) |
-| 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14) |
+| 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估；观测台在中断后的续聊沿用并覆盖旧检查点，用户另起一题时旧任务的问题与结局被抹掉，“一个ID一个问题”不再成立 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14)；每轮新 ID 加续接链、子任务按链查找、撤掉沿用父 ID，见 [Q21](docs/deep-questions.md#q21) |
 | 副作用恢复 | 模型看到“结果未知”后仍可能决定重做；repeatable 按工具名写死，误标会静默重做 | 幂等键、状态查询与高风险确认；MCP 注解仅对可信 server 采信，见 [Q13](docs/deep-questions.md#q13) |
-| 浏览器网络 | 已拦截起始 URL、跳转和子资源的内网请求，DNS 重绑定与 WebSocket 仍有缺口 | 用受控出口限制实际连接 |
+| 浏览器网络 | 已拦截起始 URL、跳转和子资源的内网请求；`100.64.0.0/10`（含阿里云元数据 100.100.100.200）等特殊地址段未判为内网，DNS 重绑定与 WebSocket 仍有缺口 | 补全特殊地址段或只放行全局单播；用受控出口限制实际连接，见 [Q18](docs/deep-questions.md#q18) |
 | 网页内容 | 注入防护主要依赖 system 规则；工具失败后模型仍可能凭旧知识回答 | Week 3 注入攻防与回答可靠性评测 |
 | 浏览器执行 | 浏览器未纳入 Bash 沙箱；设置 CHROME_NO_SANDBOX=1 会关闭 Chrome 自身沙箱 | 保留 Chrome 自身沙箱，后续研究独立浏览器隔离 |
 | 浏览器效率 | 必应不向无头浏览器返回结果，web_search 当前不可用（已改为不重试并提示改用 open_page）；同页多次 find 会重新加载，子 agent 因此耗尽预算（Day 11、Day 14） | 正式搜索 API、正文缓存或会话句柄 |
-| 执行隔离 | bubblewrap 共享内核，seccomp 使用黑名单；没有 systemd 用户会话时不施加 cgroup 限制 | 按威胁模型收紧规则与资源前置条件 |
-| 组合工具 | 浏览器仍能通过请求 URL 外发 Bash 取得的数据；允许域名内的路径和数据没有细分权限 | 跨工具数据流与高风险审批，见 [Q12](docs/deep-questions.md#q12) |
+| 执行隔离 | bubblewrap 共享内核，seccomp 使用黑名单（主隔离靠 namespace 与去权限，seccomp 只缩小内核攻击面）；没有 systemd 用户会话时不施加 cgroup 限制 | 不可信或多租户场景改白名单并加 gVisor/微虚拟机，见 [Q16](docs/deep-questions.md#q16) |
+| 组合工具 | 浏览器仍能通过请求 URL 外发 Bash 取得的数据，这一条只靠 system 规则与模型判断；允许域名内的路径和数据没有细分权限（开放重定向已实测拦下，大域名与域前置仍是风险） | 跨工具数据流与高风险审批，见 [Q12](docs/deep-questions.md#q12)、[Q17](docs/deep-questions.md#q17)、[Q18](docs/deep-questions.md#q18) |
 | 运行数据 | 工作目录总大小、截图、检查点与 trace 文件缺少配额或自动清理 | 磁盘配额与保留期限 |
-| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；指标与告警按 Week 3 评测课程补齐 |
+| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span，按 trace 统计的成功率、尾部延迟和工具失败率会有偏；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；评测结局以检查点为准、trace 只做归因，检查点存 trace_id，长 span 开始时也落一行，见 [Q19](docs/deep-questions.md#q19)；指标与告警按 Week 3 评测课程补齐 |
 | 评测 | 现有小样本参与过调试，独立留出集、规模化评分与指标告警未建立 | 按后续评测课程补齐 |
 
 ## 理解确认
