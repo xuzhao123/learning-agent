@@ -42,6 +42,30 @@
 | Generative Agents 论文：*Generative Agents: Interactive Simulacra of Human Behavior* | https://arxiv.org/abs/2304.03442 |
 | 记忆系统横评（MemGPT / mem0 / Zep / A-MEM 机制与实测对比） | 待补 |
 
+## Day 6 · MCP 协议（上）
+
+| 材料 | 链接 |
+| --- | --- |
+| MCP 官方文档与 spec（先看 Concepts → Tools） | https://modelcontextprotocol.io |
+| Anthropic MCP 公告《Introducing the Model Context Protocol》 | https://www.anthropic.com/news/model-context-protocol |
+| mcp-go（Go SDK，client + server） | https://github.com/mark3labs/mcp-go |
+
+## Day 7 · MCP 协议（下）
+
+| 材料 | 链接 |
+| --- | --- |
+| MCP spec 的 Server 部分（Server → Tools） | https://modelcontextprotocol.io |
+| mcp-go 仓库的 server example（`server.ServeStdio`） | https://github.com/mark3labs/mcp-go |
+| JSON-RPC 2.0 规范 | https://www.jsonrpc.org/specification |
+
+## Bonus · Agent Skills
+
+| 材料 | 链接 |
+| --- | --- |
+| Agent Skills 官方站（spec、frontmatter 字段、三级加载） | https://agentskills.io |
+| mcode 的 skills 实现文档 | https://github.com/immutex/mcode/blob/HEAD/docs/08-skills-and-agents-md.md |
+| 《Agent Skills Explained: SKILL.md vs MCP》 | https://www.alekseialeinikov.com/en/blog/topics/ai/agent-skills-explained-skill-md-vs-mcp |
+
 ---
 
 补救日的推送里，ReAct 论文重复出现过一次，没有重复收录。

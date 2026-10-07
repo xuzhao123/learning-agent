@@ -4,7 +4,7 @@
 
 以用户提供的 Manus「Agent 全栈工程师」岗位要求为长期学习目标，使用 Go 逐步实现 agent。完整能力对照见 [JOB_REQUIREMENTS.md](JOB_REQUIREMENTS.md)。
 
-当前推进 Day 5，优先帮助用户理解 agent 流程。用户每天给出任务，每一步围绕当天知识点提供讲解、例子、代码阅读和练习。
+当前完成 Week 1（Day 1–7）与 Bonus Skills，优先帮助用户理解 agent 流程。用户每天给出任务，每一步围绕当天知识点提供讲解、例子、代码阅读和练习。
 
 ## 工作约定
 
@@ -17,8 +17,8 @@
 
 ## 当前实现
 
-- 目录：Mac `/Users/bytedance/workspace-vm/learning-agent`；VM `/home/dev/workspace/learning-agent`。
-- 核心文件：`main.go`、`llm.go`、`react.go`、`tools.go`；Day 3 新增 `context_manager.go` 和真实对比入口 `context_lab.go`；Day 4 新增 `retrieval.go`、`embedding.go`、`rag_lab.go`；Day 5 新增 `memory.go`（依据层）与 `memory_retrieval.go`（Contextual Retrieval）。
+- 路径约定：所有启动命令从项目根目录执行；源码、文档、缓存和运行数据使用项目相对路径。
+- 核心文件：`main.go`、`llm.go`、`react.go`、`tools.go`；Day 3 新增 `context_manager.go` 和真实对比入口 `context_lab.go`；Day 4 新增 `retrieval.go`、`embedding.go`、`rag_lab.go`；Day 5 新增 `memory.go`（依据层）与 `memory_retrieval.go`（Contextual Retrieval）；Day 6–7 新增 `mcp.go`（MCP client、手写 JSON-RPC、calculator server）；Bonus 新增 `skills.go` 与 `skills/code-review/SKILL.md`。
 - 方舟原生 Tool Calling：通过 `tools` 提供定义，从 `tool_calls` 接收请求，普通回答不限制文本格式。
 - 支持独立工具同批并行，默认并发4，每批最多16项；依赖结果的调用放在下一轮。
 - 模型请求默认最多10次，可通过 `-max-steps` 配置，Day 3 摘要请求也计入；保存原始 assistant 消息，每项结果用 `role: "tool"` 与 `tool_call_id` 写回历史；无调用且有正常回答时结束。
@@ -28,7 +28,10 @@
 - calculator 实际计算；日期工具读取当前时间；search_notes 检索实际 docs 学习笔记。
 - Day 4：`-rag`注册search_docs，检索与Agent在同一Go进程直接调用；-embedding选择本地纯Go MiniLM或线上方舟Doubao，-min-score调整阈值，缓存沿用.cache/retrieval-go。普通任务不初始化向量模型。24条FAQ按标题切块，k默认3、范围1–6；低分正文不注入。-search-docs独立检查召回（local无需密钥），-rag-lab比较10题真实回答。CLI用go run .；网页只用go -C observer run .，选择向量模型后直接提问，续聊与重启恢复选择，无8092检索服务。
 - Day 5：`-memory` 启用跨进程长期记忆 `.data/memory.json`（已忽略提交）。写入只来自用户原话和本轮重试耗尽的工具失败（episodic 0.4，7天过期）：模型调用 remember_memory(quote, kind) 登记（semantic 0.9 / procedural 0.8），程序校验引文逐字出自本次会话用户消息（不含摘要、回答、工具结果）、长度与密钥、每轮≤3条，被拒时工具直接返回原因；本轮结束时写入、同内容同前文只刷新；未登记但含“记住/别忘”时只打印 Memory hint；疑似密钥或超500字拒存。新记忆另存来源上下文（用户原话与实际工具结果，≤2000字，模型回答/摘要/记忆工具结果不算）。检索升级为Contextual Retrieval：按向量模型输入上限切块（方舟≤300字；本地MiniLM≤64 token、背景≤40字），检索时为缺失块请求当前方舟模型生成背景（`memory_contextualize`，每次运行≤`-memory-context-calls`默认4次），“背景+原文”同时建向量与BM25（k1=1.2、b=0.75，汉字两字组+编号整词）索引；两路各10片段→按记忆去重RRF（k=60）前20→`memory_rerank`当前聊天模型重排（推理low，校验JSON）→相关且≥50分按0.8重排+0.1重要性+0.1新近度排序→最多5条、`-memory-tokens`默认800；删除了“重要性高即使不相关也注入”的兜底，允许0条。重排失败只保留两路都召回的最多3条。辅助调用计入-max-steps并给主任务留2次。派生数据在 `.data/memory-index/`（contexts.json、vectors-<模型>.json），按指纹失效，删除/过期/淘汰同事务清理；旧记忆无来源标no_source按原文检索。recall与search_memory共用 `retrieve`；开场结果写进system，整次会话不变，续聊沿用首轮system。`-memory-search`+`-memory-mode`（keyword/vector/bm25/hybrid/rerank）对比各阶段。模型只有search_memory（按需检索）与forget_memory（更正删除），不能新增记忆。每次读写在sync.Mutex+flock内完成读、删过期、修改、超量淘汰（重要性×0.5^(天/7)最低者，只在写入时）和原子写回，日志在落盘后打印、保存失败向上返回；embedding与模型请求都在锁外，使用前回锁内校验；-memory-ttl、-memory-limit（默认200）、-memory-forget（不做淘汰）。向量模型进程内共享，本地推理加锁；modelClient计数与用量加锁，请求头 `X-Agent-Purpose` 标明用途。注入日期统一上海时区。
-- 观测台在 `observer/`，独立 go.mod：本机代理记录每次模型请求与响应，事件存档于 `observer/runs/`（已忽略提交），启动时读回；网页是类似 Codex 客户端的对话界面（对话流从请求/响应还原用户消息、思考、工具与回答，压缩显示为分隔线），“观测”标签提供轨迹、迷宫、对比三个视图和回放；可新建对话、从存档恢复View续聊，或运行Day 3上下文实验；能直接查看终端输出，并从实际Context输出读取输入容量。agent 只额外接受 `http://127.0.0.1` 模型地址。Day 5：新对话可勾选长期记忆与TTL，续聊沿用；对话流显示开场调入与结尾写入卡片，[M编号]引用可点击；左侧记忆面板只读 `.data/memory.json`，删除调用agent的 `-memory-forget`。Contextual Retrieval 后：记忆模式可选ark/local并续聊沿用；代理按请求头记录purpose，`memory_*` 辅助调用单独列出（原始输入输出与token），不开Turn、不占Step，续聊恢复跳过；调入卡片显示两路候选、融合、重排、选中数与降级原因，面板显示背景、块状态与来源。
+- Day 6：引入 mcp-go v1.1.1（用户任务指定；要求 Go≥1.25.5，go.mod 由1.25.0升至1.25.5）。`-mcp-server` 以空格切分命令启动 stdio 子进程（不经shell），SDK 先发 `server/discover`（2026-07-28 无状态协议），旧版 server 才退回 initialize（2025-11-25）；检查 tools capability 后 tools/list，工具名加 `mcp_` 前缀、非法字符换 `_`、≤64、与本地重名跳过，inputSchema 原样作 parameters；runTool 的 default 分支转发 tools/call，协议错误与 isError 分别标注后回填；连接与每次调用各1分钟超时；server stderr 转到本进程 stderr。`-mcp-list`（SDK 连接+列工具+可选 `-mcp-call`/`-mcp-args`）与 `-mcp-raw legacy|modern`（手写 JSON-RPC，逐行打印 →/←）不请求模型。示例 server 用 `go install github.com/mark3labs/mcp-go/examples/everything@v1.1.1` 装到 bin/。
+- Day 7：`-mcp-serve` 在 flag.Parse 后立即分流（stdout 归协议），须单独使用；mcp-go server 暴露 calculator（expression 必填、≤1024），WithInputSchemaValidation + WithStrictInputSchemaDefault（additionalProperties:false）+ handler RequireString + calculate AST 白名单三层校验，错误以 NewToolResultError（isError）返回，未知工具由 SDK 返回 -32602；WithRecovery；结果为 structuredContent {result} + 文本；每次调用在 stderr 记一行。
+- Bonus Skills：`-skills` 扫描 `skills/*/SKILL.md`，手写 frontmatter 解析（顶层 key: value、去成对引号、缩进行跳过、多行值/重复键/缺分隔线报错），校验 name（≤64、`^[a-z0-9]+(-[a-z0-9]+)*$`、等于目录名）、description（≤1024字符）、compatibility（≤500）、文件≤64KB；坏文件打印 Skill error 跳过，打印 Skills: loaded=N names=…；有可用 skill 时 system 追加索引并注册 load_skill(name)，按索引查表读文件并重新校验，未知名字返回结构化结果（不触发重试）；不读 references、不执行 scripts。
+- 观测台在 `observer/`，独立 go.mod：本机代理记录每次模型请求与响应，事件存档于 `observer/runs/`（已忽略提交），启动时读回；网页是类似 Codex 客户端的对话界面（对话流从请求/响应还原用户消息、思考、工具与回答，压缩显示为分隔线），“观测”标签提供轨迹、迷宫、对比三个视图和回放；可新建对话、从存档恢复View续聊，或运行Day 3上下文实验；能直接查看终端输出，并从实际Context输出读取输入容量。agent 只额外接受 `http://127.0.0.1` 模型地址。Day 5：新对话可勾选长期记忆与TTL，续聊沿用；对话流显示开场调入与结尾写入卡片，[M编号]引用可点击；左侧记忆面板只读 `.data/memory.json`，删除调用agent的 `-memory-forget`。Contextual Retrieval 后：记忆模式可选ark/local并续聊沿用；代理按请求头记录purpose，`memory_*` 辅助调用单独列出（原始输入输出与token），不开Turn、不占Step，续聊恢复跳过；调入卡片显示两路候选、融合、重排、选中数与降级原因，面板显示背景、块状态与来源。Skills / MCP 中心：配置在 `.data/hub.json`（skill 默认启用、只记停用名单；MCP server 名字+命令+开关），skill 列表与新建校验调用 agent 的 `-skills-list`，测试连接调用 `-mcp-list`；新对话勾选 Skills/MCP 时把当时打开的项作为快照写入 start 事件并转成 `-skills -skill …` 与多个 `-mcp-server`，续聊沿用快照；对话流显示能力卡片，工具带 SKILL/MCP 标记；`/hub` 接口校验本机 Host 与同源 Origin。agent 侧 `-mcp-server` 可重复、连不上的 server 跳过，新增 `-skill`（可重复）与 `-skills-list`。远程 MCP：`-mcp-server` 值为 http(s) 地址时用 Streamable HTTP client；`-mcp-serve -mcp-http addr` 以 Streamable HTTP 提供 calculator；观测台启动时 go build agent 到临时目录、常驻运行 `-mcp-serve -mcp-http 127.0.0.1:8091`（`-mcp-addr` 可改或置空关闭），`/mcp` 反向代理过去（保留 Host、FlushInterval -1、本机同源检查），SIGINT/SIGTERM 时结束子进程并删除临时目录。
 - 默认方舟地址为 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`，模型为 `doubao-seed-2-1-pro-260628`，请求使用 `reasoning_effort: high`，等待上限5分钟。
 - 本地 `.env` 自动读取，保留指定方舟地址、模型与认证，权限0600并已加入提交忽略规则。
 
@@ -37,6 +40,13 @@
 | 步骤 | 状态 | 产物 |
 | --- | --- | --- |
 | 项目准备 | 已完成 | AGENTS.md、PROJECT.md、岗位能力对照 |
+| 文档与启动说明统一 | 已完成；主工程与观测台 build、go vet通过；文档链接与脚本语法检查通过 | 启动命令统一从项目根目录执行，示例使用相对路径；删除个人路径与部署环境叙述；观测台启动提示不显示项目绝对目录，内置 MCP 的编译和启动诊断使用通用路径名称；约定同步至 AGENTS.md |
+| Day 6：MCP client | 已编译、go vet通过并真实运行；理解待反馈 | mcp-go SDK 连接 everything 示例 server：协商 2026-07-28、6个工具、add 返回42.5；手写 JSON-RPC 对照 legacy（initialize/initialized、请求无_meta）与 modern（server/discover、每请求_meta）；agent 同轮并行调用 mcp_add 与 mcp_echo 后正确回答。day-06-notes 讲 JSON-RPC、传输、三原语、旧版握手与capabilities协商、2026-07-28 去握手与 discover、工具定义转换、两种错误；lab 记录代码阅读与真实日志 |
+| Day 7：MCP server 与周复盘 | 已编译并真实运行；周复盘已写；理解待反馈 | `-mcp-serve` 暴露 calculator；client→自己的 server 得 floor(sqrt(1234*5678))=2647；手写 client 发错误参数：类型错/多余字段/缺必填被 schema 层以 isError 拦下，os.Exit(1) 被 calculate 拦下，未知工具返回 -32602；agent→自己的 server→calculate 闭环正确（server stderr 日志为证）。docs/week-01-review.md：Day1–7 一句话、含6模块（另加skills）的 mermaid 架构图、W2 三件事（建议草稿，待用户确认） |
+| Bonus：知识型 Skills | 已编译并真实运行；理解待反馈 | skills/code-review/SKILL.md（由 Day 5 procedural 记忆改写）；三个临时坏文件各有明确报错且不 crash（运行后删除）；天气问题未调用 load_skill；代码评审问题主动 load_skill 并按“构建→分级问题→结论”输出，且未假装运行命令；unknown_skill 分支仅代码阅读；observer 可选项未做 |
+| 观测台内置远程 MCP | 已编译、go vet通过并真实运行；理解待反馈 | agent 直连 HTTP server：协商2026-07-28、tools/call 得2647；-mcp-raw 遇到 URL、-mcp-http 单独使用均明确报错。观测台启动后后台编译并运行内置 server，经 :8097/mcp 测试连接成功（1个工具）；跨站 Origin 与伪造 Host 均403；只启用 observer 远程 server 的真实方舟问答注册 mcp_calculator 并得2647，观测台终端有 calculator ok 日志；SIGINT 后子进程结束、临时目录删除、内部端口关闭 |
+| 观测台 Skills 中心与 MCP 中心 | 已编译、go vet通过并真实运行；页面视觉待浏览器确认；理解待反馈 | 接口实测：添加 everything/calculator/坏命令三个 server，重名被拒，跨站 Origin 返回403；测试连接显示 calculator 协商 2026-07-28 与1个工具，坏命令显示启动失败；新建 skill 的非法名字、多行 description、重名、超1024字符 description（由 agent 校验拦下并撤销）均被拒，合法 skill 可启停与删除（临时 skill 已删）。真实方舟问答：快照为 code-review + 3个server，注册 mcp_add 等6个与 mcp_calculator，坏 server 打印 MCP error 跳过；模型同轮调用 mcp_calculator 与 load_skill，得2647并按评审流程输出；停用坏 server 后续聊仍沿用快照，调用 mcp_add 得42.5。页面已做 JS 语法检查，视觉与交互待确认。MCP 预设统一使用 `go run . -mcp-serve` 与 `go run …/everything@v1.1.1` 从源码启动，已验证分别连接1个、6个工具；启动失败时页面提示使用源码预设或重新构建 |
+| 观测台对话 ID 与链接定位 | 已编译并用真实存档在独立预览中验证；理解待反馈 | 顶栏显示并复制已有对话 ID；URL 的 run 参数跟随对话。浏览器核对切换、刷新恢复、前进后退、新对话清除参数，以及对话/观测切换保持 ID；无 JS 报错，未新增模型请求 |
 | Day 1 Tool Calling / ReAct | 已实现，理解待用户反馈 | 真实模型调用、并行工具执行、消息历史与终止 |
 | 学习方式调整 | 清理与真实运行已完成 | 删除 test、demo、脚本模型及假笔记字典；核心代码由936行精简至466行，真实两道任务通过 |
 | 并行链路讲解 | 笔记已补充，理解待反馈 | 区分工具目录加载、模型批量调用与执行并发；补充 Codex、Claude Code 的公开执行机制、程序编排与结果关联 |
@@ -54,7 +64,7 @@
 | Day 4：检索注入与来源问答 | 代码、文档、观测台、课件均已验证；理解待反馈 | Go工具、对比入口与检索模块（后续已并入Agent）；CGO_ENABLED=0编译，本地MiniLM / 线上Doubao两种模式各24条FAQ、8/8可答题hit@3；线上20次问答中RAG答对8/8并有效引用、库外2/2拒答，无检索0/8可答、未观察到编造；32次聊天请求、12次检索，记录195200.394；对比报告见day-04-lab.md，观测台引用跳转与续聊已验证，12页动画经浏览器核对。未提交Git |
 | Day 4：评审后完善与笔记重写 | 已编译并真实运行；笔记待用户阅读反馈，理解待反馈 | 线上embedding只请求稠密向量：响应约16KB对2.18MB、耗时约减半，与原稠密向量余弦0.9986；重建索引24次请求后单次查询1.67s（原3.39s），10题hit@3仍8/8、库外2/2全部过滤。-search-docs的stdout只有JSON；方舟embedding报错带出原因与截断响应体；-rag-lab单题失败记录后继续（-max-steps 1实测20题跑完、10题按预期记失败、退出码1）；观测台把未取回或低于阈值的[Dxx]标红。day-04-notes.md按用户要求改为只讲RAG知识（结构、Agent中的位置、切块、相似度、阈值、BM25/RRF/重排、引用与安全、分层评估、失败模式），项目实现、动手步骤与实验记录移到day-04-lab.md；AGENTS.md笔记约定同步。CLI端到端：检索D05后答600ms |
 | Day 5：长期记忆 | 已编译并真实运行，观测台无头浏览器验证；理解待反馈 | memory.go 规则写入、开场调入、search/forget 工具、TTL与加权淘汰、文件锁事务；真实运行：两进程召回“偏好Go”并引用[M1]（不开记忆对照组答不出）、1分钟TTL后删除且模型不编造、“改用Rust”时模型调用forget_memory删M1并写M5、always_fail失败写成episodic并被新进程答出、上限2时淘汰0.4的失败记录、密钥拒存且模型如实告知；调试中修正时区不一致与“嘴上说已记下”；观测台调入/写入卡片、[M5]引用、续聊写入M8、面板删除M8均通过且无JS错误。day-05-notes/lab、12页课件、README同步；未提交Git |
-| Day 5：Contextual Retrieval 升级 | 已编译、go vet通过；真实模型验证待用户按清单运行；理解待反馈 | memory_retrieval.go：来源上下文、按embedding上限切块、背景生成与缓存、Contextual向量+BM25、RRF、LLM重排、过滤与token预算、降级与失效；recall/search_memory共用；观测台purpose分组；notes第11节、lab（数据流、参数、10项手动验证、与Anthropic差异）、课件16页、README同步。仅在scratchpad用合成记忆、无模型调用跑过本地local/BM25/删除失效冒烟；评审后修正：失败记录先脱敏再落盘并统一检查、去重加入前文（同句不同主体分存）、本地按分词器校验“背景+片段”超限记too_long、并发删除后向量不再写回、观测台总量含辅助调用（均已在scratchpad核对）；观测台与课件未在浏览器渲染（本机缺浏览器依赖）；未提交Git |
+| Day 5：Contextual Retrieval 升级 | 已编译、go vet通过；真实模型验证待用户按清单运行；理解待反馈 | memory_retrieval.go：来源上下文、按embedding上限切块、背景生成与缓存、Contextual向量+BM25、RRF、LLM重排、过滤与token预算、降级与失效；recall/search_memory共用；观测台purpose分组；notes第11节、lab（数据流、参数、10项手动验证、与Anthropic差异）、课件16页、README同步。仅使用临时数据核对本地检索、BM25与删除失效，未调用模型；评审后修正：失败记录先脱敏再落盘并统一检查、去重加入前文（同句不同主体分存）、本地按分词器校验“背景+片段”超限记too_long、并发删除后向量不再写回、观测台总量含辅助调用（均已做定向核对）；观测台与课件的视觉和交互待确认；未提交Git |
 | Day 1–3 笔记重写 | 文档已完成，待用户阅读反馈；理解待反馈 | 按用户要求将day-01/02/03-notes改为只讲知识的专业讲义：Day 1 工具调用协议、ReAct、消息历史约束、循环职责、并行与执行器安全；Day 2 预算、退避与抖动、多层重试放大、重复检测、错误分类、超时与结果未知、幂等、职责分工；Day 3 上下文工程、记录与视图、容量与用量测量、压缩策略谱系、消息组、摘要设计、前缀缓存、停止边界。项目参数、代码阅读、故障实验、真实压缩案例与方舟实测移到各自的day-0X-lab.md。保留search_notes依赖的"循环职责"原句；Day 3笔记仍足够长，供read_day3_notes观察截断；知识库D12来源改指day-03-lab.md |
 | Day 3首版：上下文窗口管理（已重构） | 已编译并通过真实模型对比，理解待反馈 | 两组各33轮：Trim未召回账号，Summarize递归18次后召回；共84次请求，每轮system与最近消息检查通过；工具任务压缩后继续完成，摘要计入4次请求上限并按时停止；输入预算不足时拒绝请求；长tool清理分支已代码检查 |
 | Day 3：按上下文系统设计重构 | 实现与主要真实场景验证完成，理解待反馈 | 33轮保留账号和Day 3约束，37次请求含2次摘要；大工具原文保留、视图3402→2000估算token；10步工具链中途压缩后仍引用早期数字；摘要缓存6768/9252；清理收益门槛、连续压缩熔断及上游超窗重试做代码检查 |
@@ -80,11 +90,27 @@
 | 已注入的记忆仍被重复检索 | `memory.go` 记忆规则；`react.go` systemPrompt | Day 5 实测：M6 已在 system 记忆块中，模型仍调用 search_memory 再查一次，多一次请求 | 观察更多样本后再决定是否调整提示；不为单次现象改规则 |
 | 被取消的调用从 summary 中消失 | `react.go` runAgent 拼装 summary；executeBatch、runWithRetry | summary 只记 Attempts>0 的调用；排队等槽或首次尝试前被取消时 Attempts=0，报告里"请求了但没执行"与"没请求"无法区分；执行中被取消则误写成"失败：context canceled"，掩盖结果未知 | 去掉 Attempts>0 条件，区分成功 / 失败 / 未执行（已取消）/ 执行中被取消、结果未知；history 的 tool 结果用同样措辞（协议要求必须写入），summary 也必须记录。详见 [深度问题 Q3–Q4](docs/deep-questions.md) |
 
+补充（2026-10-06，Day 6–7 / Bonus 引入）：
+
+| 问题 | 位置 | 现象 | 改进方向 |
+| --- | --- | --- | --- |
+| MCP 子进程继承全部环境变量 | `mcp.go` connectMCP（mcp-go 用 os.Environ()+额外变量） | 环境变量里的 ARK_API_KEY 等凭据会被第三方 server 读到，违反最小权限 | 用 transport 的自定义命令函数只传入白名单变量；Week 2 沙箱时一并处理 |
+| MCP 工具执行错误也被重试 | `react.go` runWithRetry；`mcp.go` call | isError（如参数错误）是确定性失败，仍额外重试2次 | 与 Day 2 错误分类一起做：执行错误不重试或只在明确可重试时重试 |
+| MCP 只支持单 server、启动时一次性拉取 | `main.go`、`mcp.go` | 不处理 list_changed；多 server 时前缀需含 server 标识 | 需要多 server 时再扩展 |
+| schema 校验错误信息不友好 | mcp-go WithInputSchemaValidation | 返回 `&{Got:number Want:[string]}` 这类 Go 结构体格式 | 必要时在 handler 中自行校验并给出中文说明 |
+| skill 触发准确率未评估 | `skills.go`、system 索引 | 只观察了1个相关、1个无关问题 | 纳入 Week 3 评测集 |
+
 ## 学习记录
 
 用户提出的有深度的问题集中记录在 [值得反复琢磨的问题](docs/deep-questions.md)，新问题持续追加。
 
 Day 5：[Day 5 学习笔记](docs/day-05/day-05-notes.md) 讲记忆分层、写读忘的取舍、遗忘与记忆污染；实现、两轮完整日志与TTL/更正/淘汰实验见 [Day 5 项目实践](docs/day-05/day-05-lab.md)，[课件](docs/slides/day-05.html) 20页（第9–16页为Contextual Retrieval：片段缺上下文、流程动画、向量与BM25原理、BM25算例、min-max与RRF对比、交叉编码器与大模型重排、缓存键与锁外计算时间线、预算降级与原文数字；字幕按笔记第8、11节重写）。笔记第8节按机制重写工程问题（原子重命名、丢失更新时间线、进程锁与flock、慢操作不持锁、依据与派生数据）；第11节扩为12小节，讲召回—重排漏斗与recall@k、切块与静默截断、背景补充及提示词缓存成本算例、双编码器与余弦、BM25逐项拆解与完整算例（加背景前1.05:0.91，加背景后3.13:0.51）、min-max与RRF对比算例、交叉编码器与大模型重排三种方式、缓存键、乐观并发时间线、预算与降级；用户反馈旧版“太泛”，理解待复述确认；lab第5节是10项手动验证清单，结果待用户真实运行。真实运行不等于用户已掌握；“短期与长期记忆的分工”“为什么遗忘是必需的”待用户复述确认。
+
+Day 6：[Day 6 学习笔记](docs/day-06/day-06-notes.md) 讲 MCP 要解决的问题、JSON-RPC 与两种传输、三原语、旧版握手交换的协议版本与 capabilities 及协商的意义、2026-07-28 版去握手（每请求 `_meta` + `server/discover`）与新旧共存、工具定义转换、协议错误与执行错误；实现与真实日志见 [Day 6 项目实践](docs/day-06/day-06-lab.md)。用户任务描述以“initialize 握手”为主线，现行规范已改，笔记两代都讲。“握手交换哪两样东西、为什么需要 capabilities 协商”待用户复述确认。
+
+Day 7：[Day 7 学习笔记](docs/day-07/day-07-notes.md) 讲 server 职责、CallToolResult、错误选择（按 SEP-1303 参数校验错误用 isError，纠正任务描述中“参数无效走 -32602”的旧说法）、工具粒度、无状态与显式句柄、信任边界与三层校验、最小权限；实验见 [Day 7 项目实践](docs/day-07/day-07-lab.md)。周复盘见 [Week 1 复盘](docs/week-01-review.md)。“为什么 server 端必须重做参数校验”待用户复述确认。
+
+Bonus：[Skills 学习笔记](docs/bonus-skills/skills-notes.md) 讲 skill / MCP tool / 程序性记忆分工、三级渐进式加载、frontmatter 规范、触发方式、供应链风险与“只做知识型”的边界（任务中“约9%为critical”的出处未找到，改引 Snyk 13.4% 与 0.52%–46.8% 的方法差异）；实现见 [Skills 项目实践](docs/bonus-skills/skills-lab.md)。三者分工与“为什么不执行脚本”待用户复述确认。
 
 每日推送的阅读材料按天记录在 [阅读材料](docs/reading-list.md)，新链接持续追加。
 

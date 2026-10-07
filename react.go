@@ -251,5 +251,8 @@ func systemPrompt() string {
 	if memories != nil {
 		prompt += memoryRules + memories.block
 	}
+	if len(skillIndex) > 0 {
+		prompt += skillPrompt()
+	}
 	return prompt
 }

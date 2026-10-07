@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -39,6 +41,8 @@ type event struct {
 	Purpose   string          `json:"purpose,omitempty"` // 请求用途：main、compact、memory_contextualize、memory_rerank
 	Memory    bool            `json:"memory,omitempty"`
 	MemoryTTL string          `json:"memory_ttl,omitempty"`
+	Skills    []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
+	MCP       []mcpServer     `json:"mcp,omitempty"`
 }
 
 type run struct {
@@ -56,11 +60,14 @@ type server struct {
 	upstream, agentDir, addr string
 	mu                       sync.Mutex
 	runs                     []*run
+	hubMu                    sync.Mutex // 保护 .data/hub.json 的读改写
+	mcp                      *mcpHost
 }
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8090", "观测页面地址")
 	agentDir := flag.String("agent", "..", "agent 项目目录")
+	mcpAddr := flag.String("mcp-addr", "127.0.0.1:8091", "内置远程 MCP server 的内部地址，观测台 /mcp 转发到这里；空字符串表示不启动")
 	flag.Parse()
 	dir, err := filepath.Abs(*agentDir)
 	if err == nil {
@@ -74,7 +81,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
-	s := &server{upstream: upstream, agentDir: dir, addr: *addr}
+	s := &server{upstream: upstream, agentDir: dir, addr: *addr, mcp: &mcpHost{addr: *mcpAddr}}
 	s.loadRuns()
 	mux := http.NewServeMux()
 	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
@@ -89,8 +96,32 @@ func main() {
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
-	fmt.Printf("观测页面：http://%s\nagent 目录：%s\n模型上游：%s\n", *addr, dir, upstream)
+	hub := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, sameOrigin(handler)) }
+	hub("GET /hub", s.listHub)
+	hub("GET /hub/enabled", s.enabledHub)
+	hub("POST /hub/skills", s.createSkill)
+	hub("DELETE /hub/skills/{name}", s.deleteSkill)
+	hub("POST /hub/skills/{name}/enabled", s.toggleSkill)
+	hub("POST /hub/mcp", s.addMCP)
+	hub("DELETE /hub/mcp/{name}", s.deleteMCP)
+	hub("POST /hub/mcp/{name}/enabled", s.toggleMCP)
+	hub("POST /hub/mcp/{name}/test", s.testMCP)
+	if *mcpAddr != "" {
+		mux.Handle("/mcp", sameOrigin(s.mcp.handler()))
+		go s.mcp.start(dir)
+		// Ctrl+C 时先结束内置 server，避免它留在后台占着端口。
+		go func() {
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			<-signals
+			s.mcp.stop()
+			os.Exit(0)
+		}()
+		fmt.Printf("远程 MCP：http://%s/mcp（内置 calculator，Streamable HTTP）\n", *addr)
+	}
+	fmt.Printf("观测页面：http://%s\nAgent：项目根目录\n模型上游：%s\n", *addr, upstream)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
+		s.mcp.stop()
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
@@ -121,6 +152,8 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		Embedding  string `json:"embedding"`
 		Memory     bool   `json:"memory"`
 		MemoryTTL  string `json:"memory_ttl"`
+		Skills     bool   `json:"skills"`
+		MCP        bool   `json:"mcp"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -135,7 +168,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lab := input.ContextLab || input.RAGLab
-	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory)) {
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP)) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
 		return
 	}
@@ -148,6 +181,22 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		args = append(args, "-rag")
 	}
 	args = appendMemoryArgs(args, input.Memory, input.MemoryTTL)
+	var skills []string
+	var servers []mcpServer
+	if input.Skills || input.MCP {
+		enabledSkills, enabledServers, err := s.enabledCapabilities()
+		if err != nil {
+			http.Error(w, "无法读取 .data/hub.json："+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if input.Skills {
+			skills = enabledSkills
+		}
+		if input.MCP {
+			servers = enabledServers
+		}
+	}
+	args = appendCapabilityArgs(args, skills, servers)
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
 		args = []string{"run", ".", "-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
@@ -170,7 +219,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL})
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers})
 	s.launch(r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -207,16 +256,18 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "无法追加对话记录", http.StatusInternalServerError)
 		return
 	}
-	// 续聊沿用这条对话开始时的记忆设置：最近一次 start/continue 事件为准。
+	// 续聊沿用这条对话开始时的记忆、skill 与 MCP 设置：最近一次 start/continue 事件为准。
 	memory, ttl := false, ""
+	var skills []string
+	var servers []mcpServer
 	for _, e := range r.events {
 		if e.Kind == "start" || e.Kind == "continue" {
-			memory, ttl = e.Memory, e.MemoryTTL
+			memory, ttl, skills, servers = e.Memory, e.MemoryTTL, e.Skills, e.MCP
 		}
 	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl})
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers})
 	args := []string{"run", ".", "-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
@@ -228,6 +279,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		args = append(args, "-embedding", history.Embedding)
 	}
 	args = appendMemoryArgs(args, memory, ttl)
+	args = appendCapabilityArgs(args, skills, servers)
 	s.launch(r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
 }

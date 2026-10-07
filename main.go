@@ -52,7 +52,67 @@ func run() error {
 	memoryMode := flag.String("memory-mode", "rerank", "memory-search 的检索方式：keyword（旧关键词）、vector、bm25、hybrid（RRF）、rerank（完整流程）")
 	memoryContextCalls := flag.Int("memory-context-calls", 4, "本次运行最多发起几次记忆背景生成，0 表示不生成（全部按原文检索）")
 	memoryTokens := flag.Int("memory-tokens", 800, "开场注入或 search_memory 返回的记忆估算 token 预算")
+	var mcpCommands, skillNames stringList
+	flag.Var(&mcpCommands, "mcp-server", "Day 6：MCP server 子进程命令（按空格切分，可重复给多个）；配合-question时把它们的tools注册为agent工具")
+	mcpList := flag.Bool("mcp-list", false, "Day 6：用SDK连接-mcp-server，打印协议版本、capabilities与工具列表后退出，不请求模型")
+	mcpRaw := flag.String("mcp-raw", "", "Day 6：不用SDK，手写JSON-RPC走stdio：legacy（initialize握手）或modern（server/discover+每请求_meta）")
+	mcpCall := flag.String("mcp-call", "", "配合-mcp-list或-mcp-raw：再调用一次该工具")
+	mcpArgs := flag.String("mcp-args", "{}", "mcp-call的参数JSON")
+	mcpServe := flag.Bool("mcp-serve", false, "Day 7：作为MCP server运行（stdio），暴露calculator；须单独使用")
+	mcpHTTP := flag.String("mcp-http", "", "配合-mcp-serve：改用 Streamable HTTP（远程 MCP）在该地址提供 /mcp，如 127.0.0.1:8091")
+	flag.BoolVar(&skillsEnabled, "skills", false, "Bonus：扫描skills/*/SKILL.md，system中放索引，增加load_skill工具")
+	flag.Var(&skillNames, "skill", "配合-skills：只启用这个名字的skill（可重复）；不给则启用全部")
+	skillsList := flag.Bool("skills-list", false, "只扫描skills/并以JSON输出每个skill的元数据、正文与错误，不请求模型；须单独使用")
 	flag.Parse()
+	if *mcpServe {
+		// stdout 归协议所有，在任何打印之前分流。
+		if flag.NFlag() != 1+min(len(*mcpHTTP), 1) || flag.NArg() != 0 {
+			return errors.New("mcp-serve须单独使用，只能再加-mcp-http")
+		}
+		return serveMCP(*mcpHTTP)
+	}
+	if *mcpHTTP != "" {
+		return errors.New("mcp-http需要配合-mcp-serve")
+	}
+	if *skillsList {
+		if flag.NFlag() != 1 || flag.NArg() != 0 {
+			return errors.New("skills-list须单独使用")
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		encoder.SetEscapeHTML(false)
+		return encoder.Encode(listSkills("skills"))
+	}
+	if len(skillNames) > 0 && !skillsEnabled {
+		return errors.New("skill需要配合-skills")
+	}
+	if *mcpRaw != "" && len(mcpCommands) == 1 && isMCPURL(mcpCommands[0]) {
+		return errors.New("mcp-raw只演示stdio；远程server请用-mcp-list")
+	}
+	if *mcpList || *mcpRaw != "" {
+		allowed := map[string]bool{"mcp-server": true, "mcp-list": true, "mcp-raw": true, "mcp-call": true, "mcp-args": true}
+		var extra error
+		flag.Visit(func(f *flag.Flag) {
+			if !allowed[f.Name] {
+				extra = fmt.Errorf("mcp-list/mcp-raw只与mcp-server、mcp-call、mcp-args组合，不接受-%s", f.Name)
+			}
+		})
+		if extra != nil || flag.NArg() != 0 {
+			return errors.Join(extra, errors.New("用法：-mcp-server '命令' -mcp-list|-mcp-raw legacy|modern [-mcp-call 工具 -mcp-args JSON]"))
+		}
+		if len(mcpCommands) != 1 || (*mcpList && *mcpRaw != "") || (*mcpRaw != "" && *mcpRaw != "legacy" && *mcpRaw != "modern") {
+			return errors.New("需要且只能给一个-mcp-server；-mcp-list与-mcp-raw二选一，mcp-raw取legacy或modern")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if *mcpList {
+			return inspectMCP(ctx, mcpCommands[0], *mcpCall, *mcpArgs)
+		}
+		return rawMCP(ctx, mcpCommands[0], *mcpRaw, *mcpCall, *mcpArgs)
+	}
+	if *mcpCall != "" {
+		return errors.New("mcp-call需要配合-mcp-list或-mcp-raw")
+	}
 	if flag.NArg() != 0 || *parallel < 1 || *parallel > 16 {
 		return errors.New("使用 -question 提供问题，-parallel 范围为 1 到 16")
 	}
@@ -78,6 +138,9 @@ func run() error {
 	}
 	if !slices.Contains([]string{"keyword", "vector", "bm25", "hybrid", "rerank"}, *memoryMode) {
 		return errors.New("memory-mode取keyword、vector、bm25、hybrid或rerank")
+	}
+	if (len(mcpCommands) > 0 || skillsEnabled) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
+		return errors.New("mcp-server与skills用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
 	if *memoryEnabled && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
 		return errors.New("memory用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
@@ -192,7 +255,38 @@ func run() error {
 	if *ragLab {
 		return runRAGLab(ctx, config, options, *maxSteps)
 	}
+	if skillsEnabled {
+		skillIndex = loadSkills("skills", skillNames)
+		if len(skillIndex) > 0 {
+			toolDefinitions = append(toolDefinitions, loadSkillDefinition)
+		}
+	}
+	// MCP 工具在启动时一次性拉取并注册；server 子进程活到本次运行结束。
+	// 多个 server 依次连接，后连的 server 与已注册工具重名时跳过（definitions 打印原因）。
+	// 某个 server 连不上只跳过它：和坏 skill 一样，外部工具是可选增强，不拖垮整次运行。
+	for _, command := range mcpCommands {
+		conn, tools, err := connectMCP(ctx, command)
+		if err != nil {
+			fmt.Printf("MCP error: command=%s error=%v\n", command, err)
+			continue
+		}
+		defer conn.close()
+		toolDefinitions = append(toolDefinitions, conn.definitions(tools)...)
+		mcpConns = append(mcpConns, conn)
+	}
 	return runAgent(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
+}
+
+// 可重复的命令行参数，如 -mcp-server a -mcp-server b。
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, ",") }
+func (l *stringList) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("不能为空")
+	}
+	*l = append(*l, strings.TrimSpace(value))
+	return nil
 }
 
 // 环境变量优先，其次是本地 .env，最后是地址与模型的默认值。

@@ -1,8 +1,8 @@
-# 学习 agent：Day 1 → Day 2 → Day 3 → Day 4 → Day 5
+# 学习 agent：Day 1 → Day 7（Week 1）
 
 想先看动画讲解，打开 [课件入口](docs/slides/index.html)：每节课一份可翻页、按步骤播放的 HTML 课件。
 
-每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)。
+每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)、[Day 6 MCP client](docs/day-06/day-06-notes.md)、[Day 7 MCP server](docs/day-07/day-07-notes.md)、[Bonus Agent Skills](docs/bonus-skills/skills-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)、[Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)。第一周的总结与架构图见 [Week 1 复盘](docs/week-01-review.md)。
 
 用 Go 手写最小 ReAct loop，重点是看懂流程：
 
@@ -12,7 +12,9 @@
 
 ## 运行
 
-使用Go 1.25以上，在项目根目录运行（Mac：`/Users/bytedance/workspace-vm/learning-agent`；VM：`/home/dev/workspace/learning-agent`）。首次配置参考 [.env.example](.env.example)，将自己的 ARK_API_KEY 填入 .env，然后输入问题：
+使用 Go 1.25.5 以上版本。以下命令统一在项目根目录（包含 `go.mod` 和 `main.go` 的目录）执行，文档中的文件路径均相对于项目根目录。
+
+首次配置：复制 [.env.example](.env.example) 为 `.env`，填写自己的 `ARK_API_KEY`，然后运行：
 
 ```sh
 go run .
@@ -56,6 +58,15 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | `-memory-mode` | rerank | memory-search 的方式：keyword（旧关键词）、vector、bm25、hybrid（RRF）、rerank（完整流程） |
 | `-memory-context-calls` | 4 | 本次运行最多几次背景生成；0 表示全部按原文检索 |
 | `-memory-tokens` | 800 | 注入或返回的记忆估算 token 预算，另有最多5条的上限 |
+| `-mcp-server` | 空 | MCP server：`http(s)://…` 地址连远程 server（Streamable HTTP），否则当作子进程命令（stdio，按空格切分，不经过shell）；可重复给多个；配合 `-question` 时把它们的工具注册为 `mcp_*`，连不上的 server 打印 `MCP error` 后跳过；`-mcp-list`/`-mcp-raw` 只接受一个 |
+| `-mcp-list` | false | 只用 SDK 连接 `-mcp-server`，打印协议版本、capabilities 与工具列表，不请求模型 |
+| `-mcp-raw` | 空 | 不用 SDK，手写 JSON-RPC：`legacy`（initialize 握手）或 `modern`（server/discover + 每请求 `_meta`），逐行打印收发 |
+| `-mcp-call` / `-mcp-args` | 空 / `{}` | 配合 `-mcp-list` 或 `-mcp-raw` 再调用一次指定工具 |
+| `-mcp-serve` | false | 作为 MCP server（stdio）运行，暴露 calculator；须单独使用 |
+| `-mcp-http` | 空 | 配合 `-mcp-serve`，改用 Streamable HTTP 在该地址提供 `/mcp`（远程 MCP），如 `127.0.0.1:8091` |
+| `-skills` | false | 扫描 `skills/*/SKILL.md`，system 中放索引，增加 load_skill |
+| `-skill` | 空 | 配合 `-skills`，只启用这个名字的 skill（可重复）；不给则启用全部 |
+| `-skills-list` | false | 只扫描 `skills/`，stdout 输出每个 skill 的元数据、正文与校验错误（JSON），不请求模型；须单独使用 |
 
 工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。
 
@@ -73,6 +84,8 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | [rag_lab.go](rag_lab.go) | 10题真实检索与无检索/有检索对比；不写死模型回答 |
 | [embedding.go](embedding.go) | 本地纯Go推理 / 线上方舟embedding |
 | [memory.go](memory.go) | 长期记忆依据层：原文与来源上下文、文件锁事务、规则写入、过期与淘汰、删除 |
+| [mcp.go](mcp.go) | MCP client（SDK 连接、工具注册与转发）、手写 JSON-RPC、calculator MCP server |
+| [skills.go](skills.go) | frontmatter 解析、启动扫描与校验、skill 索引、load_skill |
 | [memory_retrieval.go](memory_retrieval.go) | Contextual Retrieval：切块、背景生成与缓存、向量与BM25召回、RRF、LLM重排、预算与降级 |
 
 默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail 和 check_task_status 两个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
@@ -101,6 +114,8 @@ cd observer && go run .
 点击左侧“Day 3 上下文实验”并确认，即可在对话流中看到33轮对话、压缩分隔线和大工具调用。它等价于 `go run . -context-lab -max-steps 60 -reasoning-effort minimal`，由观测台启动并接入代理，无需另开终端执行实验命令。切到“观测”，点击“终端输出”查看 `Context`、`Compact`、`Recall` 和 `Lab complete`；“迷宫”查看上下文压力与压缩位置。更新观测台源码后，需要重启观测台并刷新网页。
 
 单独在项目根目录运行实验会直连方舟，不会自动出现在观测台；已经绕过代理的对话无法事后补录。通过观测台启动时，沿用观测台的 `observer/runs/` 存档；实验程序本身不另写日志。
+
+左侧“Skills 中心”和“MCP 中心”类似 Codex 客户端的管理页。Skills 中心列出 `skills/` 下的 skill（数据来自 agent 的 `-skills-list`，与运行时同一套校验），可以查看正文、启停、删除，或填表新建一份 SKILL.md（写入后立即校验，不合规自动撤销）。MCP 中心添加 stdio server（名字 + 一行命令，相对项目根目录执行），可以启停、删除，“测试连接”调用 agent 的 `-mcp-list` 显示协商版本和工具列表。命令栏填 `http(s)://…` 地址即为远程 server。观测台自带一个远程 MCP server：启动时把 agent 编译到临时目录，以 `-mcp-serve -mcp-http 127.0.0.1:8091` 常驻运行，`http://127.0.0.1:8090/mcp` 转发过去（工具是 calculator）；在 MCP 中心用“快速填入 → observer”添加即可在对话中使用。Ctrl+C 退出观测台时它一起结束；`-mcp-addr ''` 可关闭。开关保存在 `.data/hub.json`。新对话勾选输入框里的 Skills / MCP 后，观测台把当时打开的 skill 与 server 作为快照写进 start 事件，转成 `-skills -skill …` 和多个 `-mcp-server`；续聊沿用快照，之后在中心里的改动只影响新对话。对话流在用户消息下方显示“✦”能力卡片（启用了哪些、注册了几个工具、哪些被跳过），`load_skill` 与 `mcp_*` 工具带 SKILL / MCP 标记。中心接口只接受本机 Host 且同源的请求，防止其他网页借浏览器添加命令。
 
 观测台把 agent 的 `LLM_API_URL` 指向本机代理，从模型协议本身还原过程，agent 代码不含观测台专用埋点。摘要作为独立模型调用展示；视图重建在上下文压力轨中标记，工具结果按调用ID跨请求关联。详见 [观测台笔记](docs/observer/observer-notes.md)。
 
@@ -157,6 +172,32 @@ go run . -memory-forget M3
 
 观测台：新对话勾选“长期记忆”并选择向量模型，续聊沿用。回答前的“◎”卡片显示两路候选数、融合数、重排结果、选中数和降级原因，以及背景生成与重排两类辅助调用的原始输入输出；点记忆行查看原文、背景与来源。原理见 [Day 5 笔记](docs/day-05/day-05-notes.md)。
 
+## Day 6–7：MCP client 与 server
+
+```sh
+go build -o bin/learning-agent .
+GOBIN=$PWD/bin go install github.com/mark3labs/mcp-go/examples/everything@v1.1.1   # 现成的示例 server
+# SDK client：连接 → tools/list → 调一次
+./bin/learning-agent -mcp-server bin/everything -mcp-list -mcp-call add -mcp-args '{"a":1,"b":2}' 2>/dev/null
+# 手写 JSON-RPC，对照两代协议
+./bin/learning-agent -mcp-server bin/everything -mcp-raw legacy -mcp-call echo -mcp-args '{"message":"hi"}' 2>/dev/null
+./bin/learning-agent -mcp-server bin/everything -mcp-raw modern 2>/dev/null
+# Day 7 自举闭环：client → 自己的 server → calculate；再让 agent 通过 MCP 调用
+./bin/learning-agent -mcp-server 'bin/learning-agent -mcp-serve' -mcp-list -mcp-call calculator -mcp-args '{"expression":"2*21"}'
+./bin/learning-agent -mcp-server 'bin/learning-agent -mcp-serve' -question '请只用 MCP 提供的计算器算 (1234×5678) 开根号取整'
+```
+
+mcp-go v1.1.1 默认使用 2026-07-28 版协议：先发 `server/discover`，旧版 server 才退回 `initialize` 握手。MCP 工具加 `mcp_` 前缀，避免和本地工具重名。server 端用 schema、取参、calculate 三层校验，可纠正的错误以 `isError: true` 返回。注意：SDK 会把本进程的全部环境变量传给 server 子进程。详见 [Day 6 项目实践](docs/day-06/day-06-lab.md) 与 [Day 7 项目实践](docs/day-07/day-07-lab.md)。
+
+## Bonus：知识型 skill
+
+```sh
+./bin/learning-agent -skills -question '帮我 review 这段 Go 代码：……'   # 主动 load_skill 并按 code-review 步骤评审
+./bin/learning-agent -skills -question '北京今天天气怎么样？'            # 无关任务不加载
+```
+
+启动时打印 `Skills: loaded=N names=…`，坏 SKILL.md 打印 `Skill error` 并跳过。只读 Markdown 正文，不执行 skill 自带脚本。详见 [Skills 项目实践](docs/bonus-skills/skills-lab.md)。
+
 ## 配置与学习
 
 默认使用 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`、`doubao-seed-2-1-pro-260628` 和 `reasoning_effort: high`；模型请求等待上限为5分钟。普通请求和摘要共享推理配置及工具定义；摘要额外使用tool_choice: none禁止调用工具。输出上限默认省略，只有显式配置时才发送；可通过reasoning-effort显式调整整次运行的推理强度。
@@ -169,7 +210,7 @@ go run . -memory-forget M3
 
 ```sh
 gofmt -w *.go
-go build -o /tmp/learning-agent .
+go build -o bin/learning-agent .
 ```
 
 [Day 1 学习笔记](docs/day-01/day-01-notes.md)

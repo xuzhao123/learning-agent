@@ -43,9 +43,12 @@ button { cursor: pointer; }
 
 /* 顶栏 */
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-#topbar { display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: none; }
+#topbar { display: flex; align-items: center; gap: 12px; height: 62px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: none; }
 #menu { display: none; border: 0; background: none; font-size: 18px; padding: 4px; }
-#title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#heading { flex: 1; min-width: 0; }
+#title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#run-id { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--muted); font: 11px/1.6 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+#run-id:hover { color: var(--accent); }
 .seg { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--soft); }
 .seg button { border: 0; background: none; padding: 3px 14px; border-radius: 6px; color: var(--muted); font-size: 13px; }
 .seg button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
@@ -120,6 +123,26 @@ button { cursor: pointer; }
 .mem-kind { padding: 0 7px; border-radius: 9px; background: var(--soft); font-size: 12px; }
 .mem-text { margin: 7px 0; line-height: 1.7; }
 .mem-item .meta { font-size: 11px; }
+/* Skills 中心 / MCP 中心 */
+.hubpanel .hub-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.hub-card { margin: 10px 0; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel); overflow-wrap: anywhere; }
+.hub-card.off { border-left-color: var(--muted); }
+.hub-card.off > .hub-head strong, .hub-card.off > .hub-desc { color: var(--muted); }
+.hub-card.broken { border-left-color: var(--err); }
+.hub-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.hub-head strong { font-family: var(--mono); font-size: 14px; }
+.hub-head .push { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.hub-desc { margin: 6px 0; font-size: 13px; line-height: 1.7; }
+.hub-card .meta, .hub-card .cmd { font-size: 11px; }
+.hub-card .cmd { font-family: var(--mono); color: var(--muted); }
+.hub-card pre { max-height: 320px; overflow: auto; font-size: 11px; }
+.switch { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.hub-form { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; }
+.hub-form input, .hub-form textarea { width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.hub-form textarea { min-height: 160px; font: 12px/1.6 var(--mono); resize: vertical; }
+.hub-form .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hub-chip { padding: 0 6px; border-radius: 4px; font: 600 10px/1.7 var(--mono); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--accent); }
+.step .cap { color: var(--accent); }
 .welcome { padding: 18vh 0 0; text-align: center; }
 .welcome h1 { margin: 0 0 18px; font-size: 24px; font-weight: 600; }
 .sugs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
@@ -292,6 +315,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   body.nav-open #sidebar { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.25); }
   #menu { display: block; }
   #status { display: none; }
+  #topbar { gap: 8px; }
+  .seg button { padding: 3px 8px; }
   #thread { padding: 20px 16px 24px; }
   #composer-wrap { padding: 0 16px 12px; }
   .lrow { grid-template-columns: 64px minmax(0, 1fr) 54px; }
@@ -307,6 +332,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <button id="lab" class="navbtn"><span class="ico">⚗</span>Day 3 上下文实验</button>
     <button id="rag-lab" class="navbtn"><span class="ico">⌕</span>Day 4 检索对比</button>
     <button id="memory" class="navbtn"><span class="ico">◎</span>Day 5 长期记忆</button>
+    <button id="skills-hub" class="navbtn"><span class="ico">✦</span>Skills 中心</button>
+    <button id="mcp-hub" class="navbtn"><span class="ico">⇄</span>MCP 中心</button>
     <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">▤ 学习课件</a>
     <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
     <div id="runs"></div>
@@ -314,7 +341,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   <div id="main">
     <div id="topbar">
       <button id="menu" aria-label="对话列表">☰</button>
-      <div id="title">新对话</div>
+      <div id="heading"><div id="title">新对话</div><button id="run-id" type="button" aria-label="复制对话 ID" hidden></button></div>
       <div class="seg"><button id="page-chat">对话</button><button id="page-observe">观测</button></div>
       <span id="status"></span>
     </div>
@@ -323,7 +350,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -474,13 +501,13 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start" }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [] }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
   r.last = time;
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -550,6 +577,8 @@ function apply(r, e) {
     // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
     const mem = /^Memory (\w+): (.*)$/.exec(e.text || "");
     if (mem && !["search", "forget", "hit"].includes(mem[1]) && !/^phase=(search|cli) /.test(mem[2])) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: mem[1], text: mem[2], fields: memFields(mem[2]) });
+    // skill 索引与 MCP 连接在 agent 启动时打印，归到本轮开头的“能力”卡片。
+    if (/^(Skills?|MCP) (loaded|error|connect|initialize|tools\/list|register|skip)\b|^Skills: /.test(e.text || "")) r.caps.push({ turn: r.memTurn, text: e.text });
     const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
     if (capacity) r.inputCapacity = Number(capacity[1]);
   }
@@ -618,6 +647,7 @@ function toolSummary(t) {
   if (t.name === "search_memory" && shown?.memories) return args + ` → ${shown.memories.length} 条记忆 · ` + shown.memories.map((m) => m.id).join(" / ");
   if (t.name === "forget_memory" && shown?.deleted) return args + ` → 已删除 ${shown.deleted}`;
   if (t.name === "remember_memory" && shown) return args + (shown.accepted ? " → 已登记，本轮结束时保存" : ` → 未登记：${shown.reason || ""}`);
+  if (t.name === "load_skill" && shown) return args + (shown.content ? ` → 读取全文 ${shown.content.length} 字` : ` → ${shown.message || shown.error}`);
   if (t.name === "search_docs" && shown?.hits) return args + ` → ${shown.hits.filter((h) => h.accepted).length}/${shown.hits.length} 片段过阈值 · ` + shown.hits.map((h) => `${h.id} ${h.score.toFixed(3)}`).join(" / ");
   return args + " → " + clip(compact(shown), 60);
 }
@@ -1168,14 +1198,25 @@ function fetchEvents(id) {
     es.onerror = () => { es.close(); resolve(list); };
   });
 }
-function show(id) {
+// URL 复用后端的对话 ID；切换对话才新增历史，续聊仍使用同一个链接。
+function syncRunURL(id) {
+  const url = new URL(location.href);
+  if (id) url.searchParams.set("run", id); else url.searchParams.delete("run");
+  if (url.href !== location.href) history.pushState(null, "", url);
+}
+function restoreRunURL() {
+  const id = new URL(location.href).searchParams.get("run");
+  if (id) show(id, false); else newChat(false);
+}
+function show(id, updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
   if (ui.tab === "compare") ui.tab = "trace";
   Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set() });
+  if (updateURL) syncRunURL(id);
   $("search").value = "";
   ui.collapsed.clear();
-  const es = ui.source = new EventSource(`/runs/${id}/events`);
+  const es = ui.source = new EventSource(`/runs/${encodeURIComponent(id)}/events`);
   es.onmessage = (m) => { if (ui.source !== es) return; const e = JSON.parse(m.data); ui.events.push(e); apply(ui.run, e); schedule(); };
   es.addEventListener("end", () => {
     es.close();
@@ -1292,6 +1333,26 @@ function memoryCard(r, turn, phase) {
   all.onclick = () => openMemory();
   return step(`mem-${phase}-${turn}`, [el("span", "ico mem", "◎"), el("span", "", label)], [...rows, all]);
 }
+// 本轮启用的 skill 与 MCP：快照来自观测台的 start/continue 事件，实际结果来自 agent 启动时的终端行。
+function capsCard(r, turn) {
+  const logs = r.caps.filter((l) => l.turn === turn);
+  if (!logs.length) return null;
+  const loaded = logs.map((l) => /^Skills: loaded=(\d+)/.exec(l.text)).find(Boolean);
+  const tools = logs.filter((l) => l.text.startsWith("MCP register:")).length;
+  const errors = logs.filter((l) => /^(Skill|MCP) (error|skip)/.test(l.text)).length;
+  const parts = [];
+  if (r.skills.length) parts.push(`Skills ${loaded ? loaded[1] : "?"}/${r.skills.length} 个索引写进 system`);
+  if (r.mcp.length) parts.push(`MCP ${r.mcp.length} 个 server · 注册 ${tools} 个工具`);
+  if (errors) parts.push(`${errors} 条跳过`);
+  const rows = [];
+  if (r.skills.length) rows.push(el("div", "meta", "skill：" + r.skills.join("、") + " · 模型判断相关时调用 load_skill 读取全文"));
+  for (const m of r.mcp) rows.push(el("div", "meta", `MCP ${m.name}：${m.command}`));
+  rows.push(el("pre", "", logs.map((l) => l.text).join("\n")));
+  const links = el("div", "answer-meta"), sk = el("button", "link", "Skills 中心"), mc = el("button", "link", "MCP 中心");
+  sk.onclick = () => openSkills(); mc.onclick = () => openMCP();
+  links.append(sk, mc);
+  return step(`caps-${turn}`, [el("span", "ico cap" + (errors ? " bad" : ""), "✦"), el("span", "", parts.join(" · ") || "能力")], [...rows, links]);
+}
 // 记忆辅助调用：保留原始输入输出与 token 用量，显示为卡片中的一行，不当作 assistant 回答。
 function auxCard(r, c) {
   const box = el("div", "aux-call"), raw = rawIO(c, r.id), m = (c.choice && c.choice.message) || {};
@@ -1307,7 +1368,7 @@ function chatFlow(r) {
   [...r.calls, ...r.aux].sort((x, y) => x.n - y.n).forEach((c) => {
     if (c.aux) { if (shown.has(c.turn)) flow.push({ kind: "aux", call: c }); return; } // 开场的辅助调用在记忆卡片里显示
     if (c.caseStart) flow.push({ kind: "case", text: c.caseLabel });
-    if (c.userMessage) { flow.push({ kind: "user", text: textOf(c.userMessage) }, { kind: "memory", turn: c.turn, phase: "start" }); shown.add(c.turn); }
+    if (c.userMessage) { flow.push({ kind: "user", text: textOf(c.userMessage) }, { kind: "caps", turn: c.turn }, { kind: "memory", turn: c.turn, phase: "start" }); shown.add(c.turn); }
     if (c.compact) flow.push({ kind: "compact", call: c });
     else flow.push({ kind: "call", call: c });
     const next = r.calls.find((x) => x.n > c.n);
@@ -1348,6 +1409,7 @@ function renderCall(box, r, c, last) {
     const icon = t.state === "running" ? el("span", "ico") : el("span", "ico " + (t.detour ? "bad" : "ok"), t.detour ? "✕" : "✓");
     if (t.state === "running") icon.append(el("span", "spin"));
     const head = [icon, el("span", "tname", t.name), el("span", "targs", clip(compact(t.args), 90))];
+    if (t.name === "load_skill" || t.name.startsWith("mcp_")) head.splice(1, 0, el("span", "hub-chip", t.name === "load_skill" ? "SKILL" : "MCP"));
     if (t.done) head.push(el("span", "", sec(t.done - c.end)));
     const result = t.done ? toolResult(t) : el("div", "meta", t.state === "lost" ? "进程已结束，没有结果" : "执行中…");
     box.append(step(`t${c.n}-${t.index}`, head, [el("div", "label", "参数"), el("pre", "", pretty(t.args)), el("div", "label", "结果" + (t.reason ? " · " + t.reason : "")), result]));
@@ -1436,14 +1498,16 @@ function renderChat() {
     if (f.kind === "user") { const u = el("div", "u"); u.append(el("div", "", f.text)); box.append(u); group = null; return; }
     if (f.kind === "compact") return box.append(renderCompact(f.call));
     if (f.kind === "aux") { if (!group) box.append(group = el("div", "a")); group.append(auxCard(r, f.call)); return; }
+    if (f.kind === "caps") { const card = capsCard(r, f.turn); if (card) { if (!group) box.append(group = el("div", "a")); group.append(card); } return; }
     if (f.kind === "memory") { const card = memoryCard(r, f.turn, f.phase); if (card) { if (!group) box.append(group = el("div", "a")); group.append(card); } return; }
     if (!group) box.append(group = el("div", "a"));
     renderCall(group, r, f.call, i === flow.length - 1);
   });
   if (r.pending) {
     const u = el("div", "u"); u.append(el("div", "", r.pending)); box.append(u);
-    const card = memoryCard(r, r.turns.length + 1, "start") || memoryCard(r, r.memTurn, "start");
-    if (card) { const a = el("div", "a"); a.append(card); box.append(a); }
+    const a = el("div", "a");
+    for (const card of [capsCard(r, r.memTurn), memoryCard(r, r.turns.length + 1, "start") || memoryCard(r, r.memTurn, "start")]) if (card) a.append(card);
+    if (a.childNodes.length) box.append(a);
     box.append(el("div", "shimmer", "正在启动 agent…"));
   } else if (!r.exit && !r.calls.length) box.append(el("div", "shimmer", "正在启动 agent…"));
   const last = r.calls.filter((c) => !c.compact).at(-1);
@@ -1470,6 +1534,11 @@ function renderShell() {
   $("page-observe").className = chat ? "" : "on";
   $("cmp-hint").hidden = chat;
   $("title").textContent = ui.tab === "compare" && !chat ? `对比 ${ui.checked.size} 条运行` : r ? r.query || r.id : "新对话";
+  const runID = $("run-id");
+  runID.hidden = !r;
+  runID.textContent = r ? `对话 ID · ${r.id}` : "";
+  runID.title = r ? `对话 ID：${r.id}，点击复制` : "";
+  document.title = r ? `Learning Agent · ${r.id}` : "Learning Agent";
   const status = $("status");
   status.className = r && r.exit && r.exit !== "exit 0" ? "bad" : "";
   const calls = r ? r.calls.length + r.aux.length + (r.aux.length ? `（含辅助 ${r.aux.length}）` : "") : "";
@@ -1487,9 +1556,16 @@ function syncComposer() {
   if (r) { $("mem").checked = !!r.memory; $("mem-ttl").value = r.memoryTTL || ""; }
   $("mem-ttl").hidden = !$("mem").checked;
   $("mem-ttl").disabled = !!r;
+  // 续聊沿用对话开始时的快照；新对话按中心当前打开的数量显示。
+  $("use-skills").disabled = $("use-mcp").disabled = !!r;
+  if (r) { $("use-skills").checked = r.skills.length > 0; $("use-mcp").checked = r.mcp.length > 0; }
+  else { $("use-skills").checked = load("useSkills") !== "0"; $("use-mcp").checked = load("useMCP") !== "0"; }
+  const nSkills = r ? r.skills.length : ui.hub?.skills.length, nMCP = r ? r.mcp.length : ui.hub?.mcp.length;
+  $("skills-label").textContent = "Skills" + (nSkills != null ? ` ${nSkills}` : "");
+  $("mcp-label").textContent = "MCP" + (nMCP != null ? ` ${nMCP}` : "");
   $("send").disabled = ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
-  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "");
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "");
   $("hint").textContent = !r ? ($("mem").checked ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : $("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? "agent 正在回复，本轮结束后可以继续提问" : broken ? "上次运行未正常结束，请新建对话" : "Enter 发送，会延续这条对话的上下文";
 }
@@ -1518,7 +1594,7 @@ async function loadRuns() {
     const b = el("button"), q = el("span", "q");
     if (!r.done) q.append(el("span", "live"));
     q.append(r.query === LAB_TITLE ? "⚗ Day 3 上下文实验" : r.query === RAG_LAB_TITLE ? "⌕ Day 4 检索对比" : r.query || "（无问题）");
-    b.title = r.query;
+    b.title = `${r.query}\n对话 ID：${r.id}`;
     b.append(q, el("small", "", relTime(r.id)));
     b.onclick = () => { document.body.classList.remove("nav-open"); if (ui.tab === "compare") ui.tab = "trace"; show(r.id); };
     row.append(b);
@@ -1543,6 +1619,16 @@ function autosize() { const q = $("query"); q.style.height = "auto"; q.style.hei
 
 $("page-chat").onclick = () => { ui.page = "chat"; if (ui.tab === "compare") ui.tab = "trace"; render(); loadRuns(); };
 $("page-observe").onclick = () => { ui.page = "observe"; render(); loadRuns(); };
+$("run-id").onclick = async () => {
+  const id = ui.run?.id;
+  if (!id) return;
+  let note;
+  try { await navigator.clipboard.writeText(id); note = "已复制"; }
+  catch { note = "请手动选择复制"; }
+  if (ui.run?.id !== id) return;
+  $("run-id").textContent = `对话 ID · ${id} · ${note}`;
+  setTimeout(() => { if (ui.run?.id === id) renderShell(); }, 1800);
+};
 $("menu").onclick = () => document.body.classList.toggle("nav-open");
 $("tab-trace").onclick = () => { ui.tab = "trace"; render(); loadRuns(); };
 $("tab-maze").onclick = () => { ui.tab = "maze"; render(); loadRuns(); };
@@ -1557,16 +1643,18 @@ $("replay").onclick = () => {
   render();
 };
 $("terminal").onclick = () => select("end", ui.run);
-$("new-chat").onclick = () => {
+function newChat(updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
   Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false });
+  if (updateURL) syncRunURL(null);
   document.body.classList.remove("nav-open");
   $("stats").hidden = true;
   $("view").replaceChildren(el("div", "empty", "先在对话中提问，或从左侧选择历史对话"));
   $("inspector").replaceChildren(el("div", "empty", "点击事件或节点查看详情"));
   render(); loadRuns(); $("query").focus();
-};
+}
+$("new-chat").onclick = () => newChat();
 $("lab").onclick = () => {
   document.body.classList.remove("nav-open");
   if (!ui.sending && confirm("自动进行33轮真实对话和一次大工具输出实验，最多60次模型请求（minimal推理）。开始？")) start("/runs", { context_lab: true });
@@ -1623,17 +1711,139 @@ async function openMemory(focus) {
     panel.append(card);
   }
 }
+$("use-skills").onchange = () => { save("useSkills", $("use-skills").checked ? "1" : "0"); syncComposer(); };
+$("use-mcp").onchange = () => { save("useMCP", $("use-mcp").checked ? "1" : "0"); syncComposer(); };
+$("skills-hub").onclick = () => openSkills();
+$("mcp-hub").onclick = () => openMCP();
+async function loadEnabled() {
+  try { const res = await fetch("/hub/enabled"); if (res.ok) ui.hub = await res.json(); } catch {}
+  syncComposer();
+}
+async function hubCall(method, url, body) {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) throw new Error(await res.text());
+  return res;
+}
+function hubToggle(enabled, onchange) {
+  const label = el("label", "switch"), box = el("input");
+  box.type = "checkbox"; box.checked = enabled;
+  box.onchange = async () => { box.disabled = true; try { await onchange(box.checked); } catch (err) { alert(err.message); box.checked = !box.checked; } box.disabled = false; loadEnabled(); };
+  label.append(box, enabled ? "已启用" : "已停用");
+  return label;
+}
+// 两个中心都在对话区展示，和“长期记忆”一样；数据来自 agent 自己的 -skills-list 与 -mcp-list。
+async function openHubPage(title, intro) {
+  document.body.classList.remove("nav-open");
+  if (ui.sending) return null;
+  newChat();
+  const panel = el("div", "mempanel hubpanel");
+  $("thread").replaceChildren(panel);
+  panel.append(el("h2", "", title), el("p", "meta", intro), el("div", "meta", "读取中…"));
+  return panel;
+}
+async function openSkills() {
+  const panel = await openHubPage("Skills 中心", "skills/*/SKILL.md · 由 agent 的 -skills-list 解析和校验 · 开关保存在 .data/hub.json。新对话勾选 Skills 时，打开的 skill 只把名字和用途写进 system；模型判断任务相关时调用 load_skill 读取正文。只支持知识型 skill，不执行脚本。");
+  if (!panel) return;
+  let data;
+  try { data = await (await hubCall("GET", "/hub")).json(); }
+  catch (err) { panel.lastChild.replaceWith(el("div", "err", "读取失败：" + err.message)); return; }
+  if (!panel.isConnected) return;
+  const bar = el("div", "hub-bar"), add = el("button", "ghost", "＋ 新建 skill"), form = el("form", "hub-form");
+  form.hidden = true;
+  add.onclick = () => { form.hidden = !form.hidden; };
+  bar.append(add, el("span", "meta", `${data.skills.length} 个可用` + (data.skill_errors.length ? ` · ${data.skill_errors.length} 个未通过校验` : "")));
+  const name = el("input"), desc = el("input"), body = el("textarea"), submit = el("button", "ghost", "创建");
+  name.placeholder = "name：小写字母、数字、连字符，如 commit-message"; desc.placeholder = "description：一行，写清做什么、什么时候用（模型靠它判断是否加载）";
+  body.placeholder = "# 标题\n\n## 步骤\n1. …\n\n## 输出格式\n…";
+  const row = el("div", "row"); row.append(submit, el("span", "meta", "写入 skills/<name>/SKILL.md，随后用 agent 的校验检查；不合规会撤销并给出原因"));
+  form.append(name, desc, body, row);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault(); submit.disabled = true;
+    try { await hubCall("POST", "/hub/skills", { name: name.value, description: desc.value, body: body.value }); openSkills(); }
+    catch (err) { alert(err.message); submit.disabled = false; }
+  };
+  panel.lastChild.replaceWith(bar);
+  panel.append(form);
+  if (!data.skills.length && !data.skill_errors.length) panel.append(el("div", "empty", "还没有 skill。点“新建 skill”写一份操作指南。"));
+  for (const sk of data.skills) {
+    const card = el("article", "hub-card" + (sk.enabled ? "" : " off")), head = el("div", "hub-head"), push = el("div", "push"), del = el("button", "ghost", "删除");
+    del.onclick = async () => {
+      if (!confirm(`删除 skills/${sk.name}/ 整个目录？无法撤销。`)) return;
+      try { await hubCall("DELETE", `/hub/skills/${sk.name}`); openSkills(); loadEnabled(); } catch (err) { alert(err.message); }
+    };
+    push.append(hubToggle(sk.enabled, async (on) => { await hubCall("POST", `/hub/skills/${sk.name}/enabled`, { enabled: on }); openSkills(); }), del);
+    head.append(el("strong", "", sk.name), push);
+    const full = el("details", "step"), sum = el("summary"), inner = el("div", "body");
+    sum.append(el("span", "", `SKILL.md 正文 · ${sk.body.length} 字（load_skill 返回的内容）`)); inner.append(md(sk.body)); full.append(sum, inner);
+    card.append(head, el("div", "hub-desc", sk.description), el("div", "cmd", sk.path), full);
+    panel.append(card);
+  }
+  for (const bad of data.skill_errors) {
+    const card = el("article", "hub-card broken"), head = el("div", "hub-head");
+    head.append(el("strong", "", bad.dir), el("span", "err", "未通过校验，agent 启动时跳过"));
+    card.append(head, el("div", "hub-desc", bad.error), el("div", "cmd", bad.path));
+    panel.append(card);
+  }
+}
+// 预设统一从源码启动，在项目根目录执行，无需提前准备可执行文件。
+const MCP_PRESETS = [["observer", location.origin + "/mcp", "观测台内置的远程 MCP server（Streamable HTTP），工具是 agent 的 calculator"], ["everything", "go run github.com/mark3labs/mcp-go/examples/everything@v1.1.1", "Day 6 示例 server；首次运行会下载并编译"], ["calculator", "go run . -mcp-serve", "Day 7 本项目 server，始终用当前源码"]];
+async function openMCP() {
+  const panel = await openHubPage("MCP 中心", "两种 server：填 http(s) 地址是远程 server（Streamable HTTP，每条消息一个 POST）；填命令是本地 stdio server（相对 agent 目录执行，按空格切分、不经过 shell）。配置保存在 .data/hub.json。新对话勾选 MCP 时，打开的 server 由 agent 逐个连接，工具注册为 mcp_<原名>；连不上的 server 跳过，与已有工具重名的工具跳过。");
+  if (!panel) return;
+  let data;
+  try { data = await (await hubCall("GET", "/hub/enabled")).json(); }
+  catch (err) { panel.lastChild.replaceWith(el("div", "err", "读取失败：" + err.message)); return; }
+  if (!panel.isConnected) return;
+  const form = el("form", "hub-form"), name = el("input"), command = el("input"), submit = el("button", "ghost", "添加 server");
+  name.placeholder = "name：如 observer"; command.placeholder = "远程地址如 " + location.origin + "/mcp；或 stdio 命令如 go run . -mcp-serve";
+  const presets = el("div", "row");
+  presets.append(el("span", "meta", "快速填入："));
+  for (const [n, c, tip] of MCP_PRESETS) { const b = el("button", "link", n); b.type = "button"; b.title = tip; b.onclick = () => { name.value = n; command.value = c; }; presets.append(b); }
+  const row = el("div", "row"); row.append(submit, el("span", "meta", "添加后默认启用；先点“测试连接”看协商结果和工具列表"));
+  form.append(presets, name, command, row);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault(); submit.disabled = true;
+    try { await hubCall("POST", "/hub/mcp", { name: name.value, command: command.value }); openMCP(); loadEnabled(); }
+    catch (err) { alert(err.message); submit.disabled = false; }
+  };
+  panel.lastChild.replaceWith(form);
+  if (data.hosted) panel.insertBefore(el("div", "banner", `观测台内置远程 MCP server：${location.origin}/mcp · ${data.hosted}。它把 agent 的 calculator 以 Streamable HTTP 提供出来；要在对话里使用，用“快速填入 → observer”添加。`), form);
+  if (!data.mcp_servers.length) panel.append(el("div", "empty", "还没有 MCP server。用上面的表单添加一个。"));
+  for (const m of data.mcp_servers) {
+    const card = el("article", "hub-card" + (m.enabled ? "" : " off")), head = el("div", "hub-head"), push = el("div", "push");
+    const test = el("button", "ghost", "测试连接"), del = el("button", "ghost", "删除"), out = el("div");
+    test.onclick = async () => {
+      test.disabled = true; out.replaceChildren(el("div", "shimmer", "agent -mcp-list 连接中…"));
+      try {
+        const result = await (await hubCall("POST", `/hub/mcp/${m.name}/test`)).json();
+        const lines = result.output.split("\n"), count = lines.map((l) => /^MCP tools\/list: count=(\d+)/.exec(l)).find(Boolean);
+        const hint = /exec format error/.test(result.output) ? "：请使用上方的源码启动预设，或重新构建后重试" : "";
+        out.replaceChildren(el("div", result.ok ? "meta" : "err", result.ok ? `连接成功 · ${count ? count[1] : "?"} 个工具` : "连接失败" + hint), el("pre", result.ok ? "" : "err", result.output.trim()));
+      } catch (err) { out.replaceChildren(el("div", "err", err.message)); }
+      test.disabled = false;
+    };
+    del.onclick = async () => {
+      if (!confirm(`从配置中删除 ${m.name}？不会删除它的程序文件。`)) return;
+      try { await hubCall("DELETE", `/hub/mcp/${m.name}`); openMCP(); loadEnabled(); } catch (err) { alert(err.message); }
+    };
+    push.append(hubToggle(m.enabled, async (on) => { await hubCall("POST", `/hub/mcp/${m.name}/enabled`, { enabled: on }); openMCP(); }), test, del);
+    head.append(el("strong", "", m.name), push);
+    card.append(head, el("div", "cmd", m.command), out);
+    panel.append(card);
+  }
+}
 $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "" });
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked });
 };
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };
 $("query").oninput = () => { autosize(); syncComposer(); };
-render();
-loadRuns();
+window.addEventListener("popstate", restoreRunURL);
+restoreRunURL();
+loadEnabled();
 </script>
 </body>
 </html>

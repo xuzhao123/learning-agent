@@ -20,6 +20,8 @@
 - Day 3 按用户任务允许显式 `-context-lab`：33轮真实对话后用实际笔记工具观察大输出；不预填模型输出，终端检查Transcript和View不变量，不保存实验日志。
 - Day 4 全部用 Go 实现，不使用 Python。向量模型支持本地纯Go ONNX推理与线上方舟 embedding，共用同一套Go向量检索；线上读取根目录.env中同一个ARK_API_KEY。`-rag-lab`的固定问题与评分依据不是假模型，所有回答仍调用真实方舟。半页对比报告放进当天的day-04-lab.md，不另外堆运行文件。
 - Day 5 长期记忆用规则写入（用户“记住”原话、工具最终失败），不让模型新增记忆；存储为本地JSON文件，不引入数据库；记忆运行数据放 `.data/`，不提交、不放进每日目录。
+- Day 6–7 按用户任务使用 mcp-go（client 与 server），只做 stdio；MCP server 是 agent 的 `-mcp-serve` 模式以复用 calculate。`-mcp-raw` 的错误参数只从命令行传入，用于观察 server 端校验，不写死在代码里。示例 server 安装在 bin/，不提交。
+- Bonus Skills 只做知识型：手写 frontmatter 解析，不引入 YAML 库，不执行 skill 自带脚本；skills/ 下只放真实使用的 skill，验证坏文件时临时创建、用完删除。
 - 检索与Agent放在同一进程，search_docs直接调用Go函数；不单独启动8092检索服务。CLI或网页各用一条命令启动，保留-embedding local/ark选择，普通任务不初始化向量模型。
 - 工具数据使用实际来源；`search_notes` 读取项目学习笔记，去掉假笔记字典。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。

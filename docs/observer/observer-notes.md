@@ -2,6 +2,8 @@
 
 观测台是独立程序，放在 `observer/`，有自己的 `go.mod`。agent 只负责完成任务，观测台负责启动 agent、记录过程并在网页上展示。页面参考了 DeepSeek Harness 官方的 Trajectory 视图，以及社区插件 dsh-maze / trace compare 的展示方式，提供三个视图：轨迹、迷宫、对比。
 
+顶栏显示当前对话 ID，点击可复制；它与 `runs/<ID>.jsonl` 的存档编号一致，续聊不会改变 ID。选择或新建一条实际对话后，URL 自动更新为 `/?run=<对话ID>`，复制链接、刷新页面都能打开同一条记录。切换对话支持浏览器前进与后退；点击“新对话”清除 URL 中的 `run` 参数，提交首个问题后再写入新 ID。
+
 ## Turn、Step 与原始输入输出
 
 Turn表示一次用户回合，Step表示其中一次任务模型调用及工具执行。一次用户提问可以跑多个Step；续聊开启下一个Turn，Step从1重新编号。摘要是独立的压缩调用，不计入任务Step，但仍计入模型请求总数和预算。
@@ -26,6 +28,37 @@ Turn表示一次用户回合，Step表示其中一次任务模型调用及工具
 - 实验包含多个独立上下文，因此不能当作一条普通对话续聊。自己提问请另建RAG对话。无候选过阈值时按空结果展示，最终合理拒答仍可以正常完成；“绕路”只是界面的过程启发式，不是答案质量评分。
 
 片段正文使用文本节点展示，来源与模型输出都不会作为HTML执行。观测台只增强已有协议结果的展示，Agent无需知道网页细节。原理、10题结果和练习集中见 [Day 4学习笔记](../day-04/day-04-notes.md)。
+
+## Skills 中心与 MCP 中心
+
+观测台只管“装了哪些、开没开”，解析、校验和连接都交给 agent 自己的命令行模式，不在网页端另写一套规则：
+
+| 操作 | 观测台做什么 | 实际执行者 |
+| --- | --- | --- |
+| 列出 skill | `GET /hub` | `go run . -skills-list`：与运行时同一个 `readSkill`，坏文件进 `skill_errors` |
+| 新建 skill | 写 `skills/<name>/SKILL.md` | 写后再跑 `-skills-list`，这个目录出错就整个删掉并返回原因 |
+| 测试 MCP server | `POST /hub/mcp/{name}/test` | `go run . -mcp-server … -mcp-list`：SDK 连接、协商、列工具，不请求模型 |
+| 新对话 | 读 `.data/hub.json` 取快照，写进 start 事件 | agent 收到 `-skills -skill a …` 与多个 `-mcp-server` |
+
+为什么用快照：一条对话的工具集合应当前后一致。续聊时如果按中心的最新开关重新拼参数，模型在前几轮看到的工具可能在下一轮消失，历史里的 tool_calls 就对不上了。所以续聊从最近一次 start/continue 事件读回 `skills` 与 `mcp`，中心里的改动只影响新对话。
+
+MCP 中心的预设使用 `go run` 从源码启动，命令在项目根目录执行，无需提前准备可执行文件。首次启动需要编译（everything 还需下载模块），后续复用 Go 缓存。添加自己的 server 时也建议使用这样的源码启动命令。
+
+### 内置远程 MCP server
+
+```
+agent（client）──POST http://127.0.0.1:8090/mcp──▶ 观测台反向代理 ──▶ 127.0.0.1:8091/mcp
+                                                              agent -mcp-serve -mcp-http（常驻子进程）
+```
+
+- 工具实现仍在 agent：`-mcp-serve` 加 `-mcp-http` 后，同一个 server 对象、同一套三层校验，只把传输从 stdio 换成 Streamable HTTP。观测台只做托管和转发，不引入 MCP SDK。
+- 先 `go build` 到临时目录再运行，而不是 `go run`：结束 `go run` 不会结束它编译出的子进程，Ctrl+C 后会留下进程占着端口。
+- 反向代理保留原请求的 Host，`FlushInterval: -1` 让 SSE 分段立即转发；`/mcp` 同样经过本机 Host + 同源 Origin 检查，SDK 自己还有一层 DNS 重绑定防护。
+- 远程与 stdio 的协议消息完全相同（discover → tools/list → tools/call），区别是：远程 server 不随 agent 启动和退出，能被多个 agent 同时使用；连接时没有子进程，也就没有 stderr 日志转发，server 日志打印在观测台终端。
+
+能力卡片只从 agent 的终端行还原（`Skills: loaded=…`、`Skill error`、`MCP connect/initialize/tools/list/register/skip/error`），和对话流一样不加观测专用埋点。
+
+中心能让 agent 启动任意命令，所以 `/hub` 接口只接受 Host 为 127.0.0.1 或 localhost、且 Origin（如果有）与 Host 相同的请求：其他网站无法借浏览器跨站提交，DNS 重绑定也过不了 Host 检查。
 
 ## 1. 为什么在模型请求这一层观测
 
@@ -159,13 +192,14 @@ Enter 发送，Shift+Enter 换行；输入法选词时的 Enter 不会发送。
 
 ## 4. 启动
 
+在项目根目录执行：
+
 ```sh
-cd observer
-go run .
+go -C observer run .
 # 打开 http://127.0.0.1:8090
 ```
 
-参数：`-addr` 指定页面地址，默认 `127.0.0.1:8090`；`-agent` 指定 agent 目录，默认 `..`。
+参数：`-addr` 指定页面地址，默认 `127.0.0.1:8090`；`-agent` 相对于 `observer/` 指定项目目录，默认 `..`。按上述命令启动时无需额外指定目录。
 
 要继续对话：
 

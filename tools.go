@@ -148,7 +148,23 @@ func runTool(ctx context.Context, call ToolCall) (result any, err error) {
 			}
 		}
 		return map[string]any{"file": path, "matches": matches}, nil
+	case "load_skill":
+		if skillIndex == nil {
+			return nil, errors.New("请使用 -skills 开启 skill")
+		}
+		var args struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return nil, errors.New("name 需要是字符串")
+		}
+		return loadSkill(strings.TrimSpace(args.Name))
 	default:
+		for _, conn := range mcpConns {
+			if conn.tools[call.Function.Name] != "" {
+				return conn.call(ctx, call.Function.Name, call.Function.Arguments)
+			}
+		}
 		return nil, fmt.Errorf("未知工具：%s", call.Function.Name)
 	}
 }
