@@ -216,6 +216,6 @@ Termination: max_steps
 - 网页内容的提示词注入只靠 system prompt 里的一句规则，没有做检测；Week 3 专门做攻防。
 - 浏览器没有纳入 Bash 沙箱。当前代码默认保留 Chrome 自身沙箱；只有显式设置 `CHROME_NO_SANDBOX=1` 才关闭，关闭后渲染进程与 agent 拥有相同权限。
 - 不伪装 User-Agent、不绕过验证码，所以搜索可能失败；没有接入搜索 API。
-- 去掉 UA 伪装之后，因方舟账户欠费，没能再做一次真实模型的端到端运行；只用无头浏览器确认了 GitHub、pkg.go.dev 和 go.dev 的两个页面都能正常打开。
+- 去掉 UA 伪装之后的方舟端到端复测（Day 14）：`open_page` 打开 go.dev、pkg.go.dev、GitHub 均正常；`web_search` 每次都报 `Inspected target navigated or closed (-32000)`，是必应页面在无头浏览器里读取时被脚本跳转，提交 `5592b88` 的旧版本同样复现。跳转后的页面也没有结果，D14 起改为在同一标签页再读一次、仍失败就不可重试，不再白白重试 3 次；模型随后改用 `open_page` 打开已知网站。见 [Day 14 实践](../day-14/day-14-lab.md#43-d11-复测web_search-不可用)。
 - 截图只保留每个调用的最后一帧，不保存录像；`.data/browser/` 不会自动清理。
 - 帧率不受控：screencast 每次重绘都会发帧，靠 ack 和文件覆盖控制。

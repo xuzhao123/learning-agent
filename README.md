@@ -69,13 +69,14 @@ go build -o bin/learning-agent .
 | Day 11 | 浏览器自动化 | [笔记](docs/day-11/day-11-notes.md) | [实践](docs/day-11/day-11-lab.md) | — |
 | Day 12 | 代码执行沙箱 | [笔记](docs/day-12/day-12-notes.md) | [实践](docs/day-12/day-12-lab.md) | — |
 | Day 13 | 可观测性：调用链追踪 | [笔记](docs/day-13/day-13-notes.md) | [实践](docs/day-13/day-13-lab.md) | — |
+| Day 14 | 第二周综合与复盘 | [复盘](docs/week-02-review.md) | [实践](docs/day-14/day-14-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
 
 补充阅读：
 
-- [28 天学习计划](plan.md)：课程安排与长期目标；[第一周复盘](docs/week-01-review.md)：模块之间的关系。
+- [28 天学习计划](plan.md)：课程安排与长期目标；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
 - [Agent 工程面试题库](wiki/16-interview-preparation.md)：126 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。

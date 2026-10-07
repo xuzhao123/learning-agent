@@ -397,6 +397,7 @@ func runAttempt(ctx context.Context, call llm.ToolCall) (any, error) {
 		err   error
 	}
 	done := make(chan outcome, 1) // 带缓冲：执行器先走了，工具 goroutine 之后也能写完退出
+	detail := ""
 	go func() {
 		value, err := runTool(attemptCtx, call)
 		done <- outcome{value, err}
@@ -410,14 +411,17 @@ func runAttempt(ctx context.Context, call llm.ToolCall) (any, error) {
 		if call.Function.Name == "spawn_agent" {
 			// 子 agent 配合取消：收到 SIGINT 后回填结果、写好检查点再退出，最多等 RunChild 的 WaitDelay。
 			// 等它收尾，子进程的输出和检查点才完整；父进程先退出会让它写输出时收到 SIGPIPE。
-			<-done
+			// 子 agent 的收尾信息里有 task_id，一并交给模型，续跑时它才能引用同一个子任务。
+			if o := <-done; o.err != nil {
+				detail = "；" + o.err.Error()
+			}
 		}
 	}
 	// 已经开始执行，却在完成前被打断：无法确定副作用有没有发生。
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("%w：执行中被取消（%v），可能已经生效", errUnknown, ctx.Err())
+		return nil, fmt.Errorf("%w：执行中被取消（%v），可能已经生效%s", errUnknown, ctx.Err(), detail)
 	}
-	return nil, fmt.Errorf("%w：单次执行超过 %s，可能已经生效或仍在后台进行", errUnknown, timeout)
+	return nil, fmt.Errorf("%w：单次执行超过 %s，可能已经生效或仍在后台进行%s", errUnknown, timeout, detail)
 }
 
 func describe(o llm.Observation) string {

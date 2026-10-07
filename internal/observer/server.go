@@ -336,6 +336,12 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	ctx, span := r.beginTurn(strings.TrimSpace(input.Query))
 	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow(), Trace: span.SpanContext().TraceID().String()})
 	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
+	if history.TaskID != "" {
+		// 接着一轮被打断的任务：沿用它的检查点ID。子任务ID = 父ID + task 原文哈希，
+		// 父ID不变，模型照抄同一个 task 时就能续跑被打断的子任务或取回已完成的结果，而不是从头再跑。
+		// 正常结束的轮次续聊时不沿用：新问题里出现相同的 task，应当重新执行，而不是拿旧结论回答。
+		args = append(args, "-task-id", history.TaskID)
+	}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
 	}
@@ -486,6 +492,7 @@ type resumeInput struct {
 	Effort    string            `json:"-"`
 	RAG       bool              `json:"-"`
 	Embedding string            `json:"-"`
+	TaskID    string            `json:"-"` // 上一轮被打断时它的检查点ID：续聊沿用，子任务才能接着跑
 }
 
 // 调用方持有r.mu。请求里的View已经包含摘要，直接延续它，不重新拼接所有旧请求。
@@ -496,6 +503,7 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 		if err != nil {
 			return nil, err
 		}
+		result.TaskID = id
 		return r.withEmbedding(result), nil
 	}
 	start, end := 0, len(r.events)

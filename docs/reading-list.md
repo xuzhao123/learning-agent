@@ -106,6 +106,10 @@
 
 先读 [学习笔记](day-13/day-13-notes.md)，重点是 trace/span 数据结构、W3C traceparent 传播、OpenTelemetry 的处理器与导出器、GenAI 语义约定，以及代理与进程内打点的取舍。完整资料见 [参考](day-13/day-13-notes.md#参考)。
 
+## Day 14 · 第二周综合与复盘
+
+先读 [第二周复盘](week-02-review.md)，重点是“一次工具调用的一生”和实测中反复出现的问题；再看 [综合演练](day-14/day-14-lab.md) 怎样从调用链读出取消路径与耗时分布。
+
 ## 扩展 · 子 agent
 
 先读 [学习笔记](bonus-subagents/subagents-notes.md)，重点是独立上下文、任务说明与权限继承。完整资料见 [参考](bonus-subagents/subagents-notes.md#参考)。

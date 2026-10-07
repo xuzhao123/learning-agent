@@ -142,6 +142,17 @@ func inTab[T any](ctx context.Context, callID, address, script string) (_ T, err
 	if err = chromedp.Do(tab, chromedp.Navigate(address), chromedp.WaitReady("body")); err == nil {
 		value, err = chromedp.Run(tab, chromedp.Evaluate[T](script, chromedp.EvalAwaitPromise))
 	}
+	if err != nil && ctx.Err() == nil && strings.Contains(err.Error(), "Inspected target navigated or closed") {
+		// 页面自己的脚本在读取途中又跳转了一次（必应对无头浏览器会这样），正在执行的读取随旧页面一起失效。
+		// 等新页面就绪，在同一个标签页里再读一次；还在跳转就是不可重试的错误：重新打开只会重复同样的跳转。
+		span.AddEvent("page_navigated_during_read")
+		if err = chromedp.Do(tab, chromedp.WaitReady("body")); err == nil {
+			value, err = chromedp.Run(tab, chromedp.Evaluate[T](script, chromedp.EvalAwaitPromise))
+		}
+		if err != nil && ctx.Err() == nil {
+			err = llm.Permanent(fmt.Errorf("页面在读取时被它自己的脚本跳转，跳转后仍读不到内容（搜索引擎可能不向自动化浏览器提供结果），重试结果相同；可以改用 open_page 直接打开已知网站：%w", err))
+		}
+	}
 	if err != nil && strings.Contains(err.Error(), "BLOCKED_BY_CLIENT") {
 		// 主页面本身被拦下：多半是公网页面跳转到了内网地址。同样的请求再试也一样。
 		err = llm.Permanent(fmt.Errorf("页面请求了本机或内网地址，已被拦截：%s", strings.Join(blocked(), "、")))

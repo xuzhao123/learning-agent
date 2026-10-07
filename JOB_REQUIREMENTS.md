@@ -70,7 +70,7 @@
 | C08 | Day 4 固定题集、无检索/有检索对比与人工评阅；结果见 [对比报告](docs/day-04/day-04-lab.md) | 留出集、规模化评分、回归集与线上失败归因 | 待反馈 |
 | C09 | Turn/Step、原始请求响应、轨迹/迷宫/对比与续聊；D13 用 OpenTelemetry 做端到端调用链（观测台、agent、子 agent、队列、MCP server 跨进程成树，GenAI 语义约定，可选 OTLP 导出到 Jaeger），由 span 汇总次数、失败率与 P50/P95。见 [观测台](docs/observer/observer-notes.md)、[Day 13](docs/day-13/day-13-lab.md) | 采样、Metrics SDK 与告警、带 trace_id 的结构化日志、流式阶段（TTFT）、基于 trace 的线上失败归因 | 待反馈 |
 | C10 | MCP 参数与信任边界、只读 Skills、浏览器内网拦截、Bash 隔离及联网审批。见 [Day 7](docs/day-07/day-07-lab.md)、[Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 多租户、注入攻防、跨工具外发与完整审计；现有沙箱限制见 Day 12 边界 | 待反馈 |
-| C11 | chromedp 页面读取与画面，Bash 沙箱代码执行。见 [Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 操作型浏览器、会话保持、CI 执行器与生产使用 | 待反馈 |
+| C11 | chromedp 页面读取与画面，Bash 沙箱代码执行；Day 14 综合演练中二者与子 agent、停止续聊一起端到端运行。见 [Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md)、[Day 14](docs/day-14/day-14-lab.md) | 可用的搜索（web_search 被必应页面跳转阻断）、操作型浏览器、会话保持、CI 执行器与生产使用 | 待反馈 |
 | C12 | 子 agent 的独立上下文、并行、继承与恢复。见 [子 agent](docs/bonus-subagents/subagents-lab.md) | 与单 agent 的系统成本/效果对比，复杂协作 | 待反馈 |
 | C13 | 用户已指出上下文输出上限、摘要配额和展示问题；方案与风险讨论见 [Day 3 设计](docs/day-03/context-system-design.md)、[深度问题](docs/deep-questions.md)；面试题库安排了 [系统设计](wiki/16-interview-preparation.md#p) 与 [项目判断练习](wiki/16-interview-preparation.md#o) | 独立项目交付、真实上线与改进、团队评审和协作证据；题库推演不等同于实践 | 待确认 |
 | C14 | 中文学习文档、基础/技术两层 Agent Wiki、原始资料与 Go 实现已整理，技术层提供算法算例、Go片段、故障推演及源码边界。见 [体系 Wiki](wiki/README.md)、[技术索引](wiki/README.md#技术展开索引)、[阅读材料](docs/reading-list.md)；[面试题库](wiki/16-interview-preparation.md) 补充中英文表达与 GitHub 资料入口 | 独立技术写作、英文交流、成果发布与开源证据；题库阅读和练习掌握待确认 | 待确认 |

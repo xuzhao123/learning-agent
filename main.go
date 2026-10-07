@@ -422,7 +422,13 @@ func run() error {
 	}
 	defer unlock()
 	if _, err := os.Stat(agent.CheckpointPath(agent.CheckpointID)); agent.Resume == nil && err == nil {
-		return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
+		// 续聊接着一轮被打断的任务时（观测台在停止后续聊），沿用它的ID：上下文由 -history-stdin 给出，
+		// 新的运行覆盖这份检查点；ID不变，子任务ID才对得上。已完成的任务不能这样覆盖。
+		cp, loadErr := agent.LoadCheckpoint(agent.CheckpointID)
+		if history == nil || loadErr != nil || cp.Status == "done" {
+			return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
+		}
+		fmt.Printf("Continue: 沿用被打断任务的检查点ID %s（上一轮 status=%s reason=%s）\n", cp.ID, cp.Status, cp.Reason)
 	}
 	llm.TaskID = agent.CheckpointID
 	if browser.Enabled {
