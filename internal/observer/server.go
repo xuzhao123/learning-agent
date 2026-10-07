@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,7 +23,12 @@ import (
 	"syscall"
 	"time"
 
+	"learning-agent/internal/telemetry"
+
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 //go:embed index.html
@@ -54,6 +60,8 @@ type event struct {
 	NetAllow  []string        `json:"net_allow,omitempty"` // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
 	Task      string          `json:"task,omitempty"`      // 发出这次请求的 agent 任务ID（X-Agent-Task）
 	Sub       bool            `json:"sub,omitempty"`       // 请求来自子 agent：不进入父对话流、不参与续聊恢复
+	Trace     string          `json:"trace,omitempty"`     // D13：start/continue 上记这次交互的 trace_id
+	Span      string          `json:"span,omitempty"`      // D13：request 上记 agent 的 chat span ID（来自 traceparent 头）
 }
 
 type run struct {
@@ -125,6 +133,8 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.Handle("POST /runs/{id}/network", sameOrigin(http.HandlerFunc(s.decideNetwork)))
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
+	mux.HandleFunc("GET /traces/{id}", s.traceSpans)
+	mux.HandleFunc("GET /trace-metrics", s.traceMetrics)
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
 	hub := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, sameOrigin(handler)) }
@@ -274,8 +284,9 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider, Bash: input.Bash})
-	s.launch(r, args, nil)
+	ctx, span := r.beginTurn(input.Query)
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider, Bash: input.Bash, Trace: span.SpanContext().TraceID().String()})
+	s.launch(ctx, r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
 
@@ -322,7 +333,8 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow()})
+	ctx, span := r.beginTurn(strings.TrimSpace(input.Query))
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow(), Trace: span.SpanContext().TraceID().String()})
 	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
@@ -350,17 +362,36 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 			args = append(args, "-net-allow", domain)
 		}
 	}
-	s.launch(r, args, history)
+	s.launch(ctx, r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
 }
 
-func (s *server) launch(r *run, args []string, history *resumeInput) {
+// D13：每次交互（首问或续聊）一个 trace，根 span 是观测台的 interaction；agent 进程的 invoke_agent 挂在它下面。
+// 同一个对话的多个 trace 用 gen_ai.conversation.id（对话ID）归到一起。
+func (r *run) beginTurn(query string) (context.Context, trace.Span) {
+	r.mu.Lock()
+	turn := 1
+	for _, e := range r.events {
+		if e.Kind == "start" || e.Kind == "continue" {
+			turn++
+		}
+	}
+	r.mu.Unlock()
+	ctx, span := telemetry.Begin(context.Background(), "interaction", trace.SpanKindServer, semconv.GenAIConversationID(r.ID), attribute.Int("agent.turn", turn))
+	telemetry.Content(span, "agent.question", query)
+	return ctx, span
+}
+
+func (s *server) launch(ctx context.Context, r *run, args []string, history *resumeInput) {
+	span := trace.SpanFromContext(ctx)
 	cmd := s.agentCommand(context.Background(), args...)
-	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID)
+	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID)
+	cmd.Env = append(cmd.Env, telemetry.Env(ctx)...)
 	if history != nil {
 		data, err := json.Marshal(history)
 		if err != nil {
 			r.add(event{Kind: "exit", Text: "无法编码续聊历史"})
+			telemetry.End(span, err, "launch_error")
 			return
 		}
 		cmd.Stdin = bytes.NewReader(data)
@@ -372,6 +403,7 @@ func (s *server) launch(r *run, args []string, history *resumeInput) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		r.add(event{Kind: "exit", Text: err.Error()})
+		telemetry.End(span, err, "launch_error")
 	} else {
 		r.mu.Lock()
 		r.proc, r.stopping, r.rootTask = cmd.Process, false, ""
@@ -390,6 +422,9 @@ func (s *server) launch(r *run, args []string, history *resumeInput) {
 			if err != nil {
 				text = err.Error()
 			}
+			// 先结束根 span 再记 exit：页面看到 exit 时，interaction 已经写进 trace 文件。
+			span.SetAttributes(attribute.String("process.exit", text))
+			telemetry.End(span, err, "agent_exit")
 			r.add(event{Kind: "exit", Text: text})
 		}()
 	}
@@ -735,7 +770,12 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	}
 	sub := task != "" && task != r.rootTask
 	r.mu.Unlock()
-	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose, Task: task, Sub: sub})
+	// traceparent 是 00-<trace_id>-<span_id>-<flags>；只记 span_id，页面据此把调用链里的 chat span 和这条原始请求对上。
+	spanID := ""
+	if parts := strings.Split(req.Header.Get("traceparent"), "-"); len(parts) == 4 && spanPattern.MatchString(parts[2]) {
+		spanID = parts[2]
+	}
+	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose, Task: task, Sub: sub, Span: spanID})
 
 	start := time.Now()
 	// 模型路由在 agent 里：它在 X-Agent-Upstream 里声明这次请求的真实地址（方舟或 DeepSeek），代理照此转发。
@@ -942,4 +982,116 @@ func (s *server) find(id string) *run {
 		}
 	}
 	return nil
+}
+
+var spanPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// D13：读一个 trace 的全部 span（.data/traces/<trace_id>.jsonl，由各进程的 SDK 导出器写入）。
+// 运行中也可以读：span 结束一个写一行，还没结束的 span（包括根 span）暂时不在文件里。
+func (s *server) traceSpans(w http.ResponseWriter, req *http.Request) {
+	id := req.PathValue("id")
+	if !telemetry.ValidTraceID(id) {
+		http.NotFound(w, req)
+		return
+	}
+	spans, err := readSpans(filepath.Join(s.agentDir, telemetry.Path(id)))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(spans)
+}
+
+func readSpans(path string) ([]telemetry.Record, error) {
+	data, err := os.ReadFile(path)
+	spans := []telemetry.Record{}
+	for _, line := range strings.Split(string(data), "\n") {
+		var record telemetry.Record
+		if json.Unmarshal([]byte(line), &record) == nil && record.SpanID != "" {
+			spans = append(spans, record)
+		}
+	}
+	return spans, err
+}
+
+// D13 指标：不另起一套采集，从已结束的 span 汇总。名字沿用 GenAI 约定的指标：
+// gen_ai.client.operation.duration（模型、向量化）、gen_ai.client.token.usage、execute_tool 的耗时与失败率，以及任务结局。
+// conversation 参数只统计这个对话的 trace；不给时统计全部。
+func (s *server) traceMetrics(w http.ResponseWriter, req *http.Request) {
+	conversation := req.URL.Query().Get("conversation")
+	paths, _ := filepath.Glob(filepath.Join(s.agentDir, telemetry.Dir, "*.jsonl"))
+	type series struct {
+		Name     string  `json:"name"`
+		Count    int     `json:"count"`
+		Errors   int     `json:"errors"`
+		P50      float64 `json:"p50_ms"`
+		P95      float64 `json:"p95_ms"`
+		Input    int     `json:"input_tokens,omitempty"`
+		Output   int     `json:"output_tokens,omitempty"`
+		Cached   int     `json:"cached_tokens,omitempty"`
+		duration []float64
+	}
+	groups := map[string]map[string]*series{"gen_ai.client.operation.duration": {}, "execute_tool.duration": {}, "agent.outcome": {}}
+	traces := 0
+	number := func(v any) int { f, _ := v.(float64); return int(f) }
+	for _, path := range paths {
+		spans, err := readSpans(path)
+		if err != nil {
+			continue
+		}
+		if conversation != "" && !slices.ContainsFunc(spans, func(r telemetry.Record) bool { return r.Attributes["gen_ai.conversation.id"] == conversation }) {
+			continue
+		}
+		traces++
+		for _, span := range spans {
+			op, _ := span.Attributes["gen_ai.operation.name"].(string)
+			group, name := "", ""
+			switch op {
+			case "chat", "embeddings":
+				model, _ := span.Attributes["gen_ai.request.model"].(string)
+				group, name = "gen_ai.client.operation.duration", op+" "+model
+				if purpose, ok := span.Attributes["agent.purpose"].(string); ok {
+					name += " · " + purpose
+				}
+			case "execute_tool":
+				tool, _ := span.Attributes["gen_ai.tool.name"].(string)
+				group, name = "execute_tool.duration", tool
+			case "invoke_agent":
+				outcome, _ := span.Attributes["agent.outcome"].(string)
+				group, name = "agent.outcome", outcome
+			}
+			if group == "" {
+				continue
+			}
+			item := groups[group][name]
+			if item == nil {
+				item = &series{Name: name}
+				groups[group][name] = item
+			}
+			item.Count++
+			if span.Status == "error" {
+				item.Errors++
+			}
+			item.duration = append(item.duration, float64(span.End.Sub(span.Start).Microseconds())/1000)
+			item.Input += number(span.Attributes["gen_ai.usage.input_tokens"])
+			item.Output += number(span.Attributes["gen_ai.usage.output_tokens"])
+			item.Cached += number(span.Attributes["gen_ai.usage.cache_read.input_tokens"])
+		}
+	}
+	result := map[string]any{"traces": traces}
+	for group, items := range groups {
+		list := []*series{}
+		for _, item := range items {
+			slices.Sort(item.duration)
+			// 最近秩法：第 ceil(p×n) 个值。样本少时 P95 就是最大值附近，读数要结合 count。
+			rank := func(p float64) float64 { return item.duration[max(0, int(math.Ceil(p*float64(len(item.duration))))-1)] }
+			item.P50, item.P95 = rank(0.5), rank(0.95)
+			list = append(list, item)
+		}
+		slices.SortFunc(list, func(a, b *series) int { return b.Count - a.Count })
+		result[group] = list
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

@@ -15,6 +15,10 @@ import (
 	"time"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Day 12：bash 工具与沙箱。每次调用起一个全新的沙箱，里面跑一次 /bin/bash -c：
@@ -106,9 +110,15 @@ func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 	return execute(ctx, callID, command)
 }
 
-func execute(ctx context.Context, callID, command string) (any, error) {
+func execute(ctx context.Context, callID, command string) (_ any, err error) {
+	// D13：一次沙箱执行一个 span，等锁的时间也算在内（同一进程的 bash 调用串行）。
+	ctx, span := telemetry.Begin(ctx, "sandbox.exec", trace.SpanKindInternal, attribute.Int("sandbox.command_bytes", len(command)))
+	telemetry.Content(span, "sandbox.command", command)
+	errorType := "sandbox_error"
+	defer func() { telemetry.End(span, err, errorType) }()
 	mu.Lock()
 	defer mu.Unlock()
+	span.AddEvent("lock_acquired")
 	deniedMu.Lock()
 	denials = nil
 	deniedMu.Unlock()
@@ -139,7 +149,8 @@ func execute(ctx context.Context, callID, command string) (any, error) {
 	}
 	filter.Seek(0, 0)
 
-	argv := bwrapArgs(workspace, netDir, self, command)
+	// 和 Claude Code 给 Bash 子进程设 TRACEPARENT 一样：沙箱里的程序愿意的话，可以把自己的 span 接到这次执行下面。
+	argv := bwrapArgs(workspace, netDir, self, command, telemetry.Env(ctx))
 	unit := ""
 	if cgroupOK() {
 		// 每次执行一个有名字的 scope（一个 cgroup）：超时时按 cgroup 整体杀掉。
@@ -150,6 +161,7 @@ func execute(ctx context.Context, callID, command string) (any, error) {
 	} else {
 		fmt.Println("Sandbox: cgroup 不可用（没有 systemd 用户会话），本次不限制内存、CPU 与进程数")
 	}
+	span.SetAttributes(attribute.Bool("sandbox.cgroup", unit != ""))
 	fmt.Printf("Bash [%s]: %s\n", callID, oneLine(command, 200))
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.ExtraFiles = []*os.File{filter}
@@ -172,6 +184,7 @@ func execute(ctx context.Context, callID, command string) (any, error) {
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		fmt.Printf("Bash [%s]: killed after=%s reason=%v\n", callID, time.Since(start).Round(time.Millisecond), ctx.Err())
+		errorType = "killed"
 		return nil, ctx.Err() // 执行器按“超时 / 被取消 → 结果未知”处理
 	}
 	result := map[string]any{"exit_code": cmd.ProcessState.ExitCode(), "duration_ms": time.Since(start).Milliseconds()}
@@ -185,7 +198,9 @@ func execute(ctx context.Context, callID, command string) (any, error) {
 	}
 	output, total, truncated := out.text()
 	result["output"], result["output_bytes"], result["truncated"] = output, total, truncated
+	span.SetAttributes(attribute.Int("process.exit.code", cmd.ProcessState.ExitCode()), attribute.Int("sandbox.output_bytes", total))
 	deniedMu.Lock()
+	span.SetAttributes(attribute.Int("sandbox.network_denied", len(denials)))
 	if len(denials) > 0 {
 		result["network_denied"] = append([]string(nil), denials...)
 		result["network_hint"] = "这些主机不在白名单，访问被代理拒绝。确实需要时调用 request_network_access 请用户批准。"
@@ -195,7 +210,7 @@ func execute(ctx context.Context, callID, command string) (any, error) {
 	return result, nil
 }
 
-func bwrapArgs(workspace, netDir, self, command string) []string {
+func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 	args := []string{"bwrap",
 		// 新的用户、PID、网络、IPC、UTS、cgroup namespace；禁止沙箱里再建 user namespace；去掉全部特权。
 		"--unshare-all", "--unshare-user", "--disable-userns", "--cap-drop", "ALL",
@@ -242,8 +257,12 @@ func bwrapArgs(workspace, netDir, self, command string) []string {
 		// 环境变量全部清空：ARK_API_KEY 之类的密钥不会带进沙箱。
 		"--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", "/workspace", "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp",
 		"--setenv", "HTTP_PROXY", proxy, "--setenv", "HTTPS_PROXY", proxy, "--setenv", "http_proxy", proxy, "--setenv", "https_proxy", proxy, "--setenv", "NO_PROXY", "localhost,127.0.0.1",
-		"--seccomp", "3",
-		"/.sandbox/agent", "sandbox-init", "/bin/bash", "-c", command)
+	)
+	for _, pair := range env {
+		name, value, _ := strings.Cut(pair, "=")
+		args = append(args, "--setenv", name, value)
+	}
+	args = append(args, "--seccomp", "3", "/.sandbox/agent", "sandbox-init", "/bin/bash", "-c", command)
 	return args
 }
 

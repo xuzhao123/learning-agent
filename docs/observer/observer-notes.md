@@ -106,6 +106,18 @@ API 输入 token 曲线与 agent 触发压缩时的 used 口径不同：后者�
 
 已结束的运行支持 1×–300× 回放；“折叠空闲”缩短没有活动的等待段。相同问题的模型决策可能不同，耗时或调用更少不自动代表回答更好。
 
+### 4.5 调用链
+
+“调用链”标签读取 OpenTelemetry span（D13）。每次首问或续聊是一个 trace，根 span 是观测台的 `interaction`；agent、子 agent、MCP server 等进程的 span 通过 `TRACEPARENT` 或 `_meta.traceparent` 挂在它下面。
+
+- 上方指标由 span 汇总：模型与向量化的次数、失败率、P50/P95 与 token，各工具的耗时与失败率，任务结局；默认只统计本对话，可切换为全部对话。
+- 每个 Turn 一棵 span 树和瀑布条，耗时是 span 的真实起止时间，不是两次模型请求之间的间隔。
+- 点击 span 查看属性与事件（重试、不重试原因、拿到并发槽位等）；chat span 可以跳到“轨迹”里对应的原始请求，两者靠请求头里的 `traceparent` 对上。
+- 标黄的 span 找不到父节点：父 span 还在运行，或进程被强制结束。
+- D13 之前的对话没有 trace。
+
+实现与实验见 [Day 13 实践](../day-13/day-13-lab.md)。
+
 ## 5. 工具能力与审批
 
 ### 5.1 检索和记忆
@@ -168,13 +180,14 @@ MCP 配置可填 stdio 启动命令或 http(s) 地址。源码启动命令相对
   → 请求、响应、终端与退出事件写入 .data/runs/
   → SSE 回放已有事件并推送新事件
   → 页面还原对话、轨迹与详情
+  → 各进程的 span 写入 .data/traces/<trace_id>.jsonl，“调用链”按 trace 读取
 ```
 
 观测台把子进程 LLM_API_URL 指向自己的代理地址。模型选择与真实上游由 agent 的 llm.Providers 决定，代理接受声明的 https 上游；密钥从本地配置读取，Authorization 转发但不写入观测记录。
 
 默认子进程是当前可执行文件，-dev 才使用 go run。每个任务进程独立，避免包级功能开关互相覆盖。agent 使用通用的 -history-stdin 恢复上下文，不读取观测台的存档路径。
 
-事件包括 start、continue、request、response、stdout、stderr、exit。观测台重启时读取已有存档，对话列表按最近活动排序。原始请求响应、模型消息和工具结果都可能包含业务内容，运行数据留在 .data/，不复制到学习目录。
+事件包括 start、continue、request、response、stdout、stderr、exit。start/continue 带这次交互的 trace_id，request 带 agent 的 chat span_id。观测台重启时读取已有存档，对话列表按最近活动排序。原始请求响应、模型消息和工具结果都可能包含业务内容，运行数据留在 .data/，不复制到学习目录。
 
 ## 8. 自己动手观察
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
 )
 
 // RunChild 保证一个任务ID对应的任务最终只完成一次，D10 队列和子 agent 共用：
@@ -51,6 +52,9 @@ func RunChild(ctx context.Context, id, question string, args []string, out io.Wr
 	}
 	cmd := exec.CommandContext(ctx, self, args...)
 	cmd.Stdout, cmd.Stderr = out, out
+	// D13：TRACEPARENT 指向调用方当前的 span（spawn_agent 的 execute_tool，或队列的 queue_task），
+	// 子进程的 invoke_agent 就挂在它下面。同名变量以后面的为准，覆盖从父进程继承来的那个。
+	cmd.Env = append(os.Environ(), telemetry.Env(ctx)...)
 	// 子进程放进自己的进程组：终端的 Ctrl+C 只发给调度方，再由调度方通过 ctx 把取消传下去，每个子进程只收到一次。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// 取消时先发 SIGINT，让子进程回填工具结果、写好检查点再退出；10 秒还没退出才强制结束。

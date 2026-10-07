@@ -10,7 +10,7 @@
 
 一个 Go 模块、一个入口：`go run .` 运行 agent，`go run . observe` 运行观测台，`go run . queue` 运行队列。一个 agent 进程执行一个任务；检索与记忆在任务进程内调用，观测台、队列和子 agent 通过子进程执行任务。
 
-已覆盖 Day 1–12 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器与 Bash 沙箱。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。
+已覆盖 Day 1–13 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱与 OpenTelemetry 调用链。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。
 
 ## 课程进度
 
@@ -26,12 +26,13 @@
 | Day 6：MCP client | SDK 与手写 JSON-RPC 接入；两代协议及真实工具调用已有记录 | 待反馈 | [Day 6 实践](docs/day-06/day-06-lab.md) |
 | Day 7：MCP server | calculator server、自举调用与参数校验已有验证；第一周复盘已完成 | 待反馈 | [Day 7 实践](docs/day-07/day-07-lab.md)、[复盘](docs/week-01-review.md) |
 | Day 8：运行时 | 整次/单次超时、取消、四种结局、分类重试与两段式停止已有验证 | 待反馈 | [Day 8 实践](docs/day-08/day-08-lab.md) |
-| Day 9：恢复 | 检查点、写前日志、单执行者锁与中断续跑已有验证 | 待反馈 | [Day 9 实践](docs/day-09/day-09-lab.md) |
+| Day 9：恢复 | 检查点、写前日志、单执行者锁与中断续跑已有验证 | 用户追问 repeatable 误标与只存 View 的续跑正确性，回答见 [Q13](docs/deep-questions.md#q13)、[Q14](docs/deep-questions.md#q14)；复述待确认 | [Day 9 实践](docs/day-09/day-09-lab.md) |
 | Day 10：任务队列 | 固定 worker、去重、任务级重试和完成结果复用已有验证 | 待反馈 | [Day 10 实践](docs/day-10/day-10-lab.md) |
 | Day 11：浏览器 | 只读浏览与实时画面、停止续聊已有记录；去掉 UA 伪装后的方舟端到端复测未完成 | 待反馈 | [Day 11 实践](docs/day-11/day-11-lab.md) |
 | Day 12：Bash 沙箱 | bubblewrap、Go BPF、cgroup、白名单代理与用户审批已有实现及实践记录；组合风险仍见下表 | 待反馈 | [Day 12 实践](docs/day-12/day-12-lab.md) |
+| Day 13：可观测性 | OpenTelemetry Go SDK 打点，GenAI 语义约定；观测台、agent、子 agent、队列、MCP server 跨进程成树；本地文件与可选 OTLP 导出；观测台“调用链”与由 span 汇总的指标。CLI、观测台（子 agent + MCP）、队列、kill -9 续跑与 Jaeger 导出已用真实方舟运行 | 待反馈 | [Day 13 实践](docs/day-13/day-13-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
-| 扩展：子 agent | 独立上下文、子进程、权限继承、幂等与父任务恢复已有验证 | 待反馈 | [子 agent 实践](docs/bonus-subagents/subagents-lab.md) |
+| 扩展：子 agent | 独立上下文、子进程、权限继承、幂等与父任务恢复已有验证 | 用户追问换措辞导致哈希失配，回答见 [Q15](docs/deep-questions.md#q15)；复述待确认 | [子 agent 实践](docs/bonus-subagents/subagents-lab.md) |
 | 扩展：模型路由 | 方舟/DeepSeek 手动路由、工具调用、子 agent 继承与续聊已有记录 | 待反馈 | [路由实践](docs/bonus-routing/routing-lab.md) |
 | 观测台 | 对话/续聊/停止、Turn/Step、原始输入输出、轨迹/迷宫/对比、能力中心与审批已有实现和运行记录 | 展示规则已多次讨论；整体理解待反馈 | [观测台说明](docs/observer/observer-notes.md) |
 | 文档整理 | 学习入口、文档职责、当前进度与阅读层次已统一；旧轨迹文件及过期表述已清理；本地链接、锚点与公共文档表格检查通过，程序代码保持整理前状态 | 阅读效果待反馈 | [README](README.md)、[深度问题](docs/deep-questions.md) |
@@ -52,16 +53,17 @@
 | MCP 契约 | 不处理 list_changed；schema 错误可读性不足，远程鉴权未完成 | 动态更新、错误转译与鉴权按后续任务引入 |
 | Skills | 触发准确率未系统评估 | 纳入评测集；知识内容与执行权限分开 |
 | 工具取消 | 不配合取消的工具可能在调用方放弃等待后继续执行；Bash 已使用 cgroup 清理 | 按工具检查取消和资源回收，见 [Day 8](docs/day-08/day-08-lab.md) |
-| 父子进程 | 父进程被 kill -9 后，子进程可能暂时继续执行并占有任务锁 | 父死亡信号或锁释放等待 |
-| 检查点 | 没有版本兼容标记、fsync 与自动清理 | 持久化版本和保留策略 |
-| 副作用恢复 | 模型看到“结果未知”后仍可能决定重做 | 幂等键、状态查询与高风险确认 |
+| 父子进程 | 父进程被 kill -9 后，子进程可能暂时继续执行并占有任务锁；模型换措辞重派会新开子任务，失败结果里没有 task_id | 父死亡信号或锁释放等待；spawn_agent 支持显式引用 task_id，见 [Q15](docs/deep-questions.md#q15) |
+| 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14) |
+| 副作用恢复 | 模型看到“结果未知”后仍可能决定重做；repeatable 按工具名写死，误标会静默重做 | 幂等键、状态查询与高风险确认；MCP 注解仅对可信 server 采信，见 [Q13](docs/deep-questions.md#q13) |
 | 浏览器网络 | 已拦截起始 URL、跳转和子资源的内网请求，DNS 重绑定与 WebSocket 仍有缺口 | 用受控出口限制实际连接 |
 | 网页内容 | 注入防护主要依赖 system 规则；工具失败后模型仍可能凭旧知识回答 | Week 3 注入攻防与回答可靠性评测 |
 | 浏览器执行 | 浏览器未纳入 Bash 沙箱；设置 CHROME_NO_SANDBOX=1 会关闭 Chrome 自身沙箱 | 保留 Chrome 自身沙箱，后续研究独立浏览器隔离 |
 | 浏览器效率 | 必应可能要求验证；同页多次 find 会重新加载 | 正式搜索 API、正文缓存或会话句柄 |
 | 执行隔离 | bubblewrap 共享内核，seccomp 使用黑名单；没有 systemd 用户会话时不施加 cgroup 限制 | 按威胁模型收紧规则与资源前置条件 |
 | 组合工具 | 浏览器仍能通过请求 URL 外发 Bash 取得的数据；允许域名内的路径和数据没有细分权限 | 跨工具数据流与高风险审批，见 [Q12](docs/deep-questions.md#q12) |
-| 运行数据 | 工作目录总大小、截图与检查点缺少配额或自动清理 | 磁盘配额与保留期限 |
+| 运行数据 | 工作目录总大小、截图、检查点与 trace 文件缺少配额或自动清理 | 磁盘配额与保留期限 |
+| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；指标与告警按 Week 3 评测课程补齐 |
 | 评测 | 现有小样本参与过调试，独立留出集、规模化评分与指标告警未建立 | 按后续评测课程补齐 |
 
 ## 理解确认
@@ -74,3 +76,4 @@
 - 运行时：结果未知为什么不能当失败；写前日志覆盖哪个崩溃窗口。
 - 多任务：任务队列和子 agent 的责任有什么不同。
 - 安全：namespace、cgroup、seccomp 各限制什么；为什么断网的 Bash 加浏览器仍能外发数据。
+- 可观测性：traceparent 怎样让子进程挂到父 span 下；为什么 kill -9 后会出现孤儿 span；Simple 与 Batch 处理器的取舍。

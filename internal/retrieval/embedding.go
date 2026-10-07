@@ -16,9 +16,13 @@ import (
 	"unicode/utf8"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
 
 	"github.com/knights-analytics/hugot"
 	"github.com/knights-analytics/hugot/pipelines"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const arkModel = "doubao-embedding-vision-251215"
@@ -27,6 +31,7 @@ const documentInstruction = "Target_modality: text.\nInstruction:Compress the te
 const queryInstruction = "Target_modality: text.\nInstruction:根据这个问题，找到能回答这个问题的相应文本。\nQuery:"
 
 type Embedder struct {
+	Provider   string // ark 或 local，由 SharedEmbedder 设置
 	Model, Key string
 	Dimensions int
 	Encode     func(context.Context, string, bool) ([]float32, error) // bool区分query和入库文档。
@@ -59,8 +64,22 @@ func SharedEmbedder(provider string) (*Embedder, error) {
 		embedderErrors[provider] = err
 		return nil, err
 	}
+	e.Provider = provider
 	embedders[provider] = e
 	return e, nil
+}
+
+// Embed 是带 span 的 Encode：一次向量化一个 embeddings span。线上方舟是 CLIENT（进程外的服务），本地 ONNX 推理是 INTERNAL。
+func (e *Embedder) Embed(ctx context.Context, text string, query bool) ([]float32, error) {
+	kind := trace.SpanKindInternal
+	if e.Provider == "ark" {
+		kind = trace.SpanKindClient
+	}
+	ctx, span := telemetry.Begin(ctx, "embeddings "+e.Model, kind, semconv.GenAIOperationNameEmbeddings, semconv.GenAIProviderNameKey.String(e.Provider),
+		semconv.GenAIRequestModel(e.Model), attribute.Bool("agent.embedding.query", query), attribute.Int("agent.embedding.input_chars", utf8.RuneCountInString(text)))
+	vector, err := e.Encode(ctx, text, query)
+	telemetry.End(span, err, "embedding_error")
+	return vector, err
 }
 
 func CloseEmbedders() {

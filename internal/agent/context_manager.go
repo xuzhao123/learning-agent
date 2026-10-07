@@ -9,6 +9,10 @@ import (
 	"unicode/utf8"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const compactInstruction = "[上下文压缩请求]"
@@ -153,6 +157,7 @@ func (c *Context) Next(ctx context.Context, client *llm.Client) (llm.Reply, erro
 		}
 		c.forceFull = true
 		fmt.Printf("Context overflow: source=server retry=%d/1\n", attempt)
+		trace.SpanFromContext(ctx).AddEvent("context_overflow", trace.WithAttributes(attribute.Int("retry", attempt)))
 		if attempt == 1 {
 			return llm.Reply{}, fmt.Errorf("压缩后仍被服务端拒绝：%w", err)
 		}
@@ -160,7 +165,7 @@ func (c *Context) Next(ctx context.Context, client *llm.Client) (llm.Reply, erro
 	return llm.Reply{}, llm.ErrContextLength
 }
 
-func (c *Context) Prepare(ctx context.Context, client *llm.Client) error {
+func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 	groups, err := llm.Groups(c.View)
 	if err != nil {
 		return err
@@ -175,6 +180,12 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) error {
 	if action == "none" {
 		return nil
 	}
+	// D13：压缩单独一个 span；摘要请求（purpose=compact 的 chat span）挂在它下面。
+	ctx, span := telemetry.Begin(ctx, "compact_context", trace.SpanKindInternal, attribute.Int("agent.context.before", before), attribute.Int("agent.context.capacity", cap))
+	defer func() {
+		span.SetAttributes(attribute.Int("agent.context.after", llm.ContextTokens(c.View, c.withTools)))
+		telemetry.End(span, err, "compact_error")
+	}()
 	if c.CompactCount > 0 && c.stepsSinceCompact <= 1 {
 		c.Compacts++
 	} else {

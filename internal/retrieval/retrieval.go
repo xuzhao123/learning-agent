@@ -15,6 +15,12 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"learning-agent/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var Enabled bool
@@ -90,7 +96,20 @@ func New(ctx context.Context, provider string, threshold float64) (*Retriever, e
 	return &Retriever{embedding: embedding, docs: docs, provider: provider, fingerprint: fingerprint, threshold: threshold}, nil
 }
 
-func Search(ctx context.Context, query string, k int) (Result, error) {
+func Search(ctx context.Context, query string, k int) (result Result, err error) {
+	// D13：一次检索一个 retrieval span：查询向量化（embeddings）是它的子 span，打分排序在本进程内完成。
+	ctx, span := telemetry.Begin(ctx, "retrieval docs", trace.SpanKindInternal, semconv.GenAIOperationNameRetrieval, semconv.GenAIDataSourceID("docs"), attribute.Int("gen_ai.retrieval.top_k", k))
+	telemetry.Content(span, semconv.GenAIRetrievalQueryTextKey, query)
+	defer func() {
+		accepted := 0
+		for _, h := range result.Hits {
+			if h.Accepted {
+				accepted++
+			}
+		}
+		span.SetAttributes(attribute.String("agent.retrieval.status", result.Status), attribute.Int("agent.retrieval.hits", len(result.Hits)), attribute.Int("agent.retrieval.accepted", accepted))
+		telemetry.End(span, err, "retrieval_error")
+	}()
 	if strings.TrimSpace(query) == "" || utf8.RuneCountInString(query) > 1000 || k < 1 || k > 6 {
 		return Result{}, errors.New("query需为1–1000字符，k需为1–6的整数")
 	}
@@ -98,7 +117,7 @@ func Search(ctx context.Context, query string, k int) (Result, error) {
 	if r == nil {
 		return Result{}, errors.New("知识库未初始化，请使用-rag或-search-docs")
 	}
-	vector, err := r.embedding.Encode(ctx, query, true)
+	vector, err := r.embedding.Embed(ctx, query, true)
 	if err != nil {
 		return Result{}, err
 	}
@@ -172,7 +191,7 @@ func buildIndex(ctx context.Context, cache string, embedding *Embedder) ([]docum
 	}
 	// 逐条建向量，CPU和内存占用更平稳；只在语料或模型配置变化时执行。
 	for i := range docs {
-		vector, err := embedding.Encode(ctx, docs[i].Title+"\n"+docs[i].Text, false)
+		vector, err := embedding.Embed(ctx, docs[i].Title+"\n"+docs[i].Text, false)
 		if err != nil {
 			return nil, "", fmt.Errorf("%s: %w", docs[i].ID, err)
 		}

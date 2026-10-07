@@ -207,11 +207,36 @@ interval = center ± half
 
 沿数据经过的阶段查证，比统一记为“模型幻觉”更能指导修复。
 
+### 调用链：span 树、上下文传播与两条采集路线
+
+span 的最小字段是 `trace_id`、`span_id`、`parent_span_id`、名字、kind、起止时间、状态、属性和事件。同一进程内父节点放在 `context.Context` 里；跨进程把当前 span 编码成 W3C `traceparent`（`00-<32位trace_id>-<16位span_id>-<flags>`），经 HTTP 头、子进程环境变量 `TRACEPARENT` 或 MCP 的 `params._meta` 带过去，接收方取出后作为远程父节点。
+
+```go
+// 父进程：把当前 span 交给子进程
+cmd.Env = append(os.Environ(), "TRACEPARENT="+carrier["traceparent"])
+// 子进程：根 span 挂到父 span 下
+ctx = propagator.Extract(ctx, propagation.MapCarrier{"traceparent": os.Getenv("TRACEPARENT")})
+ctx, span := tracer.Start(ctx, "invoke_agent worker")
+```
+
+几个容易出错的窗口：
+
+| 情况 | 现象 | 原因 |
+| --- | --- | --- |
+| 进程被强制杀死 | 子 span 找不到父节点 | SDK 只导出已结束的 span，根 span 还没结束 |
+| 工具超时后执行器先返回 | 子 span 比父 span 结束得晚 | 工具 goroutine 仍在运行，正是“结果未知”的证据 |
+| 并行工具 | 子 span 耗时之和大于父 span | 时间重叠 |
+| Batch 导出未 Shutdown | 最后几个 span 丢失 | 缓冲区没有刷新 |
+
+**代理与进程内打点**：代理只看得到模型请求的原文，工具耗时只能用前后两次请求的间隔去估；进程内 span 能看到工具、检索、子进程的结构，但默认不含原文。两者并存时用 `traceparent` 头把截获的请求和 chat span 对上。社区的 GenAI 语义约定统一了 `chat`、`execute_tool`、`invoke_agent` 等 span 名与 `gen_ai.*` 属性，内容属性需要显式开启。原理与算例见 [Day 13 笔记](../docs/day-13/day-13-notes.md)。
+
 ### 对照已有实现
 
 [observer.proxy、add、streamEvents](../internal/observer/server.go)记录请求、用途、任务与事件；[embedding请求](../internal/retrieval/embedding.go)另走向量接口，[检索实验](../internal/labs/rag_lab.go)提供现有固定对比。
 
-当前不是完整OpenTelemetry追踪系统，也没有留出集或统计区间自动评分；页面中的LLM token总量不能直接当作包含全部向量/资源的费用账单。上述事件类型、公式与区间为技术学习内容，不表示已埋点或自动算出。
+Day 13 起，[internal/telemetry](../internal/telemetry/telemetry.go) 用 OpenTelemetry Go SDK 给模型请求、工具、检索、记忆、MCP、沙箱、浏览器、子 agent 和队列打 span，写到本地文件，可选 OTLP 导出；观测台每次交互一个 trace，“调用链”标签展示 span 树和由 span 汇总的次数、失败率、P50/P95。实现与实验见 [Day 13 实践](../docs/day-13/day-13-lab.md)。
+
+仍然没有：采样、Metrics SDK 与告警、带 trace_id 的结构化日志（重试等事件目前挂在 span 上）、留出集或统计区间自动评分。页面中的 LLM token 总量不能直接当作包含全部向量/资源的费用账单。上文的事件类型、公式与区间是技术学习内容，不表示都已自动算出。
 
 ### 进阶推演
 
@@ -220,6 +245,9 @@ interval = center ± half
 
 2. 两个策略各跑十题，成功8和9题，能直接决定9题那个更可靠吗？  
    不能只看比例。需要成对结果、随机波动、任务代表性与更多独立样本，差异可能并不稳健。
+
+3. 一个 trace 里有几个 span 没有父节点，却带着 parent_span_id，最可能是什么情况？  
+   父 span 所在的进程还在运行（span 尚未结束），或者被强制杀死、没来得及导出。先看进程是否还活着，再看检查点或退出记录。
 
 
 ## 自测
@@ -236,6 +264,7 @@ interval = center ± half
 ## 延伸阅读
 
 - [观测台说明](../docs/observer/observer-notes.md)
+- [Day 13 可观测性笔记](../docs/day-13/day-13-notes.md)、[Day 13 实践](../docs/day-13/day-13-lab.md)
 - [Day 4 分层评估](../docs/day-04/day-04-notes.md)
 - [Day 4 对比实践](../docs/day-04/day-04-lab.md)
 

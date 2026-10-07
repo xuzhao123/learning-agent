@@ -20,6 +20,12 @@ import (
 
 	"learning-agent/internal/agent"
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // D10 任务队列：任务文件 → channel → 固定数量的 worker → 每个任务一个 agent 子进程（agent.RunChild）。
@@ -60,6 +66,10 @@ func Run(arguments []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// D13：跑一次队列是一个 trace：根 span invoke_workflow，每个任务一个 queue_task，任务的 agent 子进程挂在 queue_task 下。
+	ctx, span := telemetry.Begin(ctx, "invoke_workflow queue", trace.SpanKindInternal, semconv.GenAIOperationNameInvokeWorkflow,
+		attribute.String("gen_ai.workflow.name", "queue"), attribute.Int("queue.tasks", len(tasks)), attribute.Int("queue.workers", *workers))
+	defer span.End()
 	fmt.Printf("Queue: tasks=%d workers=%d attempts=%d common_args=%q logs=%s\n", len(tasks), *workers, *attempts, extra, filepath.Join(".data", "checkpoints", "<id>.log"))
 	started := time.Now()
 	results := make([]outcome, len(tasks))
@@ -83,7 +93,11 @@ dispatch:
 	}
 	close(jobs)
 	wg.Wait()
-	return report(tasks, results, time.Since(started))
+	err = report(tasks, results, time.Since(started))
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
 }
 
 // 每行一个 JSON 任务；空行和 # 开头的行跳过。同一个ID在文件里出现两次，只入队第一次。
@@ -124,7 +138,16 @@ func load(path string) ([]Task, error) {
 	return tasks, scanner.Err()
 }
 
-func runTask(ctx context.Context, t Task, extra []string, attempts int) outcome {
+func runTask(ctx context.Context, t Task, extra []string, attempts int) (result outcome) {
+	ctx, span := telemetry.Begin(ctx, "queue_task "+t.ID, trace.SpanKindInternal, attribute.String("queue.task.id", t.ID))
+	defer func() {
+		span.SetAttributes(attribute.String("queue.task.status", result.status), attribute.Int("queue.task.attempts", result.attempts), attribute.Int("agent.model_calls", result.calls))
+		var err error
+		if result.status != "done" && result.status != "replayed" {
+			err = errors.New(result.detail)
+		}
+		telemetry.End(span, err, result.status)
+	}()
 	// 10 个任务的过程输出混在终端里没法读：每个任务写自己的日志，终端只打印状态变化。
 	_ = os.MkdirAll(filepath.Join(".data", "checkpoints"), 0o700)
 	log, err := os.OpenFile(filepath.Join(".data", "checkpoints", t.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -134,7 +157,6 @@ func runTask(ctx context.Context, t Task, extra []string, attempts int) outcome 
 	defer log.Close()
 	start := time.Now()
 	args := append(append([]string(nil), t.Args...), extra...)
-	result := outcome{}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		result.attempts = attempt
 		fmt.Printf("Queue start: id=%s attempt=%d/%d\n", t.ID, attempt, attempts)
@@ -165,6 +187,7 @@ func runTask(ctx context.Context, t Task, extra []string, attempts int) outcome 
 		// 暂时性失败（模型请求失败、子进程中途退出）：退避后用 -resume 续跑，不从头再来。
 		delay := time.Second << (attempt - 1)
 		fmt.Printf("Queue retry: id=%s error=%s wait=%s\n", t.ID, err, delay)
+		span.AddEvent("retry", trace.WithAttributes(attribute.Int("attempt", attempt), attribute.String("error", telemetry.Clip(err.Error(), 300)), attribute.Int64("wait_ms", delay.Milliseconds())))
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():

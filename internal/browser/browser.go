@@ -19,8 +19,11 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
 )
 
 // Day 11：用真实的无头 Chrome 查资料。整个进程共用一个浏览器，第一次调用时才启动；
@@ -99,8 +102,11 @@ func Close() {
 // 在新标签页里打开 address，等页面加载完，再执行 script 取回结果；script 可以返回 Promise。
 // 工具的 ctx 取消或超时时关闭标签页，正在进行的 chromedp 调用随即返回。
 // 浏览期间开启 screencast，画面帧写到 FrameDir/<callID>.jpg，观测台据此显示实时画面；结束时再存一张最终截图。
-func inTab[T any](ctx context.Context, callID, address, script string) (T, error) {
+func inTab[T any](ctx context.Context, callID, address, script string) (_ T, err error) {
 	var zero T
+	// D13：一个标签页一个 span（CLIENT：访问进程外的网站）；被拦截的内网请求数记在属性里。
+	ctx, span := telemetry.Begin(ctx, "browser.tab", trace.SpanKindClient, attribute.String("url.full", telemetry.Clip(address, 500)))
+	defer func() { telemetry.End(span, err, "browser_error") }()
 	parent, err := start()
 	if err != nil {
 		return zero, err
@@ -131,6 +137,7 @@ func inTab[T any](ctx context.Context, callID, address, script string) (T, error
 	if err != nil {
 		return zero, err
 	}
+	defer func() { span.SetAttributes(attribute.Int("browser.blocked_requests", len(blocked()))) }()
 	var value T
 	if err = chromedp.Do(tab, chromedp.Navigate(address), chromedp.WaitReady("body")); err == nil {
 		value, err = chromedp.Run(tab, chromedp.Evaluate[T](script, chromedp.EvalAwaitPromise))

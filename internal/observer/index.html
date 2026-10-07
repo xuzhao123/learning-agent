@@ -227,6 +227,28 @@ button { cursor: pointer; }
 .ghost { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .stats { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .stats span { color: var(--muted); font-size: 12px; }
+/* D13 调用链：span 树 + 瀑布图 + 由 span 汇总的指标 */
+.spans { padding: 4px 0 16px; }
+.span-trace { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 10px 12px 6px; border-top: 1px solid var(--line); font-size: 13px; }
+.span-trace .meta, .span-note { color: var(--muted); font-size: 12px; }
+.span-note { padding: 4px 12px 8px; }
+.span-row { display: grid; grid-template-columns: minmax(0, 1.4fr) 92px 70px minmax(120px, 1fr); gap: 8px; align-items: center; padding: 3px 12px; font-size: 12.5px; cursor: pointer; }
+.span-row:hover { background: var(--soft); }
+.span-row.selected { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+.span-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.span-name.err { color: var(--err); }
+.span-name .orphan { color: var(--warn); font-family: inherit; }
+.span-svc { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.span-dur { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.span-track { position: relative; height: 10px; background: var(--soft); border-radius: 3px; }
+.span-bar { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 3px; background: var(--accent); }
+.span-bar.client { background: var(--think); } .span-bar.tool { background: var(--ok); } .span-bar.err { background: var(--err); }
+.span-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; padding: 10px 12px; }
+.span-metrics table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.span-metrics th, .span-metrics td { padding: 2px 4px; text-align: right; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.span-metrics th:first-child, .span-metrics td:first-child { text-align: left; overflow-wrap: anywhere; }
+.span-metrics .label { display: flex; justify-content: space-between; gap: 8px; }
+@media (max-width: 720px) { .span-row { grid-template-columns: minmax(0, 1fr) 64px; } .span-svc, .span-track { display: none; } }
 .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
 .stats b.good { color: var(--ok); }
 .stats b.bad { color: var(--err); }
@@ -418,7 +440,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
         <section class="panel">
           <div class="toolbar">
             <div class="tabs">
-              <button id="tab-trace">轨迹</button><button id="tab-maze">迷宫</button><button id="tab-compare">对比</button>
+              <button id="tab-trace">轨迹</button><button id="tab-maze">迷宫</button><button id="tab-spans" title="D13：OpenTelemetry span 树（每次交互一个 trace）">调用链</button><button id="tab-compare">对比</button>
             </div>
             <span class="grow"></span>
             <input id="search" type="search" placeholder="搜索事件…">
@@ -559,11 +581,13 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {} }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
   r.last = time;
+  // D13：traceparent 里的 span ID → 这条原始请求，调用链里的 chat span 据此跳到轨迹视图。
+  if (e.kind === "request" && e.span) r.spanCalls[e.span] = { call: e.call, sub: !!e.sub };
   // 子 agent 的模型请求按任务ID放进各自的 run：不进父对话流、不占父 Turn/Step，在右侧面板里单独还原。
   if (e.sub && e.task) {
     const sub = r.subs[e.task] ??= Object.assign(newRun(e.task), { isSub: true });
@@ -572,7 +596,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.stopRequested = false; r.checkpoint = ""; }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.stopRequested = false; r.checkpoint = ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -807,7 +831,7 @@ function render() {
   syncComposer();
   renderShell();
   if (ui.page === "chat") return renderChat();
-  for (const tab of ["trace", "maze", "compare"]) $("tab-" + tab).className = ui.tab === tab ? "on" : "";
+  for (const tab of ["trace", "maze", "spans", "compare"]) $("tab-" + tab).className = ui.tab === tab ? "on" : "";
   $("tab-compare").disabled = ui.checked.size < 2;
   $("tab-compare").textContent = "对比" + (ui.checked.size ? " " + ui.checked.size : "");
   $("search").hidden = $("expand").hidden = ui.tab !== "trace";
@@ -823,6 +847,7 @@ function render() {
     ui.selected = pick.id;
   }
   renderStats(r, a);
+  if (ui.tab === "spans") return renderSpans(r);
   if (ui.tab === "trace") renderTrace(r, a, list); else renderMaze(r, a, list);
   renderInspector(list.find((i) => i.id === ui.selected));
 }
@@ -938,6 +963,128 @@ function bindRuler(ruler, from, span) {
     render();
   };
   ruler.ondblclick = () => { ui.zoom = null; render(); };
+}
+
+// ---------- 视图：D13 调用链（OpenTelemetry span）----------
+// 数据来自 /traces/<trace_id>：各进程的 SDK 在 span 结束时写入的记录。运行中每隔一会儿重新读取。
+const spanCache = {}, metricCache = {};
+function fetchCached(cache, key, url, live) {
+  const hit = cache[key];
+  if (hit && (hit.loading || !live || Date.now() - hit.at < 1500)) return hit.data;
+  cache[key] = { data: hit?.data, at: Date.now(), loading: true };
+  fetch(url).then((res) => res.ok ? res.json() : null).then((data) => { cache[key] = { data, at: Date.now() }; schedule(); })
+    .catch(() => { cache[key] = { data: hit?.data, at: Date.now() }; });
+  return hit?.data;
+}
+const spanMs = (s) => Date.parse(s.end) - Date.parse(s.start);
+function spanTree(spans) {
+  const ids = new Set(spans.map((s) => s.span_id)), kids = {};
+  for (const s of spans) (kids[ids.has(s.parent_id) ? s.parent_id : ""] ??= []).push(s);
+  for (const list of Object.values(kids)) list.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const rows = [];
+  const walk = (s, depth) => { rows.push({ s, depth }); for (const c of kids[s.span_id] || []) walk(c, depth + 1); };
+  for (const s of kids[""] || []) walk(s, 0);
+  return rows;
+}
+function renderSpans(r) {
+  const view = $("view");
+  view.replaceChildren();
+  const box = el("div", "spans");
+  view.append(box);
+  const live = !r.exit;
+  // 运行中工具可能长时间没有新事件：定时重读，新结束的 span 才会出现。
+  if (live && !ui.spanTimer) ui.spanTimer = setTimeout(() => { ui.spanTimer = null; if (ui.tab === "spans" && ui.page === "observe") schedule(); }, 1600);
+  const metrics = fetchCached(metricCache, (ui.metricsAll ? "*" : r.id) + (live ? "" : ":done"), "/trace-metrics" + (ui.metricsAll ? "" : "?conversation=" + encodeURIComponent(r.id)), live);
+  box.append(renderSpanMetrics(metrics));
+  if (!r.traces.length) {
+    box.append(el("div", "empty", "这条对话产生于 D13 之前，没有调用链记录；新提问或续聊后会出现。"));
+    return renderSpanInspector(r, null);
+  }
+  let selected = null;
+  for (const t of r.traces) {
+    // 结束后换一个缓存键再读一次：根 span 在进程退出时才写入。读到之前先显示运行中最后一次的结果。
+    const spans = fetchCached(spanCache, t.id + (live ? "" : ":done"), "/traces/" + t.id, live) || spanCache[t.id]?.data || [];
+    const head = el("div", "span-trace");
+    const start = Math.min(...spans.map((s) => Date.parse(s.start))), end = Math.max(...spans.map((s) => Date.parse(s.end)));
+    head.append(el("strong", "", `Turn ${t.turn}`), el("span", "meta", `trace ${t.id}`), el("span", "meta", spans.length ? `${spans.length} 个 span · ${sec(end - start)}` : "等待 span 写入…"));
+    const copy = el("button", "ghost", "复制 trace_id"); copy.type = "button";
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(t.id); copy.textContent = "已复制 ✓"; } catch { copy.textContent = "请手动复制"; } };
+    head.append(copy);
+    box.append(head);
+    const rows = spanTree(spans);
+    if (rows.some(({ s, depth }) => depth === 0 && s.parent_id)) box.append(el("div", "span-note", "⚠ 标黄的 span 找不到父节点：父 span 还没结束（运行中），或所在进程被强制结束、没来得及写出。"));
+    for (const { s, depth } of rows) {
+      const row = el("div", "span-row" + (ui.span === s.span_id ? " selected" : ""));
+      const name = el("span", "span-name" + (s.status === "error" ? " err" : ""));
+      name.style.paddingLeft = depth * 14 + "px";
+      name.append((depth ? "└ " : "") + s.name);
+      if (depth === 0 && s.parent_id) name.append(el("span", "orphan", " · 父 span 缺失"));
+      const attrs = s.attributes || {};
+      name.title = s.name + (attrs["agent.step"] ? ` · Step ${attrs["agent.step"]}` : "");
+      const track = el("div", "span-track"), bar = el("div", "span-bar" + (s.status === "error" ? " err" : attrs["gen_ai.operation.name"] === "execute_tool" ? " tool" : s.kind === "client" ? " client" : ""));
+      const total = Math.max(1, end - start);
+      bar.style.left = ((Date.parse(s.start) - start) / total) * 100 + "%";
+      bar.style.width = (spanMs(s) / total) * 100 + "%";
+      track.append(bar);
+      row.append(name, el("span", "span-svc", s.service), el("span", "span-dur", sec(spanMs(s))), track);
+      row.onclick = () => { ui.span = s.span_id; render(); };
+      box.append(row);
+      if (ui.span === s.span_id) selected = s;
+    }
+  }
+  renderSpanInspector(r, selected);
+}
+function renderSpanMetrics(m) {
+  const wrap = el("div", "span-metrics");
+  const table = (title, list, cols) => {
+    const card = el("div", "section"), head = el("div", "label");
+    head.append(el("span", "", title));
+    const t = el("table"), tr = el("tr");
+    for (const [label] of cols) tr.append(el("th", "", label));
+    t.append(tr);
+    for (const item of list || []) {
+      const row = el("tr");
+      for (const [, get] of cols) row.append(el("td", "", get(item)));
+      t.append(row);
+    }
+    card.append(head, (list || []).length ? t : el("div", "meta", "暂无数据"));
+    return card;
+  };
+  const toggle = el("button", "ghost", ui.metricsAll ? "只看本对话" : "汇总全部对话"); toggle.type = "button";
+  toggle.onclick = () => { ui.metricsAll = !ui.metricsAll; render(); };
+  const caption = el("div", "label");
+  caption.append(el("span", "", `指标（由 ${m?.traces ?? "…"} 个 trace 的 span 汇总）`), toggle);
+  const rate = (i) => i.count ? Math.round((i.errors / i.count) * 100) + "%" : "";
+  wrap.append(
+    table("gen_ai.client.operation.duration · token.usage", m?.["gen_ai.client.operation.duration"], [["操作 · 用途", (i) => i.name], ["次数", (i) => i.count], ["失败", rate], ["P50", (i) => sec(i.p50_ms)], ["P95", (i) => sec(i.p95_ms)], ["输入/输出 tokens", (i) => i.input_tokens || i.output_tokens ? `${kfmt(i.input_tokens || 0)} / ${kfmt(i.output_tokens || 0)}` : ""]]),
+    table("execute_tool 耗时与失败率", m?.["execute_tool.duration"], [["工具", (i) => i.name], ["次数", (i) => i.count], ["失败", rate], ["P50", (i) => sec(i.p50_ms)], ["P95", (i) => sec(i.p95_ms)]]),
+    table("任务结局（invoke_agent）", m?.["agent.outcome"], [["结局", (i) => i.name], ["次数", (i) => i.count], ["P50", (i) => sec(i.p50_ms)], ["P95", (i) => sec(i.p95_ms)]]),
+  );
+  const outer = el("div");
+  outer.append(caption, wrap);
+  caption.style.padding = "8px 12px 0";
+  return outer;
+}
+function renderSpanInspector(r, s) {
+  const box = $("inspector");
+  box.replaceChildren();
+  if (!s) return box.append(el("div", "empty", "点击 span 查看属性与事件。内容（提示词、工具参数与结果）默认不采集，见 README 的 D13 配置。"));
+  const top = el("div", "top");
+  top.append(el("strong", "", s.name), el("div", "meta", `${s.kind} · ${s.service} · ${sec(spanMs(s))}${s.status === "error" ? " · 失败：" + s.error : ""}`));
+  box.append(top);
+  const kv = el("div", "kv"), add = (k, v) => kv.append(el("span", "", k), el("span", "", v));
+  add("trace_id", s.trace_id); add("span_id", s.span_id); add("parent_id", s.parent_id || "（根）");
+  add("开始", new Date(s.start).toLocaleTimeString()); add("结束", new Date(s.end).toLocaleTimeString());
+  box.append(section("标识", kv));
+  const link = r.spanCalls[s.span_id];
+  if (link && !link.sub) {
+    const go = el("button", "ghost", `在轨迹中查看原始请求 #${link.call}`); go.type = "button";
+    go.onclick = () => { ui.tab = "trace"; ui.follow = false; select("in" + link.call); };
+    box.append(section("观测代理记录", go));
+  }
+  box.append(section("属性 attributes", el("pre", "", pretty(s.attributes || {}))));
+  if (s.events?.length) box.append(section(`事件 events（${s.events.length}）`, ...s.events.map((e) => fold(`${e.name} · ${new Date(e.time).toLocaleTimeString()}`, e.attributes || {}, true))));
+  box.append(fold("原始记录 JSON", s));
 }
 
 // ---------- 视图二：dsh-maze 式探索迷宫 + 数据轨 ----------
@@ -1997,6 +2144,7 @@ $("run-id").onclick = async () => {
 $("menu").onclick = () => document.body.classList.toggle("nav-open");
 $("tab-trace").onclick = () => { ui.tab = "trace"; render(); loadRuns(); };
 $("tab-maze").onclick = () => { ui.tab = "maze"; render(); loadRuns(); };
+$("tab-spans").onclick = () => { ui.tab = "spans"; render(); loadRuns(); };
 $("tab-compare").onclick = () => openCompare();
 $("search").oninput = () => { ui.search = $("search").value; render(); };
 $("expand").onclick = () => { ui.expanded = true; ui.collapsed.clear(); render(); };

@@ -17,6 +17,11 @@ import (
 
 	"learning-agent/internal/llm"
 	"learning-agent/internal/retrieval"
+	"learning-agent/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Day 5 Contextual Retrieval（参考 Anthropic《Introducing Contextual Retrieval》）：
@@ -106,8 +111,16 @@ func hashText(parts ...string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(parts, "\x00"))))[:32]
 }
 
-func (s *Store) Retrieve(ctx context.Context, phase, query, mode string) (*Retrieval, error) {
+func (s *Store) Retrieve(ctx context.Context, phase, query, mode string) (_ *Retrieval, err error) {
 	r := &Retrieval{Phase: phase, Mode: mode, Query: query, Rerank: "skipped", Degraded: []string{}}
+	// D13：一次记忆检索一个 search_memory span；背景生成、重排（chat）与向量化（embeddings）都是它的子 span。
+	ctx, span := telemetry.Begin(ctx, "search_memory", trace.SpanKindInternal, semconv.GenAIOperationNameKey.String("search_memory"),
+		attribute.String("agent.memory.phase", phase), attribute.String("agent.memory.mode", mode))
+	defer func() {
+		span.SetAttributes(attribute.Int("agent.memory.total", r.Total), attribute.Int("agent.memory.selected", r.Selected), attribute.String("agent.memory.rerank", r.Rerank),
+			attribute.Int("agent.memory.degraded", len(r.Degraded)))
+		telemetry.End(span, err, "memory_error")
+	}()
 	var list []Memory
 	// 1. 锁内只取快照（顺带删除过期条目），之后的 embedding 与模型请求都在锁外。
 	if err := s.update(0, func(file *memoryFile, _ time.Time, _ func(string, ...any)) {
@@ -563,7 +576,7 @@ func vectorPath(emb *retrieval.Embedder) string {
 }
 
 func (s *Store) vectorSearch(ctx context.Context, emb *retrieval.Embedder, query string, chunks []memoryChunk, r *Retrieval) []chunkScore {
-	queryVector, err := emb.Encode(ctx, query, true)
+	queryVector, err := emb.Embed(ctx, query, true)
 	if err != nil {
 		r.degrade("向量召回不可用，查询编码失败：" + err.Error())
 		return nil
@@ -586,7 +599,7 @@ func (s *Store) vectorSearch(ctx context.Context, emb *retrieval.Embedder, query
 		vector := cache.Vectors[key]
 		if len(vector) != emb.Dimensions {
 			if vector = added[key]; vector == nil {
-				vector, err = emb.Encode(ctx, c.indexed(), false)
+				vector, err = emb.Embed(ctx, c.indexed(), false)
 				if err != nil {
 					failed++
 					if firstErr == "" {

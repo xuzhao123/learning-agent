@@ -26,7 +26,10 @@ import (
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
+	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tools"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；其余用法都是 agent 本身。
@@ -39,10 +42,21 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "sandbox-init" {
 		os.Exit(sandbox.Init(os.Args[2:]))
 	}
+	service := "agent"
 	if len(os.Args) > 1 && os.Args[1] == "queue" {
-		run = func() error { return queue.Run(os.Args[2:]) }
+		run, service = func() error { return queue.Run(os.Args[2:]) }, "queue"
 	}
-	if err := run(); err != nil {
+	if len(os.Args) > 1 && os.Args[1] == "observe" {
+		service = "observer"
+	}
+	if slices.Contains(os.Args, "-mcp-serve") {
+		service = "mcp-calculator"
+	}
+	// D13：每个进程各自安装 OpenTelemetry SDK；退出前 shutdown，把缓冲的 span 发完。
+	shutdown := telemetry.Start(service)
+	err := run()
+	shutdown()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
@@ -268,6 +282,10 @@ func run() error {
 		ctx, cancel = context.WithTimeout(ctx, *timeout)
 		defer cancel()
 	}
+	// D13：一次运行一个根 span invoke_agent。父进程（观测台、队列、父 agent）通过 TRACEPARENT 把它挂到自己的 span 下；
+	// 启动阶段的检索建库、MCP 连接也在它下面。结局与任务ID由 agent.Run 补上。
+	ctx, root := telemetry.Begin(telemetry.FromEnv(ctx), "invoke_agent learning-agent", trace.SpanKindInternal, agent.RootAttributes()...)
+	defer root.End()
 	// 普通ReAct任务不加载向量模型；只有检索模式初始化，并在当前进程退出时释放。
 	if retrieval.Enabled || *ragLab || *searchQuery != "" {
 		if *searchQuery != "" {

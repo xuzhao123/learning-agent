@@ -15,7 +15,13 @@ import (
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
+	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tools"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // D8 运行时参数，由 main 按命令行设置。
@@ -28,12 +34,45 @@ var (
 // 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
 var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "request_network_access": true} // bash 不在里面：命令可能有副作用
 
+// RootAttributes 是 main 创建根 span 时就知道的属性；其余在 Run 里补。
+func RootAttributes() []attribute.KeyValue {
+	return []attribute.KeyValue{semconv.GenAIOperationNameInvokeAgent, semconv.GenAIAgentName("learning-agent")}
+}
+
+// 同一个对话的多次交互共用一个 conversation.id：观测台给的是对话ID；命令行直接运行时用任务ID（续跑也不变）。
+func conversationID() string {
+	if telemetry.ConversationID != "" {
+		return telemetry.ConversationID
+	}
+	return CheckpointID
+}
+
 // 主线：请求模型 → 读取 tool_calls → 执行工具 → 保存结果 → 下一轮。
 // D9：每个边界都写检查点（见 checkpoint.go）；Resume 不为空时从检查点接着跑，不重复已完成的轮次。
 func Run(ctx context.Context, config llm.Config, question string, parallel, maxSteps, retries int, options ContextOptions, history *HistoryInput) (err error) {
 	// 记忆的背景生成与重排也用这个客户端：同一个请求上限、同一份用量统计。
 	client := &llm.Client{Config: config, Limit: maxSteps, Output: options.Output}
 	resume := Resume
+	// D13：根 span 由 main 创建；这里补上任务、模型与结局。续跑是新的一次交互（新 trace），任务ID不变。
+	root := trace.SpanFromContext(ctx)
+	root.SetAttributes(semconv.GenAIAgentID(CheckpointID), semconv.GenAIConversationID(conversationID()), semconv.GenAIProviderNameKey.String(config.Provider),
+		semconv.GenAIRequestModel(config.Model), attribute.Bool("agent.resume", resume != nil), attribute.Bool("agent.continue", history != nil), attribute.Int("agent.max_steps", maxSteps))
+	telemetry.Content(root, "agent.question", question)
+	defer func() {
+		reason := "no_tool_calls"
+		var stop *stopError
+		if errors.As(err, &stop) {
+			reason = stop.reason
+		} else if err != nil {
+			reason = "error"
+		}
+		root.SetAttributes(attribute.String("agent.outcome", reason), attribute.Int("agent.model_calls", client.Calls),
+			semconv.GenAIUsageInputTokens(client.Input), semconv.GenAIUsageOutputTokens(client.Completion))
+		if err != nil {
+			root.SetStatus(codes.Error, reason)
+			root.SetAttributes(semconv.ErrorTypeKey.String(reason))
+		}
+	}()
 	if memory.Active != nil {
 		memory.Active.Client = client
 		// 新对话开头检索长期记忆写进 system；续聊、续跑沿用首轮 system，不重新拼接，保持前缀稳定，需要时用 search_memory。
@@ -94,7 +133,10 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	if memory.Active != nil {
 		// 本轮结束时写入（成功、失败或熔断都执行）；保存失败向上返回，不只打印。
 		defer func() {
-			if commitErr := memory.Active.Commit(question, conversation.Transcript); commitErr != nil {
+			_, span := telemetry.Begin(ctx, "upsert_memory", trace.SpanKindInternal, semconv.GenAIOperationNameKey.String("upsert_memory"))
+			commitErr := memory.Active.Commit(question, conversation.Transcript)
+			telemetry.End(span, commitErr, "memory_error")
+			if commitErr != nil {
 				fmt.Println("Memory error:", memory.Redact(commitErr.Error()))
 				err = errors.Join(err, fmt.Errorf("长期记忆保存失败：%w", commitErr))
 			}
@@ -119,6 +161,8 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		if err := ctx.Err(); err != nil {
 			return stopRun(ctxReason(ctx), err.Error(), summary)
 		}
+		// 本轮的模型请求与工具 span 都带 agent.step。
+		ctx := telemetry.WithStep(ctx, step)
 		var calls []llm.ToolCall
 		replay := pending != nil
 		if replay {
@@ -223,11 +267,15 @@ var sequential = map[string]bool{"bash": true}
 func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries int) []llm.Observation {
 	results := make([]llm.Observation, len(calls))
 	slots := make(chan struct{}, parallel)
-	run := func(call llm.ToolCall) llm.Observation {
-		result := llm.Observation{ID: call.ID, Tool: call.Function.Name}
+	run := func(call llm.ToolCall) (result llm.Observation) {
+		// D13：一个逻辑调用一个 execute_tool span，包含排队、各次尝试与退避；工具内部的 span 挂在它下面。
+		ctx, span := toolSpan(ctx, call)
+		defer func() { endTool(span, result) }()
+		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
+			span.AddEvent("slot_acquired")
 			return runWithRetry(ctx, call, retries)
 		case <-ctx.Done():
 			// 还在排队就被取消：一次都没开始，可以放心重做。
@@ -265,6 +313,10 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 		}
 		results[i] = llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "unknown", Error: interruptedUnknown}
 		fmt.Printf("Replay [%s]: %s not_repeatable → unknown\n", call.ID, call.Function.Name)
+		// 没有执行，但留一个 span：调用链上能看到这一项在续跑时被回填成“结果未知”。
+		_, span := toolSpan(ctx, call)
+		span.SetAttributes(attribute.Bool("agent.tool.replayed", true))
+		endTool(span, results[i])
 	}
 	for j, result := range ExecuteBatch(ctx, again, parallel, retries) {
 		results[index[j]] = result
@@ -308,6 +360,7 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 		}
 		if reason != "" {
 			fmt.Printf("No retry [%s]: reason=%s attempts=%d error=%s\n", call.ID, reason, result.Attempts, result.Error)
+			trace.SpanFromContext(ctx).AddEvent("no_retry", trace.WithAttributes(attribute.String("reason", reason), attribute.Int("attempt", result.Attempts)))
 			return result
 		}
 		if attempt == retries {
@@ -316,6 +369,7 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 		// 从200ms开始翻倍：学习时能看清退避，又不会等待太久；取消可打断等待。
 		delay := 200 * time.Millisecond * time.Duration(1<<attempt)
 		fmt.Printf("Retry [%s]: attempt %d/%d failed: %s; wait %s\n", call.ID, result.Attempts, retries+1, err, delay)
+		trace.SpanFromContext(ctx).AddEvent("retry", trace.WithAttributes(attribute.Int("attempt", result.Attempts), attribute.String("error", telemetry.Clip(err.Error(), 300)), attribute.Int64("wait_ms", delay.Milliseconds())))
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
@@ -325,6 +379,7 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 		}
 	}
 	fmt.Printf("Retry exhausted [%s]: attempts=%d error=%s\n", call.ID, result.Attempts, result.Error)
+	trace.SpanFromContext(ctx).AddEvent("retry_exhausted", trace.WithAttributes(attribute.Int("attempt", result.Attempts)))
 	return result // 耗尽后仍返回 Observation，由主循环回填，让模型决定修正、换工具或结束。
 }
 
@@ -379,6 +434,29 @@ func describe(o llm.Observation) string {
 		return tried + o.Error
 	}
 	return tried + "失败：" + o.Error
+}
+
+func toolSpan(ctx context.Context, call llm.ToolCall) (context.Context, trace.Span) {
+	kind := "function"
+	if strings.HasPrefix(call.Function.Name, "mcp_") {
+		kind = "extension" // GenAI 约定：由外部扩展（这里是 MCP server）执行的工具
+	}
+	ctx, span := telemetry.Begin(ctx, "execute_tool "+call.Function.Name, trace.SpanKindInternal, semconv.GenAIOperationNameExecuteTool,
+		semconv.GenAIToolName(call.Function.Name), semconv.GenAIToolCallID(call.ID), semconv.GenAIToolType(kind),
+		attribute.Bool("agent.tool.repeatable", repeatable[call.Function.Name]), attribute.Int("agent.tool.arguments_bytes", len(call.Function.Arguments)))
+	telemetry.Content(span, semconv.GenAIToolCallArgumentsKey, call.Function.Arguments)
+	return ctx, span
+}
+
+// Observation 的四种状态对应 span：ok 成功；error、unknown、not_run 标成失败，error.type 就是状态本身。
+func endTool(span trace.Span, o llm.Observation) {
+	span.SetAttributes(attribute.String("agent.tool.status", o.Status), attribute.Int("agent.tool.attempts", o.Attempts))
+	if o.Status == "ok" {
+		telemetry.Content(span, semconv.GenAIToolCallResultKey, o.Result)
+		telemetry.End(span, nil, "")
+		return
+	}
+	telemetry.End(span, errors.New(o.Error), o.Status)
 }
 
 func ctxReason(ctx context.Context) string {

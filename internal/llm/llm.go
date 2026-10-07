@@ -12,6 +12,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"learning-agent/internal/telemetry"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Usage struct {
@@ -67,6 +75,9 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		}
 		// 模型路由：告诉代理这次请求本该发往哪家供应商；代理按它转发，观测台不必知道路由表。
 		request.Header.Set("X-Agent-Upstream", config.Upstream)
+		// D13：W3C traceparent 头写着这次 chat span 的ID，观测台把截获的原始请求和 span 对上。
+		// 只发给本机代理，不发给供应商：第三方 API 用不上它（Claude Code 默认也只对自家 API 发送）。
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(request.Header))
 	}
 	client := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
@@ -175,7 +186,23 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 		config.Effort = MemoryEffort
 	}
 	fmt.Printf("Model request: %d/%d purpose=%s input_est=%d\n", n, c.Limit, purpose, ContextTokens(history, withTools))
+	// D13：一次模型请求一个 chat span（CLIENT：调用进程外的服务）。用途区分主任务、摘要和记忆辅助调用。
+	ctx, span := telemetry.Begin(ctx, "chat "+config.Model, trace.SpanKindClient, semconv.GenAIOperationNameChat, semconv.GenAIProviderNameKey.String(config.Provider),
+		semconv.GenAIRequestModel(config.Model), attribute.String("agent.purpose", purpose), attribute.Int("agent.request.number", n),
+		attribute.Int("agent.request.input_estimate", ContextTokens(history, withTools)), attribute.String("gen_ai.request.reasoning_effort", config.Effort))
+	telemetry.Content(span, semconv.GenAIInputMessagesKey, history)
 	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose)
+	if u := reply.Usage; u != nil {
+		span.SetAttributes(semconv.GenAIUsageInputTokens(u.Prompt), semconv.GenAIUsageOutputTokens(u.Completion))
+		if u.Details.Cached != nil {
+			span.SetAttributes(semconv.GenAIUsageCacheReadInputTokens(*u.Details.Cached))
+		}
+	}
+	if err == nil {
+		span.SetAttributes(attribute.Int("agent.response.tool_calls", len(reply.Message.ToolCalls)))
+		telemetry.Content(span, semconv.GenAIOutputMessagesKey, reply.Message)
+	}
+	telemetry.End(span, err, errorType(ctx, err))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if u := reply.Usage; u != nil {
@@ -202,4 +229,19 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 		fmt.Printf("Usage: purpose=%s unavailable\n", purpose)
 	}
 	return reply, err
+}
+
+// error.type 用少数几类，便于按类别统计失败率；具体原因在 span 状态描述里。
+func errorType(ctx context.Context, err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case ctx.Err() != nil:
+		return "cancelled"
+	case errors.Is(err, ErrContextLength):
+		return "context_length_exceeded"
+	case strings.HasPrefix(err.Error(), "模型API返回HTTP"):
+		return "http_error"
+	}
+	return "model_error"
 }

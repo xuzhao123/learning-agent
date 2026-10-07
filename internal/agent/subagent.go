@@ -15,6 +15,9 @@ import (
 	"sync"
 
 	"learning-agent/internal/llm"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // 子 agent：父 agent 在循环里调用 spawn_agent，把一个独立子任务交给全新上下文的 agent，只拿回结论。
@@ -58,6 +61,9 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 	spawned[id] = true
 	spawnedMu.Unlock()
 	fmt.Printf("Subagent start [%s]: task_id=%s max_steps=%d\n", call.ID, id, SubagentSteps)
+	// D13：子任务ID记在 spawn_agent 的 execute_tool span 上；子进程的 invoke_agent 是它的子 span。
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.String("agent.subagent.task_id", id))
 	out := &prefixWriter{prefix: "  │ " + call.ID + " "}
 	cp, replayed, err := RunChild(ctx, id, task, append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps)), out)
 	out.flush()
@@ -66,6 +72,7 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 		return nil, err
 	}
 	fmt.Printf("Subagent done [%s]: model_calls=%d replayed=%t\n", call.ID, cp.Calls, replayed)
+	span.SetAttributes(attribute.Bool("agent.subagent.replayed", replayed))
 	return map[string]any{"task_id": id, "answer": cp.Answer, "model_calls": cp.Calls, "replayed": replayed}, nil
 }
 

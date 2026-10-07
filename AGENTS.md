@@ -29,6 +29,7 @@
 - Day 11 浏览器用 chromedp，只做读取型工具（web_search、open_page），每次调用一个标签页；不伪装 User-Agent、不绕过验证码；画面写到 `.data/browser/<任务ID>/<调用ID>.jpg`，观测台只读这些文件。`CHROME_PATH`、`CHROME_NO_SANDBOX` 只从环境变量读取。
 - 模型路由只做手动选择：路由表在 `llm.Providers`（方舟、DeepSeek，均为 OpenAI 兼容接口），`-provider` 选择；观测台按 agent 在 `X-Agent-Upstream` 里声明的地址转发，不复制路由表。各家密钥只放 `.env` 或环境变量。
 - Day 12 沙箱用 bubblewrap + seccomp（纯 Go 生成 BPF）+ systemd-run cgroup，不用 Docker；每次 bash 调用一个新沙箱，工作目录 `.data/sandbox/<任务ID>`；默认断网，联网只经 agent 内的白名单代理，白名单只能由用户（`-net-allow` 或观测台审批）添加。安全验证用真实模型执行检查命令，不写测试文件。
+- Day 13 调用链用 OpenTelemetry Go SDK（版本须兼容 go.mod 的 Go 版本），属性按 GenAI 语义约定；每次交互一个 trace，同一对话用 gen_ai.conversation.id 归组；跨进程用 TRACEPARENT、traceparent 头与 MCP _meta。span 写 `.data/traces/<trace_id>.jsonl`，不提交；外部平台只通过 OTEL_* 环境变量接入；提示词与工具内容默认不采集。指标从 span 汇总，不引入 Prometheus。
 - 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP）。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。
 - 保留当前学习任务必需的参数解析、并行工具调用、消息历史、错误反馈和终止条件。

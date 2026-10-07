@@ -16,7 +16,12 @@ import (
 	"time"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tools"
+
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -28,8 +33,9 @@ import (
 var Conns []*Connection
 
 type Connection struct {
-	client *client.Client
-	tools  map[string]string // agent 侧工具名 → server 上的原名
+	client    *client.Client
+	tools     map[string]string // agent 侧工具名 → server 上的原名
+	transport string            // D13：network.transport，stdio 为 pipe，Streamable HTTP 为 tcp
 }
 
 // -mcp-server 的值是 http(s) 地址时连远程 server（Streamable HTTP），否则当作 stdio 子进程命令。
@@ -40,11 +46,20 @@ func IsURL(value string) bool {
 // 建立传输后完成连接：mcp-go 先发 server/discover（2026-07-28 起的无状态协议），
 // 服务端不认识时退回 initialize 握手；两种方式交换的都是协议版本与 capabilities。
 // 两种传输之后的协议消息完全相同，区别只在消息怎么送达：stdio 写子进程 stdin，HTTP 每条消息一个 POST。
-func Connect(ctx context.Context, command string) (*Connection, []sdk.Tool, error) {
+func Connect(ctx context.Context, command string) (conn *Connection, listed []sdk.Tool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	transportName := "pipe"
+	if IsURL(command) {
+		transportName = "tcp"
+	}
+	// D13：连接（握手 + tools/list）一个 span，挂在本次运行的根 span 下。
+	ctx, span := telemetry.Begin(ctx, "initialize", trace.SpanKindClient, attribute.String("mcp.method.name", "initialize"), attribute.String("network.transport", transportName))
+	defer func() {
+		span.SetAttributes(attribute.Int("mcp.tools.count", len(listed)))
+		telemetry.End(span, err, "mcp_connect_error")
+	}()
 	var c *client.Client
-	var err error
 	if IsURL(command) {
 		fmt.Printf("MCP connect: url=%s\n", command)
 		// 远程 server 不是本进程启动的，Close 只断开连接，不会结束对方。
@@ -74,19 +89,22 @@ func Connect(ctx context.Context, command string) (*Connection, []sdk.Tool, erro
 		c.Close()
 		return nil, nil, fmt.Errorf("MCP 连接失败：%w", err)
 	}
+	// MCP 约定的 span 名是“方法 目标”；握手后才知道 server 名。
+	span.SetName("initialize " + info.ServerInfo.Name)
+	span.SetAttributes(attribute.String("mcp.protocol.version", c.ProtocolVersion()), attribute.String("mcp.server.name", info.ServerInfo.Name))
 	capabilities, _ := json.Marshal(info.Capabilities)
 	fmt.Printf("MCP initialize: protocol=%s server=%s/%s capabilities=%s\n", c.ProtocolVersion(), info.ServerInfo.Name, info.ServerInfo.Version, capabilities)
 	if info.Capabilities.Tools == nil {
 		c.Close()
 		return nil, nil, errors.New("MCP server 没有声明 tools capability")
 	}
-	listed, err := c.ListTools(ctx, sdk.ListToolsRequest{})
+	result, err := c.ListTools(ctx, sdk.ListToolsRequest{})
 	if err != nil {
 		c.Close()
 		return nil, nil, fmt.Errorf("tools/list 失败：%w", err)
 	}
-	fmt.Printf("MCP tools/list: count=%d\n", len(listed.Tools))
-	return &Connection{client: c, tools: map[string]string{}}, listed.Tools, nil
+	fmt.Printf("MCP tools/list: count=%d\n", len(result.Tools))
+	return &Connection{client: c, tools: map[string]string{}, transport: transportName}, result.Tools, nil
 }
 
 var invalidToolChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
@@ -124,17 +142,30 @@ func (m *Connection) Definitions(tools []sdk.Tool) []map[string]any {
 
 // tools/call 的两种失败分开：协议错误（JSON-RPC error，如未知工具）与工具执行错误（isError: true）。
 // 两者都回填给模型；执行错误里通常写着怎么改参数。
-func (m *Connection) Call(ctx context.Context, name, arguments string) (any, error) {
+func (m *Connection) Call(ctx context.Context, name, arguments string) (output any, err error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return nil, errors.New("工具参数需要是 JSON 对象")
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	// D13：client 一侧的 tools/call span。errorType 区分协议错误与 server 明确返回的工具执行错误。
+	ctx, span := telemetry.Begin(ctx, "tools/call "+m.tools[name], trace.SpanKindClient, attribute.String("mcp.method.name", "tools/call"),
+		semconv.GenAIToolName(m.tools[name]), attribute.String("network.transport", m.transport))
+	errorType := "tool_error"
+	defer func() { telemetry.End(span, err, errorType) }()
 	request := sdk.CallToolRequest{}
 	request.Params.Name, request.Params.Arguments = m.tools[name], args
+	// SEP-414：trace context 放在 params._meta 的 traceparent/tracestate 里，server 取出后作为远程父 span。
+	// 不支持的 server 会忽略未知的 _meta 键。
+	meta := map[string]any{}
+	for key, value := range telemetry.Carrier(ctx) {
+		meta[key] = value
+	}
+	request.Params.Meta = sdk.NewMetaFromMap(meta)
 	result, err := m.client.CallTool(ctx, request)
 	if err != nil {
+		errorType = "protocol_error"
 		return nil, fmt.Errorf("MCP 协议错误：%w", err)
 	}
 	texts := []string{}
@@ -149,11 +180,11 @@ func (m *Connection) Call(ctx context.Context, name, arguments string) (any, err
 		// server 已经明确拒绝（多为参数错误），原样再发一次结果相同，不重试。
 		return nil, llm.Permanent(errors.New("MCP 工具执行错误：" + strings.Join(texts, "\n")))
 	}
-	output := map[string]any{"content": texts}
+	value := map[string]any{"content": texts}
 	if result.StructuredContent != nil {
-		output["structured"] = result.StructuredContent
+		value["structured"] = result.StructuredContent
 	}
-	return output, nil
+	return value, nil
 }
 
 // Owns 报告 agent 侧工具名是否属于这个 server。
@@ -332,16 +363,25 @@ func newServer(logger *log.Logger) *server.MCPServer {
 		sdk.WithString("expression", sdk.Required(), sdk.MaxLength(1024), sdk.Description("数学表达式，例如 (1234*5678) 或 floor(sqrt(2))")),
 	)
 	s.AddTool(tool, func(ctx context.Context, request sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		// D13：server 一侧的 span。父 span 来自 client 放在 _meta 里的 traceparent；没有时是一个新的 trace。
+		if request.Params.Meta != nil {
+			ctx = telemetry.Extract(ctx, request.Params.Meta.AdditionalFields)
+		}
+		_, span := telemetry.Begin(ctx, "tools/call calculator", trace.SpanKindServer, attribute.String("mcp.method.name", "tools/call"), semconv.GenAIToolName("calculator"))
+		var failure error
+		defer func() { telemetry.End(span, failure, "tool_error") }()
 		// 第二道：handler 自己取参。schema 校验是可关的选项，不能当成唯一防线。
 		expression, err := request.RequireString("expression")
 		if err != nil {
 			logger.Printf("calculator rejected: %v", err)
+			failure = err
 			return sdk.NewToolResultError(err.Error()), nil
 		}
 		// 第三道：Calculate 只解释数学 AST，限制长度与可用函数。
 		value, err := tools.Calculate(expression)
 		if err != nil {
 			logger.Printf("calculator error: expression=%q error=%v", expression, err)
+			failure = err
 			return sdk.NewToolResultError(err.Error()), nil
 		}
 		logger.Printf("calculator ok: expression=%q result=%v", expression, value)

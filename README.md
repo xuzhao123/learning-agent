@@ -44,6 +44,7 @@ go build -o bin/learning-agent .
 | 本地向量模型 | 不需要 embedding API 密钥；首次使用会下载模型 | `-embedding local`；聊天请求仍使用选定的线上模型 |
 | 浏览器 | 本机安装 Chrome/Chromium；`CHROME_PATH` 可指定可执行文件 | `-browser`；仅环境变量读取浏览器配置 |
 | Bash 沙箱 | Linux、bubblewrap；cgroup 资源限制依赖 systemd 用户会话 | `-bash`；缺少资源限制时的行为见 [Day 12 实践](docs/day-12/day-12-lab.md) |
+| 调用链追踪 | 无需配置，span 写入 `.data/traces/`；`OTEL_EXPORTER_OTLP_ENDPOINT` 另发给 Jaeger 等 OTLP 平台；`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` 采集提示词与工具内容 | 默认只记元数据；接入步骤见 [Day 13 实践](docs/day-13/day-13-lab.md#4-接入外部平台) |
 
 默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器和 Bash 按需开启。
 
@@ -67,6 +68,7 @@ go build -o bin/learning-agent .
 | Day 10 | 任务队列与幂等 | [笔记](docs/day-10/day-10-notes.md) | [实践](docs/day-10/day-10-lab.md) | — |
 | Day 11 | 浏览器自动化 | [笔记](docs/day-11/day-11-notes.md) | [实践](docs/day-11/day-11-lab.md) | — |
 | Day 12 | 代码执行沙箱 | [笔记](docs/day-12/day-12-notes.md) | [实践](docs/day-12/day-12-lab.md) | — |
+| Day 13 | 可观测性：调用链追踪 | [笔记](docs/day-13/day-13-notes.md) | [实践](docs/day-13/day-13-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -93,7 +95,7 @@ go build -o bin/learning-agent .
 | 工具扩展 | [tools](internal/tools/)、[mcp](internal/mcp/)、[skills](internal/skills/) | 本地工具、协议服务、按需加载知识 |
 | 多任务执行 | [queue](internal/queue/)、[子进程](internal/agent/child.go)、[子 agent](internal/agent/subagent.go) | worker、任务 ID、独立上下文与权限继承 |
 | 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/) | 页面读取、进程隔离、网络与资源边界 |
-| 观测与实验 | [observer](internal/observer/)、[labs](internal/labs/) | 模型请求代理、界面、上下文与检索实验 |
+| 观测与实验 | [observer](internal/observer/)、[telemetry](internal/telemetry/)、[labs](internal/labs/) | 模型请求代理、OpenTelemetry span 与导出、界面、上下文与检索实验 |
 
 一个 agent 进程运行一个任务，功能开关由入口设置。观测台、任务队列和子 agent 用独立子进程执行任务；检索等工具直接在该 agent 进程内调用。具体运行边界见 [PROJECT.md](PROJECT.md)。
 
