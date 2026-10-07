@@ -24,6 +24,8 @@
 - Bonus Skills 只做知识型：手写 frontmatter 解析，不引入 YAML 库，不执行 skill 自带脚本；skills/ 下只放真实使用的 skill，验证坏文件时临时创建、用完删除。
 - 检索与Agent放在同一进程，search_docs直接调用Go函数；不单独启动8092检索服务。CLI或网页各用一条命令启动，保留-embedding local/ark选择，普通任务不初始化向量模型。
 - 工具数据使用实际来源；`search_notes` 读取项目学习笔记，去掉假笔记字典。
+- Day 8 按用户任务在 `-lab-tools` 中增加 `slow_job`（真实等待、响应取消），用于观察超时、取消与续跑；不模拟模型输出。错误是否可重试由工具封装用 `llm.Permanent` 标记，执行器不解析错误文本。
+- Day 9–10 检查点与队列日志放 `.data/checkpoints/`，不提交；任务队列与子 agent 都通过 `agent.RunChild` 为每个任务启动一个 agent 子进程（一个进程只跑一个任务），不在同一进程里并发运行多个 agent。示例任务放 `queue/tasks.jsonl`。
 - 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP）。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。
 - 保留当前学习任务必需的参数解析、并行工具调用、消息历史、错误反馈和终止条件。

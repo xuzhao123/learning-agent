@@ -73,7 +73,7 @@
 
 **结论要点**
 - **history 必须进，这是协议要求**：每个 `tool_call_id` 都必须有对应的 tool 结果，否则下一次请求会被 API 拒绝。但内容要写清楚是"未执行"（可以安全重做）还是"执行中被打断"（结果未知，重做前要先核对）。
-- 按现在的设计，这条记录写进 history 后暂时没人读：取消后不会再请求模型，续聊也拒绝从中断处恢复。等到 D9 做 checkpoint 和中断续跑时，它才会真正被模型读到。
+- 按现在的设计，这条记录写进 history 后暂时没人读：取消后不会再请求模型，续聊也拒绝从中断处恢复。等到 D9 做 checkpoint 和中断续跑时，它才会真正被模型读到。（2026-10-07 补充：Day 9 的 `-resume` 与观测台“中断后继续提问”都会把它交给模型，后者实测中模型据此只重做了用户指定的那一项。）
 - **summary 也必须进**：它是给人看的账本，告诉人哪些动作已经做了、哪些没做。对有副作用的工具来说，"未执行"本身就是关键信息。
 - 修复方向：拼装 summary 时去掉 `Attempts > 0` 的条件，把状态分成"成功 / 失败 / 未执行（已取消）/ 执行中被取消、结果未知"，history 也用同样的措辞。
 
@@ -185,3 +185,21 @@
 - 观测台的 MCP 中心只保存命令并拼接参数，“测试连接”走的是同一个 `mcp.Connect`。
 
 **相关代码**：[mcp.go](../internal/mcp/mcp.go) 的 `Connect`、`Definitions`、`Call`、`newServer`/`Serve`；[dispatch.go](../internal/agent/dispatch.go) 的 `runTool`（遍历 `mcp.Conns`）；[hub.go](../internal/observer/hub.go) 的 `appendCapabilityArgs`、`testMCP`。
+
+---
+
+## Q10 任务调度就是开启 subagent 的功能吗？
+
+*2026-10-06 · Week 2 开始前 / Day 10 任务调度*
+
+**问题**：计划里 D10 的“任务调度”，是不是就是开启 subagent 的功能？
+
+**值得琢磨的地方**：两者都表现为“同时跑好几个 agent”，很容易混为一谈。实际上一个是基础设施层，一个是 agent 自身的行为层；而且后者可以建在前者之上。
+
+**结论要点**
+- **任务调度**：由用户或系统发起。解决排队、并发上限、幂等（重复提交不重复执行）和重试。任务之间互相独立，不关心里面跑的是不是 agent。
+- **subagent**：由父 agent 的模型在循环里发起（调用 `spawn_agent`）。目的是让子任务在一份干净的上下文里完成，只把结论交回，避免父上下文被中间过程撑满。父子之间有依赖：父等子的结果再继续推理。它属于上下文工程和多智能体协作。
+- **两者的关系**：subagent 需要的底座正是 D8–D10 的成果：取消随父任务传下去、单次时限、并发上限、子任务失败后重试，以及父任务崩溃后续跑时不重复执行已完成的子任务（幂等键）。本项目里队列和 `spawn_agent` 共用同一个 `agent.RunChild`。
+- **子任务ID的选择也有讲究**：最初用模型给的调用ID，kill -9 后重放没问题；但 Ctrl+C 后模型会发起新的调用、调用ID变化，子任务就从头跑。改成“父任务ID + task 内容哈希”后，同样的 task 能续上原来的子任务。
+
+**相关代码**：[child.go](../internal/agent/child.go) 的 `RunChild`；[queue.go](../internal/queue/queue.go) 的 `runTask`；[subagent.go](../internal/agent/subagent.go) 的 `spawnAgent`。笔记见 [Day 10](day-10/day-10-notes.md) 与 [子 agent](bonus-subagents/subagents-notes.md)。

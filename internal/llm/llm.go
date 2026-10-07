@@ -61,6 +61,10 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 	if local {
 		// 观测台按这个明确标记区分主任务、摘要和记忆辅助调用，不靠回答内容猜测；代理不转发给上游。
 		request.Header.Set("X-Agent-Purpose", purpose)
+		// 任务ID区分父 agent 与子 agent：子进程继承同一个代理地址，靠它才能分开显示。
+		if TaskID != "" {
+			request.Header.Set("X-Agent-Task", TaskID)
+		}
 	}
 	client := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)

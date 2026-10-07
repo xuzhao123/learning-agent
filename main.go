@@ -20,16 +20,20 @@ import (
 	"learning-agent/internal/mcp"
 	"learning-agent/internal/memory"
 	"learning-agent/internal/observer"
+	"learning-agent/internal/queue"
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/tools"
 )
 
-// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；其余用法都是 agent 本身。
+// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；其余用法都是 agent 本身。
 func main() {
 	run := run
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
 		run = func() error { return observer.Run(os.Args[2:], mcp.Handler()) }
+	}
+	if len(os.Args) > 1 && os.Args[1] == "queue" {
+		run = func() error { return queue.Run(os.Args[2:]) }
 	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
@@ -76,7 +80,36 @@ func run() error {
 	flag.BoolVar(&skills.Enabled, "skills", false, "Bonus：扫描skills/*/SKILL.md，system中放索引，增加load_skill工具")
 	flag.Var(&skillNames, "skill", "配合-skills：只启用这个名字的skill（可重复）；不给则启用全部")
 	skillsList := flag.Bool("skills-list", false, "只扫描skills/并以JSON输出每个skill的元数据、正文与错误，不请求模型；须单独使用")
+	timeout := flag.Duration("timeout", 0, "Day 8：整次运行的时限，如 2m；0 表示不限（仍可 Ctrl+C 取消）")
+	flag.DurationVar(&agent.ToolTimeout, "tool-timeout", agent.ToolTimeout, "Day 8：单次工具尝试的时限；超时记为结果未知")
+	taskID := flag.String("task-id", "", "Day 9：检查点ID（字母、数字和 ._-）；不给则按启动时间生成")
+	resume := flag.String("resume", "", "Day 9：从这个ID的检查点续跑；配置取自检查点，须单独使用")
+	subagents := flag.Bool("subagents", false, "增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程）")
+	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
 	flag.Parse()
+	if *resume != "" {
+		if flag.NFlag() != 1 || flag.NArg() != 0 {
+			return errors.New("resume须单独使用：配置取自检查点里保存的启动参数")
+		}
+		cp, err := agent.LoadCheckpoint(*resume)
+		if err != nil {
+			return err
+		}
+		if cp.Status == "done" {
+			// 幂等：已完成的任务再续跑，只返回存档答案，不请求模型、不执行工具。
+			fmt.Printf("Resume: id=%s status=done，直接返回存档答案（不重复执行）\n%s\n", cp.ID, cp.Answer)
+			return nil
+		}
+		if !agent.Resumable(cp) {
+			return fmt.Errorf("任务 %s 因 %s 停止，续跑结果也一样；要重做请换一个任务ID", cp.ID, cp.Reason)
+		}
+		// 用首次启动的参数重新解析：工具开关、预算、超时都和中断前一致。
+		if err := flag.CommandLine.Parse(cp.Args); err != nil {
+			return err
+		}
+		*question, *taskID, *historyStdin = cp.Question, cp.ID, false
+		agent.Resume = cp
+	}
 	if *mcpServe {
 		// stdout 归协议所有，在任何打印之前分流。
 		if flag.NFlag() != 1+min(len(*mcpHTTP), 1) || flag.NArg() != 0 {
@@ -155,6 +188,12 @@ func run() error {
 	if (len(mcpCommands) > 0 || skills.Enabled) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
 		return errors.New("mcp-server与skills用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
+	if (*taskID != "" || *subagents || *timeout != 0) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
+		return errors.New("task-id、subagents与timeout用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
+	}
+	if *timeout < 0 || agent.ToolTimeout <= 0 || agent.SubagentSteps < 1 || agent.SubagentSteps > 20 {
+		return errors.New("timeout不能为负，tool-timeout须大于0，subagent-steps范围为1到20")
+	}
 	if *memoryEnabled && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
 		return errors.New("memory用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
@@ -209,6 +248,13 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	// 第一次 Ctrl+C 取消 ctx：在跑的工具被打断、结果回填、检查点写好再退出。之后恢复默认处理，再按一次立即结束。
+	context.AfterFunc(ctx, stop)
+	if *timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	}
 	// 普通ReAct任务不加载向量模型；只有检索模式初始化，并在当前进程退出时释放。
 	if retrieval.Enabled || *ragLab || *searchQuery != "" {
 		if *searchQuery != "" {
@@ -288,6 +334,46 @@ func run() error {
 		llm.Tools = append(llm.Tools, conn.Definitions(listed)...)
 		mcp.Conns = append(mcp.Conns, conn)
 	}
+	if *subagents {
+		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
+		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
+		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true}
+		agent.SubagentArgs = []string{}
+		flag.Visit(func(f *flag.Flag) {
+			if share[f.Name] {
+				agent.SubagentArgs = append(agent.SubagentArgs, "-"+f.Name+"="+f.Value.String())
+			}
+		})
+		for _, command := range mcpCommands {
+			agent.SubagentArgs = append(agent.SubagentArgs, "-mcp-server", command)
+		}
+		for _, name := range skillNames {
+			agent.SubagentArgs = append(agent.SubagentArgs, "-skill", name)
+		}
+		llm.Tools = append(llm.Tools, agent.SpawnDefinition)
+	}
+	// D9：每次普通运行都写检查点，并在整个运行期间持有它的锁，同一任务不会被两个进程同时执行。
+	agent.CheckpointID, agent.CheckpointArgs = *taskID, os.Args[1:]
+	if agent.CheckpointID == "" {
+		agent.CheckpointID = agent.NewCheckpointID()
+	}
+	if agent.Resume != nil {
+		agent.CheckpointArgs = agent.Resume.Args
+	}
+	if !agent.ValidID(agent.CheckpointID) {
+		return errors.New("task-id只能包含字母、数字和 ._-，最长128")
+	}
+	unlock, err := agent.LockCheckpoint(agent.CheckpointID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err := os.Stat(agent.CheckpointPath(agent.CheckpointID)); agent.Resume == nil && err == nil {
+		return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
+	}
+	llm.TaskID = agent.CheckpointID
+	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
 }
 

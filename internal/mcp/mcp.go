@@ -146,7 +146,8 @@ func (m *Connection) Call(ctx context.Context, name, arguments string) (any, err
 		}
 	}
 	if result.IsError {
-		return nil, errors.New("MCP 工具执行错误：" + strings.Join(texts, "\n"))
+		// server 已经明确拒绝（多为参数错误），原样再发一次结果相同，不重试。
+		return nil, llm.Permanent(errors.New("MCP 工具执行错误：" + strings.Join(texts, "\n")))
 	}
 	output := map[string]any{"content": texts}
 	if result.StructuredContent != nil {

@@ -32,6 +32,7 @@ var ContextLabEnabled bool
 var LabDefinitions = []map[string]any{
 	{"name": "always_fail", "description": "Day 2 故障实验：执行一次故障操作，可能返回错误，无需参数。", "parameters": llm.Parameters("")},
 	{"name": "check_task_status", "description": "查询任务状态；pending 表示还未完成，需要使用相同 task_id 继续查询。", "parameters": llm.Parameters("task_id")},
+	{"name": "slow_job", "description": "执行一个耗时 seconds 秒（1到600）的后台作业，完成后返回开始与结束时间。作业有副作用：每执行一次就算一次。", "parameters": llm.Parameters("seconds")},
 }
 
 // Run 执行内置工具与 Day 2/3 实验工具；未知名字返回错误。
@@ -40,25 +41,28 @@ func Run(ctx context.Context, name, arguments string) (any, error) {
 	switch name {
 	case "read_day3_notes":
 		if !ContextLabEnabled {
-			return nil, errors.New("上下文实验工具未启用")
+			return nil, llm.Permanent(errors.New("上下文实验工具未启用"))
 		}
 		data, err := os.ReadFile("docs/day-03/day-03-notes.md")
 		if err != nil {
 			return nil, errors.New("无法读取Day 3学习笔记")
 		}
 		return map[string]string{"file": "docs/day-03/day-03-notes.md", "content": string(data)}, nil
-	case "always_fail", "check_task_status":
+	case "always_fail", "check_task_status", "slow_job":
 		if !LabEnabled {
-			return nil, errors.New("故障实验工具未启用")
+			return nil, llm.Permanent(errors.New("故障实验工具未启用"))
 		}
 		if name == "always_fail" {
 			panic("Day 2 故障注入：工具始终失败")
+		}
+		if name == "slow_job" {
+			return slowJob(ctx, arguments)
 		}
 		var args struct {
 			TaskID string `json:"task_id"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &args); err != nil || strings.TrimSpace(args.TaskID) == "" {
-			return nil, errors.New("task_id 需要是非空字符串")
+			return nil, llm.Permanent(errors.New("task_id 需要是非空字符串"))
 		}
 		// 捣乱工具故意永远 pending，用来观察真实模型重复调用时，循环是否强制熔断。
 		return map[string]string{"task_id": args.TaskID, "status": "pending", "message": "尚未完成，请用相同 task_id 再次查询。"}, nil
@@ -67,11 +71,11 @@ func Run(ctx context.Context, name, arguments string) (any, error) {
 			Expression string `json:"expression"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-			return nil, errors.New("expression 需要是字符串")
+			return nil, llm.Permanent(errors.New("expression 需要是字符串"))
 		}
 		value, err := Calculate(args.Expression)
 		if err != nil {
-			return nil, err
+			return nil, llm.Permanent(err) // 表达式本身有问题，重算也一样
 		}
 		return map[string]any{"result": value}, nil
 	case "get_current_datetime":
@@ -83,7 +87,7 @@ func Run(ctx context.Context, name, arguments string) (any, error) {
 			Query string `json:"query"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &args); err != nil || strings.TrimSpace(args.Query) == "" {
-			return nil, errors.New("query 需要是非空字符串")
+			return nil, llm.Permanent(errors.New("query 需要是非空字符串"))
 		}
 		const path = "docs/day-01/day-01-notes.md"
 		data, err := os.ReadFile(path)
@@ -101,8 +105,31 @@ func Run(ctx context.Context, name, arguments string) (any, error) {
 		}
 		return map[string]any{"file": path, "matches": matches}, nil
 	default:
-		return nil, fmt.Errorf("未知工具：%s", name)
+		return nil, llm.Permanent(fmt.Errorf("未知工具：%s", name))
 	}
+}
+
+// Day 8 实验：真的等待指定秒数，并在等待期间响应取消。用来观察单次超时、整次运行超时、Ctrl+C 与 kill -9。
+func slowJob(ctx context.Context, arguments string) (any, error) {
+	var args struct {
+		Seconds string `json:"seconds"`
+	}
+	_ = json.Unmarshal([]byte(arguments), &args)
+	seconds, err := strconv.Atoi(strings.TrimSpace(args.Seconds))
+	if err != nil || seconds < 1 || seconds > 600 {
+		return nil, llm.Permanent(errors.New("seconds 需要是1到600的整数字符串"))
+	}
+	started := time.Now().In(shanghai)
+	fmt.Printf("Slow job: start seconds=%d\n", seconds)
+	timer := time.NewTimer(time.Duration(seconds) * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		fmt.Printf("Slow job: interrupted after=%s\n", time.Since(started).Round(time.Millisecond))
+		return nil, ctx.Err()
+	}
+	return map[string]any{"seconds": seconds, "started": started.Format(time.RFC3339), "finished": time.Now().In(shanghai).Format(time.RFC3339)}, nil
 }
 
 // 只解释数学 AST；不会执行表达式里出现的 Go 代码。

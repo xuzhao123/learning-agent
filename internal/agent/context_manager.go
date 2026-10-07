@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -56,14 +57,31 @@ type HistoryInput struct {
 	WithTools bool          `json:"with_tools"`
 }
 
+// 续聊的历史可以停在一轮的中途（被停止、超时或进程被杀）：可能以用户问题、工具结果结尾。
+// 末尾若还有没有结果的 tool_calls（进程死在执行途中），补上“结果未知”，不重新执行；
+// 模型读到这些记录，就知道上一轮哪些做完了、哪些不确定，再按用户的新消息决定怎么办。
 func restoreContext(history HistoryInput, options ContextOptions) (*Context, error) {
-	if _, err := llm.Groups(history.Messages); err != nil {
+	messages := history.Messages
+	if n := len(messages); n > 0 && messages[n-1].Role == "assistant" && len(messages[n-1].ToolCalls) > 0 {
+		messages = append([]llm.Message(nil), messages...)
+		for _, call := range messages[n-1].ToolCalls {
+			data, _ := json.Marshal(llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "unknown", Error: interruptedUnknown})
+			messages = append(messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: string(data)})
+		}
+		fmt.Printf("Resume: interrupted_calls=%d → unknown\n", len(messages[n-1].ToolCalls))
+	}
+	if _, err := llm.Groups(messages); err != nil {
 		return nil, fmt.Errorf("续聊历史无效：%w", err)
 	}
-	last := history.Messages[len(history.Messages)-1]
-	if last.Role != "assistant" || len(last.ToolCalls) != 0 || strings.TrimSpace(last.Content) == "" {
-		return nil, errors.New("续聊需要一条已完成的assistant回答，不能重放未完成的工具调用")
+	if last := messages[len(messages)-1]; last.Role == "assistant" && strings.TrimSpace(last.Content) == "" {
+		return nil, errors.New("续聊历史的最后一条 assistant 回答为空")
 	}
+	history.Messages = messages
+	return rebuildContext(history, options), nil
+}
+
+// 续聊与 D9 续跑共用：按已校验的消息组重建 View，摘要消息单独标记。
+func rebuildContext(history HistoryInput, options ContextOptions) *Context {
 	c := NewContext(func() string { return history.Messages[0].Content }, options, true)
 	for _, m := range history.Messages[1:] {
 		if m.Role == "user" && strings.HasPrefix(m.Content, llm.SummaryPrefix) {
@@ -82,7 +100,7 @@ func restoreContext(history HistoryInput, options ContextOptions) (*Context, err
 		c.UsageAt = len(c.View)
 	}
 	fmt.Printf("Resume: restored_view=%d summary=%t\n", len(c.View), c.summaryAt >= 0)
-	return c, nil
+	return c
 }
 
 // 同一条工具结果只在首次进入View时截断；完整原文不受影响，之后追加不改写已有前缀。

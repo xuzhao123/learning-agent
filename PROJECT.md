@@ -4,7 +4,7 @@
 
 以用户提供的 Manus「Agent 全栈工程师」岗位要求为长期学习目标，使用 Go 逐步实现 agent。完整能力对照见 [JOB_REQUIREMENTS.md](JOB_REQUIREMENTS.md)。
 
-当前完成 Week 1（Day 1–7）与 Bonus Skills，优先帮助用户理解 agent 流程。用户每天给出任务，每一步围绕当天知识点提供讲解、例子、代码阅读和练习。
+当前完成 Week 1（Day 1–7）、Bonus Skills，以及 Week 2 的 Day 8–10 与子 agent，优先帮助用户理解 agent 流程。用户每天给出任务，每一步围绕当天知识点提供讲解、例子、代码阅读和练习。
 
 ## 工作约定
 
@@ -18,11 +18,11 @@
 ## 当前实现
 
 - 路径约定：所有启动命令从项目根目录执行；源码、文档、缓存和运行数据使用项目相对路径。
-- 代码结构：一个 Go 模块、一个入口 `main.go`（`go run .` 是 agent，`go run . observe` 是观测台）。按功能分包在 `internal/`：`llm`（模型请求、Message/ToolCall/Observation、`llm.Tools` 工具注册表、token 粗估、消息组校验、`.env` 配置）、`agent`（`react.go` 循环、`dispatch.go` 工具分发、`context_manager.go`）、`tools`（内置与 Day 2/3 实验工具）、`retrieval`（Day 4 检索与向量模型）、`memory`（Day 5）、`mcp`（Day 6–7 client、手写 JSON-RPC、calculator server）、`skills`（Bonus）、`labs`（Day 3/4 实验）、`observer`（观测台）。各功能开关是包级变量，由 main 按参数设置；一个 agent 进程只跑一个任务。
+- 代码结构：一个 Go 模块、一个入口 `main.go`（`go run .` 是 agent，`go run . observe` 是观测台）。按功能分包在 `internal/`：`llm`（模型请求、Message/ToolCall/Observation、`llm.Tools` 工具注册表、token 粗估、消息组校验、`.env` 配置）、`agent`（`react.go` 循环、`dispatch.go` 工具分发、`context_manager.go`）、`tools`（内置与 Day 2/3 实验工具）、`retrieval`（Day 4 检索与向量模型）、`memory`（Day 5）、`mcp`（Day 6–7 client、手写 JSON-RPC、calculator server）、`skills`（Bonus）、`queue`（Day 10 任务队列）、`labs`（Day 3/4 实验）、`observer`（观测台）；`agent` 另有 `checkpoint.go`（Day 9）、`child.go`（按任务ID执行 agent 子进程）、`subagent.go`（spawn_agent）。各功能开关是包级变量，由 main 按参数设置；一个 agent 进程只跑一个任务。
 - 方舟原生 Tool Calling：通过 `tools` 提供定义，从 `tool_calls` 接收请求，普通回答不限制文本格式。
 - 支持独立工具同批并行，默认并发4，每批最多16项；依赖结果的调用放在下一轮。
 - 模型请求默认最多10次，可通过 `-max-steps` 配置，Day 3 摘要请求也计入；保存原始 assistant 消息，每项结果用 `role: "tool"` 与 `tool_call_id` 写回历史；无调用且有正常回答时结束。
-- 工具默认额外重试2次，按200ms、400ms退避，耗尽后回填错误；第三次连续相同动作触发熔断。超限和熔断均返回未完成及已执行步骤摘要。
+- 工具默认额外重试2次，按200ms、400ms退避，耗尽后回填错误；第三次连续相同动作触发熔断。超限和熔断均返回未完成及已执行步骤摘要。Day 8 起只重试暂时性错误（见下）。
 - `-lab-tools` 显式启用 Day 2 故障实验，默认关闭。
 - Day 3 按用户提供的上下文系统设计重构：内存Transcript与View分离，写入时截断，usage加增量估算，90%触发、40%软目标与60%接受上限，用户原话与完整最近组配额，原生前缀摘要；摘要保留工具定义并以tool_choice: none禁用工具（仅在带工具时发送）；压缩布局按真实/粗估比例换算容量；摘要输入超窗时先删保留区之后的旧组；只剩1次请求时不摘要；API输出上限默认省略，本地输出预留与请求限制分开。
 - calculator 实际计算；日期工具读取当前时间；search_notes 检索实际 docs 学习笔记。
@@ -32,6 +32,10 @@
 - Day 7：`-mcp-serve` 在 flag.Parse 后立即分流（stdout 归协议），须单独使用；mcp-go server 暴露 calculator（expression 必填、≤1024），WithInputSchemaValidation + WithStrictInputSchemaDefault（additionalProperties:false）+ handler RequireString + calculate AST 白名单三层校验，错误以 NewToolResultError（isError）返回，未知工具由 SDK 返回 -32602；WithRecovery；结果为 structuredContent {result} + 文本；每次调用在 stderr 记一行。
 - Bonus Skills：`-skills` 扫描 `skills/*/SKILL.md`，手写 frontmatter 解析（顶层 key: value、去成对引号、缩进行跳过、多行值/重复键/缺分隔线报错），校验 name（≤64、`^[a-z0-9]+(-[a-z0-9]+)*$`、等于目录名）、description（≤1024字符）、compatibility（≤500）、文件≤64KB；坏文件打印 Skill error 跳过，打印 Skills: loaded=N names=…；有可用 skill 时 system 追加索引并注册 load_skill(name)，按索引查表读文件并重新校验，未知名字返回结构化结果（不触发重试）；不读 references、不执行 scripts。
 - 观测台在 `internal/observer/`，由 `go run . observe` 启动（须在项目根目录）：每次对话启动一个 agent 子进程（默认执行当前程序本身，`-dev` 时用 `go run .`），本机代理记录每次模型请求与响应，事件存档于 `.data/runs/`（已忽略提交），启动时读回；网页是类似 Codex 客户端的对话界面（对话流从请求/响应还原用户消息、思考、工具与回答，压缩显示为分隔线），“观测”标签提供轨迹、迷宫、对比三个视图和回放；可新建对话、从存档恢复View续聊，或运行Day 3上下文实验；能直接查看终端输出，并从实际Context输出读取输入容量。agent 只额外接受 `http://127.0.0.1` 模型地址。Day 5：新对话可勾选长期记忆与TTL，续聊沿用；对话流显示开场调入与结尾写入卡片，[M编号]引用可点击；左侧记忆面板只读 `.data/memory.json`，删除调用agent的 `-memory-forget`。Contextual Retrieval 后：记忆模式可选ark/local并续聊沿用；代理按请求头记录purpose，`memory_*` 辅助调用单独列出（原始输入输出与token），不开Turn、不占Step，续聊恢复跳过；调入卡片显示两路候选、融合、重排、选中数与降级原因，面板显示背景、块状态与来源。Skills / MCP 中心：配置在 `.data/hub.json`（skill 默认启用、只记停用名单；MCP server 名字+命令+开关），skill 列表与新建校验调用 agent 的 `-skills-list`，测试连接调用 `-mcp-list`；新对话勾选 Skills/MCP 时把当时打开的项作为快照写入 start 事件并转成 `-skills -skill …` 与多个 `-mcp-server`，续聊沿用快照；对话流显示能力卡片，工具带 SKILL/MCP 标记；`/hub` 接口校验本机 Host 与同源 Origin。agent 侧 `-mcp-server` 可重复、连不上的 server 跳过，新增 `-skill`（可重复）与 `-skills-list`。远程 MCP：`-mcp-server` 值为 http(s) 地址时用 Streamable HTTP client；`-mcp-serve -mcp-http addr` 以 Streamable HTTP 提供 calculator；观测台进程内直接把 `mcp.Handler()` 挂在 `/mcp`（与 `-mcp-serve` 同一个 server 定义；本机同源检查）。
+- Day 8：`-timeout` 整次运行时限（包在信号上下文外，停止原因 `timeout`）；`-tool-timeout`（默认30s）为每次工具尝试派生子上下文，`spawn_agent` 用10分钟；`runAttempt` 让工具在独立 goroutine 里运行、执行器到时即返回（带缓冲通道防泄漏）。`llm.Observation.Status` 分 ok / error / not_run（排队或首次尝试前取消）/ unknown（执行中超时或取消）；summary 与 tool 结果逐项写出，修复被取消调用消失的问题。`llm.Permanent` 标记确定性错误（参数、未知工具、功能未开、Calculate 错误、MCP isError），不重试；unknown 只对 `repeatable` 表内的只读或带幂等键工具重试；退避可被取消打断。第一次 Ctrl+C 取消 ctx，`context.AfterFunc` 恢复默认处理，第二次立即退出。`-lab-tools` 新增 `slow_job(seconds)`：真实等待、响应取消、描述为有副作用。停止原因通过 `stopError` 返回。
+- Day 9：每次普通运行写 `.data/checkpoints/<id>.json`（`-task-id` 指定或按启动时间生成；ID 仅 `[A-Za-z0-9._-]`、≤128），实验不写。字段：args、question、status（running/stopped/done）、reason、answer、error、step、calls、View 消息、summary、熔断计数。写入时机：问题写入后、模型决定调用工具后执行前（写前日志）、结果写回后、结束时（defer）。临时文件 + rename 原子替换，不 fsync。运行全程持有 `<id>.lock` 非阻塞 flock，第二个进程报 ErrBusy。`-resume id` 须单独使用：done 直接打印存档答案；running 或因 cancelled/timeout/model_error/checkpoint_error 停止的，用保存的 args 重新解析参数，恢复 client.Calls 与熔断计数，`resumeContext` 取出末尾无结果的 tool_calls，第一轮不请求模型而由 `replayBatch` 补齐（repeatable 工具重新执行，其余回填 unknown）；其他停止原因拒绝续跑。新 ID 已有检查点时拒绝启动。`restoreContext` 拆出 `rebuildContext` 供续聊与续跑共用。续跑跳过记忆召回。
+- Day 10：`go run . queue [-workers 3] [-attempts 3] 文件.jsonl [-- 公共参数]`。任务行 `{id, question, args}`，缺 id 时用 `q-`+SHA-256(问题与参数)前12位，文件内重复 ID 只入队一次。任务ID即检查点ID，队列不另存状态。固定 worker（1–8）从 channel 取任务，`agent.RunChild` 执行：无检查点则 `-task-id -question` 全新启动，问题不一致报错，done 直接返回（replayed），可续跑则 `-resume`，否则不可重试错误；启动前试锁。子进程 Setpgid、取消时发 SIGINT、WaitDelay 10s，输出追加到 `.data/checkpoints/<id>.log`。暂时性失败退避1s、2s后续跑，确定性失败不重试；Ctrl+C 后停止派发并汇总 done/replayed/failed/interrupted/not_started。示例任务 `queue/tasks.jsonl`。
+- 子 agent：`-subagents` 注册 `spawn_agent(task)` 并在 system 追加使用规则；子任务ID = 父检查点ID + `-sub-` + task 的 SHA-256 前12位，经 `RunChild` 以子进程运行，`-max-steps` 取 `-subagent-steps`（默认6），每次运行最多4个不同子任务；子进程输出逐行加 `│ call_id` 前缀转到父终端；返回 {task_id, answer, model_calls, replayed}。子 agent 按白名单继承工具开关与运行参数（含 `-mcp-server`、`-skill`），不继承 `-memory`、`-subagents`、`-timeout` 与续聊。`spawn_agent` 列入 repeatable。
 - 默认方舟地址为 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`，模型为 `doubao-seed-2-1-pro-260628`，请求使用 `reasoning_effort: high`，等待上限5分钟。
 - 本地 `.env` 自动读取，保留指定方舟地址、模型与认证，权限0600并已加入提交忽略规则。
 
@@ -40,6 +44,13 @@
 | 步骤 | 状态 | 产物 |
 | --- | --- | --- |
 | 项目准备 | 已完成 | AGENTS.md、PROJECT.md、岗位能力对照 |
+| Day 8：取消、超时与重试 | 已编译、go vet 通过并真实运行；理解待反馈 | slow_job 10s、单次时限3s：unknown、No retry（unknown_not_repeatable）；并行 slow_job+calculator 时 SIGINT：slow_job unknown、calculator ok，summary 两项都在，检查点 stopped/cancelled；`-timeout 15s`：工具实际只得到约8.6s，Termination: timeout；calculator 1/0 一次即停（permanent），always_fail 仍重试3次。day-08-notes/lab |
+| Day 9：检查点与恢复 | 已编译并真实运行；理解待反馈 | done 任务 `-resume` 直接返回存档答案；Ctrl+C 后续跑从第2轮、请求2/4开始，`-lab-tools` 取自检查点；kill -9 于工具执行中：检查点末尾为两个无结果调用，续跑 Round 1 (resume) 不请求模型，calculator 重新执行、slow_job 回填 unknown；同 ID 两进程并发，第二个报 ErrBusy。day-09-notes/lab |
+| Day 10：任务队列与幂等 | 已编译并真实运行；理解待反馈 | 10个任务3个worker 65秒全部完成，23次模型请求；t01 遇真实 model_error，第2次尝试以 `-resume` 续跑（预算从2/4继续）；重复 ID 只入队一次；重跑队列 replayed=10、无新请求；4任务2 worker 20秒时 SIGINT：2个 interrupted（子进程 Termination: cancelled）、2个 not_started，再跑全部完成且中断的从第2轮续跑。day-10-notes/lab |
+| 中断后从检查点续聊 | 已编译、go vet 通过并真实运行；理解待反馈 | `canContinue`：exit 0 照旧；非 0 时只要本次运行打印过 `Checkpoint: id=` 就允许续聊，`resumeHistory` 改读 `.data/checkpoints/<id>.json` 的 messages（模型、推理强度、是否检索取自最近一次主任务请求）。agent `restoreContext` 接受以用户问题或工具结果结尾的历史，末尾无结果的 tool_calls 补成 unknown（与 replayBatch 共用文案）。实测：被停止的子 agent 对话续聊，模型请求含原问题、两个 spawn_agent 调用与两条“结果未知”再加新消息，模型按要求只重派计算任务；子 agent 因 `^` 不受支持耗尽预算后，父 agent 自己算完，exit 0；正常结束的对话续聊不受影响。页面在新一轮前显示中断标记，停止卡片提示可继续提问 |
+| 观测台停止按钮与子 agent 侧栏 | 已编译、go vet 通过；真实方舟运行与无头浏览器验证；理解待反馈 | 运行中发送键变 ■：`POST /runs/{id}/stop` 向 agent 进程组（Setpgid）发 SIGINT，再按一次 SIGKILL；被取消的代理请求记 499。agent 在本机代理请求头加 `X-Agent-Task`，代理以每次启动后的首个任务ID为父、其余标 `sub`，续聊恢复跳过 sub。页面：spawn_agent 卡片 + 右侧侧栏（子 agent 列表、任务原文、完整过程、终端输出），新对话“子 agent”开关。实测：三子 agent 对话父2次/子6次请求分开显示；子 agent 运行中点停止，父子三个检查点均 stopped/cancelled；续聊后新父进程请求仍归主对话。修复：stopcard 遇空 stdout 行报错；spawn_agent 取消时父进程先退出导致子进程输出与检查点丢失（改为等待子进程收尾）。1440/390 宽度、浅色/深色截图无报错、无横向滚动 |
+| 子 agent（spawn_agent） | 已编译并真实运行；理解待反馈 | 三个子 agent 并行（父2次请求、子共7次）后汇总；kill -9 父进程：计算子任务 done、slow_job 子任务因 SIGPIPE 停在 running，父续跑时重放两个 spawn_agent：前者 replayed=true，后者续跑、内部 slow_job 回填 unknown 后被子模型重做（如实记录为重复执行风险）；SIGINT 传给子进程一次，父子检查点都为 stopped/cancelled。子任务ID由调用ID改为 task 哈希，以便取消后同 task 再派可续上。subagents-notes/lab；观测台未适配 |
+| MCP 协议与校验追问 | 已核对现行规范并真实运行取参对照；理解待反馈 | 协议无状态的收益、元数据与兼容成本、业务状态及重放安全已补入 Day 6 笔记；Day 7 临时副本只关闭 schema 校验，数字、缺参、正常输入在两个版本中共六次真实 stdio 调用，第二层的 rejected 日志与错误结果已确认；实验记录见 lab 3.4。项目代码未改，Day 8 错误分类仅讨论策略，尚未实现 |
 | 文档与启动说明统一 | 已完成；主工程与观测台 build、go vet通过；文档链接与脚本语法检查通过 | 启动命令统一从项目根目录执行，示例使用相对路径；删除个人路径与部署环境叙述；观测台启动提示不显示项目绝对目录，内置 MCP 的编译和启动诊断使用通用路径名称；约定同步至 AGENTS.md |
 | Day 6：MCP client | 已编译、go vet通过并真实运行；理解待反馈 | mcp-go SDK 连接 everything 示例 server：协商 2026-07-28、6个工具、add 返回42.5；手写 JSON-RPC 对照 legacy（initialize/initialized、请求无_meta）与 modern（server/discover、每请求_meta）；agent 同轮并行调用 mcp_add 与 mcp_echo 后正确回答。day-06-notes 讲 JSON-RPC、传输、三原语、旧版握手与capabilities协商、2026-07-28 去握手与 discover、工具定义转换、两种错误；lab 记录代码阅读与真实日志 |
 | Day 7：MCP server 与周复盘 | 已编译并真实运行；周复盘已写；理解待反馈 | `-mcp-serve` 暴露 calculator；client→自己的 server 得 floor(sqrt(1234*5678))=2647；手写 client 发错误参数：类型错/多余字段/缺必填被 schema 层以 isError 拦下，os.Exit(1) 被 calculate 拦下，未知工具返回 -32602；agent→自己的 server→calculate 闭环正确（server stderr 日志为证）。docs/week-01-review.md：Day1–7 一句话、含6模块（另加skills）的 mermaid 架构图、W2 三件事（建议草稿，待用户确认） |
@@ -89,17 +100,29 @@
 | 资料不足后的重搜次数无约束 | `react.go` systemPrompt | status=insufficient 后，prompt 未规定能否改写查询重搜；每次换说法参数都不同，熔断器拦不住，可能一直耗到 max_steps | prompt 规定最多改写重搜1次，仍不足就说明资料不足 |
 | 库外问题的回答方式有歧义 | `react.go` systemPrompt | "区分通用知识与项目事实"与"只说明资料不足"冲突：对天气等库外问题，模型可以用通用知识回答，也可以只说资料不足 | 在 prompt 中明确选择其一 |
 | 已注入的记忆仍被重复检索 | `memory.go` 记忆规则；`react.go` systemPrompt | Day 5 实测：M6 已在 system 记忆块中，模型仍调用 search_memory 再查一次，多一次请求 | 观察更多样本后再决定是否调整提示；不为单次现象改规则 |
-| 被取消的调用从 summary 中消失 | `react.go` runAgent 拼装 summary；executeBatch、runWithRetry | summary 只记 Attempts>0 的调用；排队等槽或首次尝试前被取消时 Attempts=0，报告里"请求了但没执行"与"没请求"无法区分；执行中被取消则误写成"失败：context canceled"，掩盖结果未知 | 去掉 Attempts>0 条件，区分成功 / 失败 / 未执行（已取消）/ 执行中被取消、结果未知；history 的 tool 结果用同样措辞（协议要求必须写入），summary 也必须记录。详见 [深度问题 Q3–Q4](docs/deep-questions.md) |
+| ~~被取消的调用从 summary 中消失~~（Day 8 已修复） | `react.go` | 已按 Status 区分成功 / 失败 / 未执行 / 结果未知，summary 与 tool 结果逐项写出 | 详见 [深度问题 Q3–Q4](docs/deep-questions.md) 与 [Day 8 项目实践](docs/day-08/day-08-lab.md) |
 
 补充（2026-10-06，Day 6–7 / Bonus 引入）：
 
 | 问题 | 位置 | 现象 | 改进方向 |
 | --- | --- | --- | --- |
 | MCP 子进程继承全部环境变量 | `mcp.go` connectMCP（mcp-go 用 os.Environ()+额外变量） | 环境变量里的 ARK_API_KEY 等凭据会被第三方 server 读到，违反最小权限 | 用 transport 的自定义命令函数只传入白名单变量；Week 2 沙箱时一并处理 |
-| MCP 工具执行错误也被重试 | `react.go` runWithRetry；`mcp.go` call | isError（如参数错误）是确定性失败，仍额外重试2次 | 与 Day 2 错误分类一起做：执行错误不重试或只在明确可重试时重试 |
+| ~~MCP 工具执行错误也被重试~~（Day 8 已修复） | `mcp.go` Call | isError 以 `llm.Permanent` 返回，不再重试 | — |
 | MCP 只支持单 server、启动时一次性拉取 | `main.go`、`mcp.go` | 不处理 list_changed；多 server 时前缀需含 server 标识 | 需要多 server 时再扩展 |
 | schema 校验错误信息不友好 | mcp-go WithInputSchemaValidation | 返回 `&{Got:number Want:[string]}` 这类 Go 结构体格式 | 必要时在 handler 中自行校验并给出中文说明 |
 | skill 触发准确率未评估 | `skills.go`、system 索引 | 只观察了1个相关、1个无关问题 | 纳入 Week 3 评测集 |
+
+补充（2026-10-07，Day 8–10 / 子 agent 引入）：
+
+| 问题 | 位置 | 现象 | 改进方向 |
+| --- | --- | --- | --- |
+| 放弃等待后工具仍在后台运行 | `react.go` runAttempt | 不配合取消的工具会继续执行到返回，副作用照样发生 | Day 12 把这类工具放进可整体杀掉的独立进程或容器 |
+| 模型请求失败不在 agent 内重试 | `react.go`、`llm.go` | 一次 model_error 就停止，失败请求也占预算；依赖队列在任务层续跑 | 对 429/5xx 做有限次退避重试，并区分是否计入预算 |
+| 父进程被 kill -9 后子进程靠 SIGPIPE 间接退出 | `child.go` | 不打印的阶段子进程会继续运行并持有锁，父续跑时可能报 ErrBusy | Linux 可用 Pdeathsig；或父进程续跑时等待锁释放 |
+| 检查点不记录程序版本、不 fsync、不自动清理 | `checkpoint.go` | 改代码后续跑旧检查点可能不一致；断电可能丢最后一次写入；文件持续累积 | 需要时加版本号与清理命令 |
+| ~~子 agent 未接入观测台~~（已完成） | observer | 按 `X-Agent-Task` 区分父子请求，子 agent 在右侧侧栏显示 | — |
+| ~~停止后不能在页面续聊~~（已完成） | observer、`context_manager.go` | 中途停下的对话从检查点续聊，被打断的调用以“未执行/结果未知”交给模型 | — |
+| unknown 后模型可能重做有副作用的工具 | 子 agent 实验 3.2 | 框架如实报告结果未知，模型仍选择重做 slow_job | 有副作用的工具提供幂等键或状态查询接口；或高风险操作需人工确认（Week 3） |
 
 ## 学习记录
 
@@ -112,6 +135,8 @@ Day 6：[Day 6 学习笔记](docs/day-06/day-06-notes.md) 讲 MCP 要解决的�
 Day 7：[Day 7 学习笔记](docs/day-07/day-07-notes.md) 讲 server 职责、CallToolResult、错误选择（按 SEP-1303 参数校验错误用 isError，纠正任务描述中“参数无效走 -32602”的旧说法）、工具粒度、无状态与显式句柄、信任边界与三层校验、最小权限；实验见 [Day 7 项目实践](docs/day-07/day-07-lab.md)。周复盘见 [Week 1 复盘](docs/week-01-review.md)。“为什么 server 端必须重做参数校验”待用户复述确认。
 
 Bonus：[Skills 学习笔记](docs/bonus-skills/skills-notes.md) 讲 skill / MCP tool / 程序性记忆分工、三级渐进式加载、frontmatter 规范、触发方式、供应链风险与“只做知识型”的边界（任务中“约9%为critical”的出处未找到，改引 Snyk 13.4% 与 0.52%–46.8% 的方法差异）；实现见 [Skills 项目实践](docs/bonus-skills/skills-lab.md)。三者分工与“为什么不执行脚本”待用户复述确认。
+
+Day 8–10 与子 agent：[Day 8 笔记](docs/day-08/day-08-notes.md) 讲协作式取消与上下文树、超时层次与时限传递、四种结局、重试决策与错误分类、优雅停止；[Day 9 笔记](docs/day-09/day-09-notes.md) 讲恢复所需状态、写前日志与崩溃窗口、原子替换与持久性、中断调用的处理、快照式与事件重放式、单一执行者（flock、租约与防护令牌）；[Day 10 笔记](docs/day-10/day-10-notes.md) 讲队列、并发上限与利特尔法则、三种投递语义、幂等键、任务级失败与死信队列、进程隔离；[子 agent 笔记](docs/bonus-subagents/subagents-notes.md) 讲上下文隔离、代价、适用场景、任务说明、权限继承与运行时的关系。各自的 lab 记录了真实运行。“结果未知为什么不能当失败”“写前日志解决哪个崩溃窗口”“恰好一次如何实现”“子 agent 首要解决什么问题”待用户复述确认。
 
 每日推送的阅读材料按天记录在 [阅读材料](docs/reading-list.md)，新链接持续追加。
 

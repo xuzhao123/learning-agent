@@ -56,7 +56,8 @@ button { cursor: pointer; }
 #status.bad { color: var(--err); }
 
 /* 对话流 */
-#chat-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#chat-pane { flex: 1; display: flex; min-height: 0; }
+#chat-col { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #chat-scroll { flex: 1; overflow: auto; }
 #thread { max-width: 780px; margin: 0 auto; padding: 28px 24px 32px; }
 .u { display: flex; justify-content: flex-end; margin: 22px 0 14px; }
@@ -158,6 +159,38 @@ button { cursor: pointer; }
 #mode-chip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 #send { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); font-size: 16px; font-weight: 700; }
 #send:disabled { opacity: .25; cursor: default; }
+#send.stop { font-size: 12px; }
+#send.stop.force { background: var(--err); }
+
+/* 子 agent：对话流里的卡片 + 右侧面板（参考 Codex 客户端的子任务侧栏） */
+.agent-card { display: flex; align-items: center; gap: 10px; width: 100%; margin: 6px 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); text-align: left; }
+.agent-card:hover { border-color: color-mix(in srgb, var(--text) 30%, var(--line)); }
+.agent-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.agent-card .av { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--accent); font: 600 12px var(--mono); }
+.agent-card .t { flex: 1; min-width: 0; }
+.agent-card .t b { display: block; font-size: 13px; font-weight: 600; }
+.agent-card .t span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.agent-card .chev { color: var(--muted); }
+.sub-st { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.sub-st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.sub-st.running::before { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.sub-st.done::before { background: var(--ok); }
+.sub-st.failed::before, .sub-st.stopped::before { background: var(--err); }
+#subpanel { display: flex; flex-direction: column; flex: none; width: 440px; min-height: 0; border-left: 1px solid var(--line); background: var(--side); }
+.sp-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+.sp-head strong { flex: 1; font-size: 14px; }
+.sp-close { border: 0; background: none; color: var(--muted); font-size: 16px; padding: 2px 6px; border-radius: 6px; }
+.sp-close:hover { background: var(--soft); color: var(--text); }
+.sp-list { display: grid; gap: 2px; padding: 8px; border-bottom: 1px solid var(--line); max-height: 30vh; overflow: auto; }
+.sp-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13px; }
+.sp-item:hover { background: var(--soft); }
+.sp-item.on { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.sp-item .n { color: var(--muted); font: 12px var(--mono); }
+.sp-item .q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-body { flex: 1; overflow: auto; padding: 14px 16px 24px; background: var(--bg); }
+.sp-task { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--soft); white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.sp-body .label { margin-top: 4px; }
+.sp-body .meta { overflow-wrap: anywhere; }
 #hint { max-width: 780px; margin: 6px auto 0; font-size: 11px; color: var(--muted); text-align: center; }
 
 /* 观测 */
@@ -309,6 +342,9 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   .lrow { grid-template-columns: 30px 64px minmax(0, 1fr) 54px 54px; }
   .lrow .track, .lrow .rulerwrap { display: none; }
 }
+@media (max-width: 1100px) {
+  #subpanel { position: fixed; z-index: 25; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); box-shadow: 0 0 40px rgba(0,0,0,.25); }
+}
 @media (max-width: 760px) {
   #app { grid-template-columns: 1fr; }
   #sidebar { position: fixed; z-index: 20; inset: 0 auto 0 0; width: 270px; transform: translateX(-100%); transition: transform .2s; }
@@ -346,14 +382,17 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <span id="status"></span>
     </div>
     <section id="chat-pane">
+     <div id="chat-col">
       <div id="chat-scroll"><div id="thread"></div></div>
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><label class="meta" title="允许 agent 调用 spawn_agent，把独立子任务交给子 agent"><input id="use-sub" type="checkbox"> 子 agent</label><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
+     </div>
+      <aside id="subpanel" aria-label="子 agent" hidden></aside>
     </section>
     <section id="observe-pane" hidden>
       <div class="obs-grid">
@@ -501,13 +540,20 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [] }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, stopRequested: false }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
   r.last = time;
+  // 子 agent 的模型请求按任务ID放进各自的 run：不进父对话流、不占父 Turn/Step，在右侧面板里单独还原。
+  if (e.sub && e.task) {
+    const sub = r.subs[e.task] ??= Object.assign(newRun(e.task), { isSub: true });
+    return apply(sub, { ...e, sub: false });
+  }
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; }
+  // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
+  if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.stopRequested = false; r.checkpoint = ""; }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -579,10 +625,27 @@ function apply(r, e) {
     if (mem && !["search", "forget", "hit"].includes(mem[1]) && !/^phase=(search|cli) /.test(mem[2])) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: mem[1], text: mem[2], fields: memFields(mem[2]) });
     // skill 索引与 MCP 连接在 agent 启动时打印，归到本轮开头的“能力”卡片。
     if (/^(Skills?|MCP) (loaded|error|connect|initialize|tools\/list|register|skip)\b|^Skills: /.test(e.text || "")) r.caps.push({ turn: r.memTurn, text: e.text });
+    const checkpoint = /^Checkpoint: id=(\S+) /.exec(e.text || "");
+    if (checkpoint) r.checkpoint = checkpoint[1];
     const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
     if (capacity) r.inputCapacity = Number(capacity[1]);
   }
+  else if (e.kind === "stop") { r.stopRequested = true; r.logs.push({ ...e, kind: "stdout", text: e.text }); }
   else if (e.kind === "exit") { r.exit = e.text || "exit"; r.tEnd = time; }
+  if (e.kind === "stdout" || e.kind === "stderr") {
+    // 父 agent 打印子 agent 的起止；子进程的输出带 “  │ call_id ” 前缀转发过来。
+    const life = /^Subagent (start|done|stop) \[([^\]]+)\]: (.*)$/.exec(e.text || "");
+    if (life) {
+      const info = r.subCalls[life[2]] ??= { task: "", state: "running" };
+      if (life[1] === "start") Object.assign(info, { task: /task_id=(\S+)/.exec(life[3])?.[1] || "", state: "running" });
+      if (life[1] === "done") Object.assign(info, { state: "done", calls: Number(/model_calls=(\d+)/.exec(life[3])?.[1] || 0), replayed: /replayed=true/.test(life[3]) });
+      // 被取消、超时或进程中途退出的子任务可以续跑，标为“已中断”；预算耗尽、熔断等才算失败。
+      if (life[1] === "stop") Object.assign(info, { state: /（(cancelled|timeout|进程中途退出)）/.test(life[3]) ? "stopped" : "failed", error: life[3] });
+    }
+    const child = /^  │ (\S+) ?(.*)$/.exec(e.text || "");
+    const info = child && r.subCalls[child[1]];
+    if (info?.task) (r.subs[info.task] ??= Object.assign(newRun(info.task), { isSub: true })).logs.push({ ...e, text: child[2] });
+  }
 }
 
 // ---------- 确定性分析：主路径、绕路、回退（不调用模型） ----------
@@ -1212,7 +1275,7 @@ function show(id, updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
   if (ui.tab === "compare") ui.tab = "trace";
-  Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set() });
+  Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set(), subOpen: null });
   if (updateURL) syncRunURL(id);
   $("search").value = "";
   ui.collapsed.clear();
@@ -1338,7 +1401,7 @@ function capsCard(r, turn) {
   const logs = r.caps.filter((l) => l.turn === turn);
   if (!logs.length) return null;
   const loaded = logs.map((l) => /^Skills: loaded=(\d+)/.exec(l.text)).find(Boolean);
-  const tools = logs.filter((l) => l.text.startsWith("MCP register:")).length;
+  const tools = logs.filter((l) => (l.text || "").startsWith("MCP register:")).length;
   const errors = logs.filter((l) => /^(Skill|MCP) (error|skip)/.test(l.text)).length;
   const parts = [];
   if (r.skills.length) parts.push(`Skills ${loaded ? loaded[1] : "?"}/${r.skills.length} 个索引写进 system`);
@@ -1368,7 +1431,7 @@ function chatFlow(r) {
   [...r.calls, ...r.aux].sort((x, y) => x.n - y.n).forEach((c) => {
     if (c.aux) { if (shown.has(c.turn)) flow.push({ kind: "aux", call: c }); return; } // 开场的辅助调用在记忆卡片里显示
     if (c.caseStart) flow.push({ kind: "case", text: c.caseLabel });
-    if (c.userMessage) { flow.push({ kind: "user", text: textOf(c.userMessage) }, { kind: "caps", turn: c.turn }, { kind: "memory", turn: c.turn, phase: "start" }); shown.add(c.turn); }
+    if (c.userMessage) { flow.push({ kind: "user", text: textOf(c.userMessage), turn: c.turn }, { kind: "caps", turn: c.turn }, { kind: "memory", turn: c.turn, phase: "start" }); shown.add(c.turn); }
     if (c.compact) flow.push({ kind: "compact", call: c });
     else flow.push({ kind: "call", call: c });
     const next = r.calls.find((x) => x.n > c.n);
@@ -1398,6 +1461,7 @@ function renderCall(box, r, c, last) {
   head.append(el("span", "", `${callPosition(c)} · 请求 #${c.n}`), raw.button); box.append(head, raw.panel);
   if (!c.end) return box.append(el("div", "shimmer", "思考中…"));
   if (!c.choice) {
+    if (c.status === 499) return box.append(step("e" + c.n, [el("span", "ico", "■"), el("span", "", `请求已取消（agent 停止）· ${sec(c.ms)}`)], [el("pre", "", c.errorText || "")]));
     return box.append(step("e" + c.n, [el("span", "ico bad", "!"), el("span", "bad", `模型请求失败 · HTTP ${c.status}`)], [el("pre", "err", c.errorText || pretty(c.res))]));
   }
   if (m.reasoning_content) {
@@ -1406,6 +1470,7 @@ function renderCall(box, r, c, last) {
   }
   if (m.content && c.tools.length) { const mid = md(m.content); mid.classList.add("mid"); box.append(mid); }
   for (const t of c.tools) {
+    if (t.name === "spawn_agent" && !r.isSub) { box.append(agentCard(r, t)); continue; }
     const icon = t.state === "running" ? el("span", "ico") : el("span", "ico " + (t.detour ? "bad" : "ok"), t.detour ? "✕" : "✓");
     if (t.state === "running") icon.append(el("span", "spin"));
     const head = [icon, el("span", "tname", t.name), el("span", "targs", clip(compact(t.args), 90))];
@@ -1453,12 +1518,89 @@ function renderCall(box, r, c, last) {
     box.append(answer);
     const meta = el("div", "answer-meta");
     meta.append(el("span", "", `${callPosition(c)} · 请求 #${c.n} · ${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`));
-    const link = el("button", "link", "在观测中查看");
-    link.onclick = () => observeAt("m" + c.n);
-    meta.append(link);
+    if (!r.isSub) { // 子 agent 的请求不在父对话的观测视图里
+      const link = el("button", "link", "在观测中查看");
+      link.onclick = () => observeAt("m" + c.n);
+      meta.append(link);
+    }
     box.append(meta);
   }
   if (last && !r.exit && c.tools.length && c.tools.every((t) => t.done)) box.append(el("div", "shimmer", "思考中…"));
+}
+// ---------- 子 agent ----------
+function subList(r) {
+  return r.calls.flatMap((c) => c.tools.filter((t) => t.name === "spawn_agent").map((t) => {
+    const info = r.subCalls[t.id];
+    return { t, info, sub: info?.task ? r.subs[info.task] : null };
+  }));
+}
+// 状态优先看父 agent 打印的起止，其次看回填给父 agent 的 tool 结果。
+function subState(r, item) {
+  const { t, info, sub } = item, res = parse(t.result), calls = sub ? sub.calls.length : 0;
+  if (res?.status === "ok") return { key: "done", text: (res.result?.replayed ? "取回存档" : "完成") + ` · ${res.result?.model_calls ?? calls} 次请求` };
+  if (res?.status === "unknown" || res?.status === "not_run") return { key: "stopped", text: "已中断" };
+  if (res?.status === "error") return { key: "failed", text: "失败" };
+  if (info?.state === "done") return { key: "done", text: (info.replayed ? "取回存档" : "完成") + ` · ${info.calls} 次请求` };
+  if (info?.state === "failed") return { key: "failed", text: "失败" };
+  if (info?.state === "stopped") return { key: "stopped", text: "已中断" };
+  if (r.exit) return { key: "stopped", text: info ? "已中断" : "未启动" };
+  return { key: "running", text: info ? `运行中 · ${calls} 次请求` : "启动中" };
+}
+function agentCard(r, t) {
+  const list = subList(r), i = list.findIndex((x) => x.t.id === t.id), item = list[i], st = subState(r, item), args = parse(t.args);
+  const card = el("button", "agent-card" + (ui.subOpen === t.id ? " on" : ""));
+  card.type = "button";
+  card.title = "在右侧查看这个子 agent 的完整过程";
+  const text = el("span", "t");
+  text.append(el("b", "", `子 agent ${i + 1}`), el("span", "", clip(args?.task ?? t.args, 140)));
+  card.append(el("span", "av", String(i + 1)), text, el("span", "sub-st " + st.key, st.text), el("span", "chev", "›"));
+  card.onclick = () => { ui.subOpen = ui.subOpen === t.id ? null : t.id; renderChat(); };
+  return card;
+}
+function renderSubPanel() {
+  const panel = $("subpanel"), r = ui.run, list = r && ui.page === "chat" ? subList(r) : [];
+  const item = list.find((x) => x.t.id === ui.subOpen);
+  if (!item) { panel.hidden = true; panel.replaceChildren(); return; }
+  const oldBody = panel.querySelector(".sp-body");
+  const stick = !oldBody || oldBody.scrollHeight - oldBody.scrollTop - oldBody.clientHeight < 80, top = oldBody?.scrollTop || 0, sameAgent = panel.dataset.agent === item.t.id;
+  panel.hidden = false;
+  panel.dataset.agent = item.t.id;
+  const head = el("div", "sp-head"), close = el("button", "sp-close", "✕");
+  close.type = "button"; close.title = "关闭"; close.setAttribute("aria-label", "关闭子 agent 面板");
+  close.onclick = () => { ui.subOpen = null; renderChat(); };
+  head.append(el("strong", "", `子 agent · ${list.length} 个`), close);
+  const nav = el("div", "sp-list");
+  list.forEach((x, i) => {
+    const st = subState(r, x), row = el("button", "sp-item" + (x === item ? " on" : ""));
+    row.type = "button";
+    row.append(el("span", "n", "#" + (i + 1)), el("span", "q", clip(parse(x.t.args)?.task ?? x.t.args, 60)), el("span", "sub-st " + st.key, st.text));
+    row.onclick = () => { ui.subOpen = x.t.id; renderChat(); };
+    nav.append(row);
+  });
+  const body = el("div", "sp-body"), st = subState(r, item), res = parse(item.t.result);
+  body.append(el("div", "label", "任务 · 父 agent 写给子 agent 的全部输入（看不到父对话）"), el("div", "sp-task", parse(item.t.args)?.task ?? item.t.args));
+  body.append(el("div", "meta", `子任务ID ${item.info?.task || "—"} · 调用 ${item.t.id}`));
+  const sub = item.sub;
+  if (sub) {
+    // 子进程的结局来自父 agent 的起止记录；面板据此判断“没有结果”的工具是还在跑，还是进程已经结束。
+    sub.exit = st.key === "running" ? "" : st.key === "done" ? "exit 0" : st.text;
+    analyze(sub);
+    const flowBox = el("div", "a");
+    sub.calls.forEach((c, i) => c.compact ? flowBox.append(renderCompact(c)) : renderCall(flowBox, sub, c, i === sub.calls.length - 1));
+    body.append(flowBox);
+    const end = sub.logs.findLast((l) => (l.text || "").startsWith("Termination:"));
+    if (end && end.text !== "Termination: no_tool_calls") body.append(el("div", "stopcard err", "子 agent 停止：" + end.text.slice(12).trim()));
+    if (sub.logs.length) {
+      const logs = fold(`子进程终端输出 · ${sub.logs.length} 行`, sub.logs.map((l) => l.text).join("\n"));
+      body.append(logs);
+    }
+  }
+  if (!sub?.calls.length && res?.result?.replayed) {
+    body.append(el("div", "banner", "这个子任务之前已经完成，本次按子任务ID直接取回存档答案，没有发出新的模型请求。"), md(res.result.answer || ""));
+  } else if (!sub?.calls.length) body.append(el("div", st.key === "running" ? "shimmer" : "meta", st.key === "running" ? "正在启动子 agent…" : "没有模型请求记录"));
+  if (st.key === "running" && sub?.calls.length && sub.calls.at(-1).end && sub.calls.at(-1).tools.every((t) => t.done)) body.append(el("div", "shimmer", "思考中…"));
+  panel.replaceChildren(head, nav, body);
+  body.scrollTop = sameAgent && !stick ? top : body.scrollHeight;
 }
 function renderCompact(c) {
   const box = el("details", "divider"), key = "s" + c.n, m = (c.choice && c.choice.message) || {};
@@ -1487,7 +1629,7 @@ function renderChat() {
   const stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120, top = scroller.scrollTop;
   box.replaceChildren();
   const r = ui.run;
-  if (!r) return box.append(welcome());
+  if (!r) { renderSubPanel(); return box.append(welcome()); }
   analyze(r);
   if (r.query === LAB_TITLE) box.append(el("div", "banner", "Day 3 上下文实验：程序自动发出33轮真实对话，再触发一次大工具输出。下面的用户消息由实验程序发送。"));
   if (r.query === RAG_LAB_TITLE) box.append(el("div", "banner", "Day 4：10个问题，每题分别运行无检索与有检索。每组使用独立上下文；问题由实验程序发送。检索评分见终端，引用可点击核对。"));
@@ -1495,6 +1637,7 @@ function renderChat() {
   const flow = chatFlow(r);
   flow.forEach((f, i) => {
     if (f.kind === "case") { box.append(el("div", "banner", f.text)); group = null; return; }
+    if (f.kind === "user" && r.interrupted?.[f.turn]) box.append(el("div", "banner", r.interrupted[f.turn] + "：被打断的工具调用已按“未执行”或“结果未知”交给模型，这一轮从检查点接着聊。"));
     if (f.kind === "user") { const u = el("div", "u"); u.append(el("div", "", f.text)); box.append(u); group = null; return; }
     if (f.kind === "compact") return box.append(renderCompact(f.call));
     if (f.kind === "aux") { if (!group) box.append(group = el("div", "a")); group.append(auxCard(r, f.call)); return; }
@@ -1514,21 +1657,24 @@ function renderChat() {
   const answered = last && last.choice && !last.tools.length && last.choice.message.content;
   if (r.exit && (r.exit !== "exit 0" || !answered)) {
     const card = el("div", "stopcard");
-    card.append(el("div", "err", "agent 已停止：" + r.exit));
-    const tail = r.logs.filter((l) => !l.text.startsWith("用户续聊：")).slice(-6);
+    card.append(el("div", "err", (r.stopRequested ? "已按停止按钮中断：" : "agent 已停止：") + r.exit));
+    const tail = r.logs.filter((l) => !(l.text || "").startsWith("用户续聊：")).slice(-6);
     if (tail.length) card.append(el("pre", "", tail.map((l) => l.text).join("\n")));
+    if (r.checkpoint) card.append(el("div", "meta", `检查点 ${r.checkpoint} 已保存：可以直接在下方继续提问，模型会看到哪些调用未执行或结果未知。`));
     const link = el("button", "link", "查看终端输出");
     link.onclick = () => { observeAt("end"); };
     card.append(link);
     box.append(card);
   }
   scroller.scrollTop = stick ? scroller.scrollHeight : top;
+  renderSubPanel();
 }
 
 // ---------- 外壳：顶栏、输入框与对话列表 ----------
 function renderShell() {
   const r = ui.run, chat = ui.page === "chat";
   $("chat-pane").hidden = !chat;
+  if (!chat) $("subpanel").hidden = true;
   $("observe-pane").hidden = chat;
   $("page-chat").className = chat ? "on" : "";
   $("page-observe").className = chat ? "" : "on";
@@ -1541,11 +1687,12 @@ function renderShell() {
   document.title = r ? `Learning Agent · ${r.id}` : "Learning Agent";
   const status = $("status");
   status.className = r && r.exit && r.exit !== "exit 0" ? "bad" : "";
-  const calls = r ? r.calls.length + r.aux.length + (r.aux.length ? `（含辅助 ${r.aux.length}）` : "") : "";
-  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? `运行中 · 模型调用 ${calls} 次` : r.exit === "exit 0" ? `完成 · 模型调用 ${calls} 次` : "未正常结束";
+  const nSub = r ? Object.values(r.subs).reduce((n, s) => n + s.calls.length, 0) : 0;
+  const calls = r ? `${r.calls.length + r.aux.length} 次` + (r.aux.length ? `（含辅助 ${r.aux.length}）` : "") + (nSub ? ` · 子 agent ${nSub} 次` : "") : "";
+  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? (r.stopRequested ? "正在停止…" : `运行中 · 模型调用 ${calls}`) : r.exit === "exit 0" ? `完成 · 模型调用 ${calls}` : r.stopRequested ? "已停止" : "未正常结束";
 }
 function syncComposer() {
-  const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && r.exit && r.exit !== "exit 0";
+  const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && r.exit && r.exit !== "exit 0" && !r.checkpoint;
   const lab = r?.query === RAG_LAB_TITLE;
   $("rag").disabled = !!r;
   if (r?.calls.length) $("rag").checked = (r.calls.at(-1).req.tools || []).some((t) => t.function?.name === "search_docs");
@@ -1563,11 +1710,20 @@ function syncComposer() {
   const nSkills = r ? r.skills.length : ui.hub?.skills.length, nMCP = r ? r.mcp.length : ui.hub?.mcp.length;
   $("skills-label").textContent = "Skills" + (nSkills != null ? ` ${nSkills}` : "");
   $("mcp-label").textContent = "MCP" + (nMCP != null ? ` ${nMCP}` : "");
-  $("send").disabled = ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
+  $("use-sub").disabled = !!r;
+  $("use-sub").checked = r ? r.subagents : load("useSub") === "1";
+  // 运行中发送键变成停止键（Codex 客户端的做法）：第一次优雅停止，第二次强制结束。
+  const running = !!r && !r.exit && !ui.replay && (r.calls.length > 0 || r.logs.length > 0);
+  $("send").classList.toggle("stop", running);
+  $("send").classList.toggle("force", running && r.stopRequested);
+  $("send").textContent = running ? "■" : "↑";
+  $("send").title = running ? (r.stopRequested ? "强制结束（SIGKILL）" : "停止（SIGINT：先回填结果、保存检查点）") : "发送";
+  $("send").setAttribute("aria-label", running ? (r.stopRequested ? "强制结束" : "停止") : "发送");
+  $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
-  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "");
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "") + ($("use-sub").checked ? " · 子 agent" : "");
   $("hint").textContent = !r ? ($("mem").checked ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : $("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
-    busy ? "agent 正在回复，本轮结束后可以继续提问" : broken ? "上次运行未正常结束，请新建对话" : "Enter 发送，会延续这条对话的上下文";
+    busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次 ■ 强制结束" : "agent 正在回复，点 ■ 停止；本轮结束后可以继续提问") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : r.exit !== "exit 0" ? "上一轮中途停下：继续提问会从检查点接着聊" : "Enter 发送，会延续这条对话的上下文";
 }
 function relTime(id) {
   const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(id);
@@ -1646,7 +1802,7 @@ $("terminal").onclick = () => select("end", ui.run);
 function newChat(updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
-  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false });
+  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null });
   if (updateURL) syncRunURL(null);
   document.body.classList.remove("nav-open");
   $("stats").hidden = true;
@@ -1835,9 +1991,21 @@ async function openMCP() {
 $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
-  if ($("send").disabled || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked });
+  if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked, subagents: $("use-sub").checked });
 };
+$("send").onclick = async (ev) => {
+  if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交
+  ev.preventDefault();
+  const r = ui.run;
+  if (!r) return;
+  if (r.stopRequested && !confirm("agent 正在停止（回填结果、保存检查点）。确定强制结束？未保存的进度会丢失。")) return;
+  try {
+    const res = await fetch(`/runs/${encodeURIComponent(r.id)}/stop`, { method: "POST" });
+    if (!res.ok && res.status !== 409) alert(await res.text());
+  } catch (err) { alert("停止失败：" + err.message); }
+};
+$("use-sub").onchange = () => { save("useSub", $("use-sub").checked ? "1" : "0"); syncComposer(); };
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };
 $("query").oninput = () => { autosize(); syncComposer(); };

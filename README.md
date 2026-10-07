@@ -1,8 +1,8 @@
-# 学习 agent：Day 1 → Day 7（Week 1）
+# 学习 agent：Day 1 → Day 10（Week 1–2）
 
 想先看动画讲解，打开 [课件入口](docs/slides/index.html)：每节课一份可翻页、按步骤播放的 HTML 课件。
 
-每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)、[Day 6 MCP client](docs/day-06/day-06-notes.md)、[Day 7 MCP server](docs/day-07/day-07-notes.md)、[Bonus Agent Skills](docs/bonus-skills/skills-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)、[Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)。第一周的总结与架构图见 [Week 1 复盘](docs/week-01-review.md)。
+每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)、[Day 6 MCP client](docs/day-06/day-06-notes.md)、[Day 7 MCP server](docs/day-07/day-07-notes.md)、[Bonus Agent Skills](docs/bonus-skills/skills-notes.md)、[Day 8 取消超时与重试](docs/day-08/day-08-notes.md)、[Day 9 检查点与恢复](docs/day-09/day-09-notes.md)、[Day 10 任务调度与幂等](docs/day-10/day-10-notes.md)、[子 agent](docs/bonus-subagents/subagents-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)、[Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)、[Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md)、[Day 10](docs/day-10/day-10-lab.md)、[子 agent](docs/bonus-subagents/subagents-lab.md)。第一周的总结与架构图见 [Week 1 复盘](docs/week-01-review.md)。
 
 用 Go 手写最小 ReAct loop，重点是看懂流程：
 
@@ -36,7 +36,7 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | `-parallel` | 4 | 工具执行并发，1到16 |
 | `-max-steps` | 10 | 模型请求总预算，包含最终回答与上下文摘要 |
 | `-retries` | 2 | 工具额外重试次数，0到5 |
-| `-lab-tools` | false | 显式开启 Day 2 故障工具 |
+| `-lab-tools` | false | 显式开启故障实验工具：Day 2 的 always_fail、check_task_status，Day 8 的 slow_job |
 | `-context-window` | 12288 | 配置的总窗口，学习实验值 |
 | `-max-output-tokens` | 0 | 0省略API输出上限；大于0才传max_completion_tokens（含推理） |
 | `-reasoning-reserve` | 1024 | 输入容量额外安全余量 |
@@ -67,8 +67,14 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | `-skills` | false | 扫描 `skills/*/SKILL.md`，system 中放索引，增加 load_skill |
 | `-skill` | 空 | 配合 `-skills`，只启用这个名字的 skill（可重复）；不给则启用全部 |
 | `-skills-list` | false | 只扫描 `skills/`，stdout 输出每个 skill 的元数据、正文与校验错误（JSON），不请求模型；须单独使用 |
+| `-timeout` | 0 | Day 8：整次运行的时限，如 `2m`；0 不限，仍可 Ctrl+C |
+| `-tool-timeout` | 30s | Day 8：单次工具尝试的时限；到时记为结果未知，只读工具才重试 |
+| `-task-id` | 按启动时间生成 | Day 9：检查点ID（字母、数字和 `._-`）；已存在时拒绝启动，提示改用 `-resume` |
+| `-resume` | 空 | Day 9：从该ID的检查点续跑，配置取自检查点；须单独使用；已完成的直接返回存档答案 |
+| `-subagents` | false | 增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程），每次运行最多4个 |
+| `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
 
-工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。
+工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。Day 8 起按错误类型重试：参数错误等确定性失败不重试；单次超时或执行中被取消记为结果未知，只读工具才重试；每项调用的结局（成功 / 失败 / 未执行 / 结果未知）都写进 tool 结果和摘要。
 
 ## 源码阅读
 
@@ -77,7 +83,7 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 ```
 llm ← tools、retrieval、skills
       tools ← mcp；retrieval ← memory
-      全部功能包 ← agent ← labs
+      全部功能包 ← agent ← labs、queue
 observer 不引用任何内部包：它只通过命令行启动 agent；main.go 把 mcp.Handler() 交给它挂在 /mcp
 ```
 
@@ -85,18 +91,19 @@ observer 不引用任何内部包：它只通过命令行启动 agent；main.go 
 | --- | --- |
 | [main.go](main.go) | 唯一入口：解析参数、按开关组装工具、启动任务；`observe` 子命令转到观测台 |
 | [internal/llm](internal/llm/) | [llm.go](internal/llm/llm.go) 发送消息历史与 tools、请求计数与用量；[protocol.go](internal/llm/protocol.go) Message/ToolCall/Observation、本次运行的工具定义 `llm.Tools`、token 粗估、消息组校验、`.env` 配置 |
-| [internal/agent](internal/agent/) | [react.go](internal/agent/react.go) ReAct 循环、并行调度、重试、终止与 system prompt；[dispatch.go](internal/agent/dispatch.go) 按工具名分发（检索、记忆、skill、MCP、内置）；[context_manager.go](internal/agent/context_manager.go) Transcript/View、usage、集中清理与摘要 |
+| [internal/agent](internal/agent/) | [react.go](internal/agent/react.go) ReAct 循环、并行调度、按错误类型重试、单次超时、终止与 system prompt；[checkpoint.go](internal/agent/checkpoint.go) Day 9 检查点、原子写、flock、续跑；[child.go](internal/agent/child.go) 按任务ID幂等执行一个 agent 子进程（队列与子 agent 共用）；[subagent.go](internal/agent/subagent.go) spawn_agent；[dispatch.go](internal/agent/dispatch.go) 按工具名分发（检索、记忆、skill、MCP、内置）；[context_manager.go](internal/agent/context_manager.go) Transcript/View、usage、集中清理与摘要 |
 | [internal/tools](internal/tools/tools.go) | 内置工具 calculator、get_current_datetime、search_notes 与 Day 2/3 实验工具 |
 | [internal/retrieval](internal/retrieval/) | [retrieval.go](internal/retrieval/retrieval.go) search_docs、进程内索引、点积排序与低分过滤；[embedding.go](internal/retrieval/embedding.go) 本地纯Go推理 / 线上方舟embedding |
 | [internal/memory](internal/memory/) | [memory.go](internal/memory/memory.go) 依据层：原文与来源、文件锁事务、规则写入、过期淘汰、删除；[memory_retrieval.go](internal/memory/memory_retrieval.go) Contextual Retrieval：切块、背景、两路召回、RRF、重排 |
 | [internal/mcp](internal/mcp/mcp.go) | MCP client（stdio 与 Streamable HTTP）、手写 JSON-RPC、calculator MCP server（stdio / 独立端口 / 观测台 `/mcp`） |
 | [internal/skills](internal/skills/skills.go) | frontmatter 解析、启动扫描与校验、skill 索引、load_skill |
+| [internal/queue](internal/queue/queue.go) | Day 10 任务队列：任务文件、去重、固定数量 worker、任务级重试与汇总 |
 | [internal/labs](internal/labs/) | [context_lab.go](internal/labs/context_lab.go) Day 3 真实33轮召回与大工具输出；[rag_lab.go](internal/labs/rag_lab.go) Day 4 10题有无检索对比 |
 | [internal/observer](internal/observer/) | [server.go](internal/observer/server.go) 代理、存档、SSE、启动 agent 子进程；[hub.go](internal/observer/hub.go) Skills/MCP 中心；[index.html](internal/observer/index.html) 页面 |
 
 各功能的启用状态是包级变量（如 `retrieval.Enabled`、`memory.Active`、`skills.Index`、`mcp.Conns`），由 `main.go` 按命令行参数设置；一个 agent 进程只跑一个任务，所以这样足够，观测台的每次对话也都是独立子进程。
 
-默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail 和 check_task_status 两个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
+默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail、check_task_status 与 slow_job 三个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
 
 ## Day 3 上下文系统
 
@@ -124,6 +131,8 @@ go run . observe -dev     # 每次对话用 go run . 启动 agent，改完 agent
 点击左侧“Day 3 上下文实验”并确认，即可在对话流中看到33轮对话、压缩分隔线和大工具调用。它等价于 `go run . -context-lab -max-steps 60 -reasoning-effort minimal`，由观测台启动并接入代理，无需另开终端执行实验命令。切到“观测”，点击“终端输出”查看 `Context`、`Compact`、`Recall` 和 `Lab complete`；“迷宫”查看上下文压力与压缩位置。更新观测台源码后，需要重启观测台并刷新网页。
 
 单独在项目根目录运行实验会直连方舟，不会自动出现在观测台；已经绕过代理的对话无法事后补录。通过观测台启动时，沿用观测台的 `.data/runs/` 存档；实验程序本身不另写日志。
+
+运行中，输入框的发送键变成 ■：第一次点击向 agent 发 SIGINT，agent 回填结果、写好检查点后退出；再点一次强制结束。停止（或超时、出错）后可以直接继续提问：观测台从检查点接着聊，模型会看到被打断的调用是“未执行”还是“结果未知”。新对话勾选“子 agent”后，对话流里每个 `spawn_agent` 显示为一张卡片，点开在右侧侧栏查看该子 agent 的任务原文与完整过程（参考 Codex 客户端）。
 
 左侧“Skills 中心”和“MCP 中心”类似 Codex 客户端的管理页。Skills 中心列出 `skills/` 下的 skill（数据来自 agent 的 `-skills-list`，与运行时同一套校验），可以查看正文、启停、删除，或填表新建一份 SKILL.md（写入后立即校验，不合规自动撤销）。MCP 中心添加 stdio server（名字 + 一行命令，相对项目根目录执行），可以启停、删除，“测试连接”调用 agent 的 `-mcp-list` 显示协商版本和工具列表。命令栏填 `http(s)://…` 地址即为远程 server。观测台自带一个远程 MCP server：`http://127.0.0.1:8090/mcp`，由观测台进程直接处理（工具是 calculator，与 `-mcp-serve` 同一个 server 定义），在 MCP 中心用“快速填入 → observer”添加即可在对话中使用。中心接口只接受本机 Host 且同源的请求，防止其他网页借浏览器添加命令。
 
@@ -207,6 +216,32 @@ mcp-go v1.1.1 默认使用 2026-07-28 版协议：先发 `server/discover`，旧
 ```
 
 启动时打印 `Skills: loaded=N names=…`，坏 SKILL.md 打印 `Skill error` 并跳过。只读 Markdown 正文，不执行 skill 自带脚本。详见 [Skills 项目实践](docs/bonus-skills/skills-lab.md)。
+
+## Day 8–10：运行时、检查点与任务队列
+
+```sh
+go build -o bin/learning-agent .
+# Day 8：单次超时 → 结果未知，有副作用的工具不自动重做；按一次 Ctrl+C 优雅停止，再按一次立即退出
+./bin/learning-agent -lab-tools -tool-timeout 3s -question '请调用 slow_job 执行一个 10 秒的作业，然后告诉我结果。'
+./bin/learning-agent -lab-tools -timeout 15s -question '调用 slow_job 执行 60 秒的作业。'
+# Day 9：每次运行打印 Checkpoint: id=…；中断（Ctrl+C、kill -9、模型请求失败）后续跑
+./bin/learning-agent -lab-tools -task-id demo -question '请同一轮并行调用：slow_job 执行 40 秒的作业，同时用 calculator 算 1234*5678。'
+./bin/learning-agent -resume demo
+# Day 10：10 个任务、3 个 worker；再跑一次全部直接取存档；中途 Ctrl+C 后再跑会续跑
+go run . queue -workers 3 queue/tasks.jsonl -- -reasoning-effort low -max-steps 4
+```
+
+检查点在 `.data/checkpoints/<id>.json`（已忽略提交），运行期间持有同名 `.lock` 的 flock，同一任务不会被两个进程同时执行。模型决定调用工具后、执行前先写一次（写前日志），续跑时末尾没有结果的调用：只读工具重新执行，其余回填“结果未知”。预算、熔断计数和启动参数都在检查点里，续跑不重置预算、不需要重新输入参数。
+
+队列的任务ID就是检查点ID：已完成的不再执行，中断的用 `-resume` 续跑，同一文件里重复的ID只入队一次，不写 `id` 时按问题内容哈希。每个任务的完整输出在 `.data/checkpoints/<id>.log`。详见 [Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md)、[Day 10](docs/day-10/day-10-lab.md) 项目实践。
+
+## Bonus：子 agent
+
+```sh
+./bin/learning-agent -subagents -question '我要准备一份学习简报，包含三部分，彼此独立，请分给子 agent 并行完成：……最后汇总成一张表。'
+```
+
+模型调用 `spawn_agent(task)` 时，启动一个只拿到 task 的子 agent 进程（复用队列的执行器），输出加 `│ call_id` 前缀转到当前终端，结论作为 tool 结果交回。子 agent 继承工具开关，不继承长期记忆与 `-subagents`；子任务ID = 父检查点ID + task 哈希，父任务续跑时已完成的子任务直接取回结论。详见 [子 agent 项目实践](docs/bonus-subagents/subagents-lab.md)。
 
 ## 配置与学习
 

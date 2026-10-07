@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -42,17 +43,23 @@ type event struct {
 	MemoryTTL string          `json:"memory_ttl,omitempty"`
 	Skills    []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
 	MCP       []mcpServer     `json:"mcp,omitempty"`
+	Subagents bool            `json:"subagents,omitempty"` // 本对话允许 spawn_agent，续聊沿用
+	Task      string          `json:"task,omitempty"`      // 发出这次请求的 agent 任务ID（X-Agent-Task）
+	Sub       bool            `json:"sub,omitempty"`       // 请求来自子 agent：不进入父对话流、不参与续聊恢复
 }
 
 type run struct {
 	ID, Query string
 	Done      bool
 
-	mu      sync.Mutex
-	calls   int
-	events  []event
-	changed chan struct{}
-	file    *os.File
+	mu       sync.Mutex
+	calls    int
+	events   []event
+	changed  chan struct{}
+	file     *os.File
+	proc     *os.Process // 正在运行的 agent 进程，停止按钮向它的进程组发信号
+	stopping bool        // 已发过一次 SIGINT；再按一次强制结束
+	rootTask string      // 本次启动的父 agent 任务ID：启动后第一个带任务ID的请求一定来自父 agent
 }
 
 type server struct {
@@ -110,6 +117,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /runs", s.startRun)
 	mux.HandleFunc("POST /runs/{id}/messages", s.continueRun)
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
+	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
@@ -171,6 +179,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		MemoryTTL  string `json:"memory_ttl"`
 		Skills     bool   `json:"skills"`
 		MCP        bool   `json:"mcp"`
+		Subagents  bool   `json:"subagents"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -185,7 +194,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lab := input.ContextLab || input.RAGLab
-	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP)) {
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents)) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
 		return
 	}
@@ -214,6 +223,9 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	args = appendCapabilityArgs(args, skills, servers)
+	if input.Subagents {
+		args = append(args, "-subagents")
+	}
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
 		args = []string{"-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
@@ -236,7 +248,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers})
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents})
 	s.launch(r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -274,17 +286,17 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// 续聊沿用这条对话开始时的记忆、skill 与 MCP 设置：最近一次 start/continue 事件为准。
-	memory, ttl := false, ""
+	memory, ttl, subagents := false, "", false
 	var skills []string
 	var servers []mcpServer
 	for _, e := range r.events {
 		if e.Kind == "start" || e.Kind == "continue" {
-			memory, ttl, skills, servers = e.Memory, e.MemoryTTL, e.Skills, e.MCP
+			memory, ttl, skills, servers, subagents = e.Memory, e.MemoryTTL, e.Skills, e.MCP, e.Subagents
 		}
 	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers})
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents})
 	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
@@ -297,6 +309,9 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	}
 	args = appendMemoryArgs(args, memory, ttl)
 	args = appendCapabilityArgs(args, skills, servers)
+	if subagents {
+		args = append(args, "-subagents")
+	}
 	s.launch(r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -315,9 +330,14 @@ func (s *server) launch(r *run, args []string, history *resumeInput) {
 	}
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
+	// 自己的进程组：停止时向整组发信号。-dev 模式下组里是 go run 和它编译出的 agent，两者都能收到。
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		r.add(event{Kind: "exit", Text: err.Error()})
 	} else {
+		r.mu.Lock()
+		r.proc, r.stopping, r.rootTask = cmd.Process, false, ""
+		r.mu.Unlock()
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go r.copyLines(&wg, "stdout", stdout)
@@ -325,6 +345,9 @@ func (s *server) launch(r *run, args []string, history *resumeInput) {
 		go func() {
 			wg.Wait()
 			err := cmd.Wait()
+			r.mu.Lock()
+			r.proc = nil
+			r.mu.Unlock()
 			text := "exit 0"
 			if err != nil {
 				text = err.Error()
@@ -365,6 +388,7 @@ func (s *server) listMemory(w http.ResponseWriter, _ *http.Request) {
 
 var memoryID = regexp.MustCompile(`^M[0-9]{1,9}$`)
 var purposePattern = regexp.MustCompile(`^[a-z_]{1,32}$`)
+var taskPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 func (s *server) forgetMemory(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
@@ -392,7 +416,15 @@ type resumeInput struct {
 }
 
 // 调用方持有r.mu。请求里的View已经包含摘要，直接延续它，不重新拼接所有旧请求。
+// 上一轮中途停下（停止按钮、超时、出错）时，改从 agent 的检查点接着聊。
 func (r *run) resumeHistory() (*resumeInput, error) {
+	if id := r.lastCheckpoint(); id != "" && r.events[len(r.events)-1].Text != "exit 0" {
+		result, err := r.checkpointHistory(id)
+		if err != nil {
+			return nil, err
+		}
+		return r.withEmbedding(result), nil
+	}
 	start, end := 0, len(r.events)
 	for i, e := range r.events {
 		if e.Kind == "continue" {
@@ -418,7 +450,8 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 	var result *resumeInput
 	for _, e := range r.events[start:end] {
 		// 记忆背景生成与重排是辅助调用：它们的输入不是对话，输出也不是 assistant 的回答，续聊不能从它们恢复。
-		if strings.HasPrefix(e.Purpose, "memory_") {
+		// 子 agent 的请求属于另一个上下文，同样跳过。
+		if strings.HasPrefix(e.Purpose, "memory_") || e.Sub {
 			continue
 		}
 		if e.Kind == "request" {
@@ -466,13 +499,69 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 	if result == nil {
 		return nil, errors.New("存档没有完整的回答，无法恢复续聊上下文")
 	}
+	return r.withEmbedding(result), nil
+}
+
+// 中途停下的对话从 agent 的检查点接着聊：检查点里有被打断那一轮的完整记录，
+// 包括写成“未执行”“结果未知”的工具结果；存档里只能找到最后一个完整回答之前的请求。
+func (r *run) checkpointHistory(id string) (*resumeInput, error) {
+	data, err := os.ReadFile(filepath.Join(".data", "checkpoints", id+".json"))
+	if err != nil {
+		return nil, errors.New("找不到这次运行的检查点，无法接着聊：" + id)
+	}
+	var cp struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if json.Unmarshal(data, &cp) != nil || len(cp.Messages) == 0 {
+		return nil, errors.New("检查点无效：" + id)
+	}
+	result := &resumeInput{Messages: cp.Messages, WithTools: true}
+	// 模型、推理强度与是否检索沿用这条对话最近一次主任务请求。
+	for i := len(r.events) - 1; i >= 0; i-- {
+		e := r.events[i]
+		if e.Kind != "request" || e.Sub || strings.HasPrefix(e.Purpose, "memory_") {
+			continue
+		}
+		var request struct {
+			Tools  []struct{ Function struct{ Name string } } `json:"tools"`
+			Model  string                                     `json:"model"`
+			Effort string                                     `json:"reasoning_effort"`
+		}
+		if json.Unmarshal(e.Body, &request) == nil {
+			result.Model, result.Effort = request.Model, request.Effort
+			for _, tool := range request.Tools {
+				result.RAG = result.RAG || tool.Function.Name == "search_docs"
+			}
+		}
+		break
+	}
+	return result, nil
+}
+
+// 本次启动的 agent 打印的检查点ID（子 agent 的行带 “│” 前缀，不会匹配）。
+func (r *run) lastCheckpoint() string {
+	for i := len(r.events) - 1; i >= 0; i-- {
+		e := r.events[i]
+		if e.Kind == "start" || e.Kind == "continue" {
+			return ""
+		}
+		if m := checkpointLine.FindStringSubmatch(e.Text); e.Kind == "stdout" && m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+var checkpointLine = regexp.MustCompile(`^Checkpoint: id=([A-Za-z0-9._-]{1,128}) `)
+
+func (r *run) withEmbedding(result *resumeInput) *resumeInput {
 	result.Embedding = "ark"
 	// 新存档明确记录选择；旧存档从实际检索结果恢复backend，无法确定时沿用默认ark。
 	for i := len(r.events) - 1; i >= 0; i-- {
 		e := r.events[i]
 		if e.Embedding == "ark" || e.Embedding == "local" {
 			result.Embedding = e.Embedding
-			return result, nil
+			return result
 		}
 	}
 	for _, raw := range result.Messages {
@@ -488,12 +577,19 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 			result.Embedding = observation.Result.Backend
 		}
 	}
-	return result, nil
+	return result
 }
 
-// 调用方持有r.mu；失败或中断的任务不能被当作已完成对话重放。
+// 调用方持有r.mu。正常结束的对话从最后一个完整回答接着聊；
+// 中途停下的对话（停止按钮、超时、出错）只要 agent 写过检查点，就从检查点接着聊。
 func (r *run) canContinue() bool {
-	return r.Query != ragLabTitle && r.Done && r.calls > 0 && len(r.events) > 0 && r.events[len(r.events)-1].Kind == "exit" && r.events[len(r.events)-1].Text == "exit 0"
+	if r.Query == ragLabTitle || !r.Done || len(r.events) == 0 || r.events[len(r.events)-1].Kind != "exit" {
+		return false
+	}
+	if r.events[len(r.events)-1].Text == "exit 0" {
+		return r.calls > 0
+	}
+	return r.lastCheckpoint() != ""
 }
 
 // 启动时读回 runs/*.jsonl，重启后仍能查看、回放和对比历史运行。
@@ -564,16 +660,24 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	r.mu.Lock()
-	r.calls++
-	call := r.calls
-	r.mu.Unlock()
-	// 用途由 agent 在请求头明确标记，只记录、不转发给上游；旧版本 agent 没有这个头。
+	// 用途与任务ID由 agent 在请求头明确标记，只记录、不转发给上游；旧版本 agent 没有这两个头。
 	purpose := req.Header.Get("X-Agent-Purpose")
 	if !purposePattern.MatchString(purpose) {
 		purpose = ""
 	}
-	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose})
+	task := req.Header.Get("X-Agent-Task")
+	if !taskPattern.MatchString(task) {
+		task = ""
+	}
+	r.mu.Lock()
+	r.calls++
+	call := r.calls
+	if r.rootTask == "" {
+		r.rootTask = task
+	}
+	sub := task != "" && task != r.rootTask
+	r.mu.Unlock()
+	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose, Task: task, Sub: sub})
 
 	start := time.Now()
 	upstream, err := http.NewRequestWithContext(req.Context(), http.MethodPost, s.upstream, bytes.NewReader(body))
@@ -584,7 +688,7 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 		if response, err = http.DefaultClient.Do(upstream); err == nil {
 			defer response.Body.Close()
 			data, readErr := io.ReadAll(response.Body)
-			r.add(event{Kind: "response", Call: call, Status: response.StatusCode, Millis: time.Since(start).Milliseconds(), Body: raw(data), Purpose: purpose})
+			r.add(event{Kind: "response", Call: call, Status: response.StatusCode, Millis: time.Since(start).Milliseconds(), Body: raw(data), Purpose: purpose, Task: task, Sub: sub})
 			if readErr == nil {
 				w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 				w.WriteHeader(response.StatusCode)
@@ -594,7 +698,12 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 			err = readErr
 		}
 	}
-	r.add(event{Kind: "response", Call: call, Status: http.StatusBadGateway, Millis: time.Since(start).Milliseconds(), Text: err.Error(), Purpose: purpose})
+	// agent 取消了请求（停止按钮、超时）时记为 499（客户端关闭请求），与上游故障的 502 区分开。
+	status := http.StatusBadGateway
+	if req.Context().Err() != nil {
+		status = 499
+	}
+	r.add(event{Kind: "response", Call: call, Status: status, Millis: time.Since(start).Milliseconds(), Text: err.Error(), Purpose: purpose, Task: task, Sub: sub})
 	http.Error(w, err.Error(), http.StatusBadGateway)
 }
 
@@ -655,6 +764,34 @@ func (s *server) streamEvents(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+}
+
+// 停止按钮：第一次向 agent 进程组发 SIGINT，agent 回填结果、写好检查点再退出（Day 8 的优雅停止）；
+// 第二次发 SIGKILL 强制结束。子 agent 在各自的进程组里，由父 agent 收到 SIGINT 后转发。
+func (s *server) stopRun(w http.ResponseWriter, req *http.Request) {
+	r := s.find(req.PathValue("id"))
+	if r == nil {
+		http.Error(w, "找不到这条对话", http.StatusNotFound)
+		return
+	}
+	r.mu.Lock()
+	proc, force := r.proc, r.stopping
+	r.stopping = true
+	r.mu.Unlock()
+	if proc == nil {
+		http.Error(w, "这条对话没有在运行", http.StatusConflict)
+		return
+	}
+	signal, text := syscall.SIGINT, "已请求停止：向 agent 发送 SIGINT，等待它回填结果、写好检查点后退出"
+	if force {
+		signal, text = syscall.SIGKILL, "强制结束：向 agent 发送 SIGKILL"
+	}
+	if err := syscall.Kill(-proc.Pid, signal); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	r.add(event{Kind: "stop", Text: text})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) listRuns(w http.ResponseWriter, _ *http.Request) {
