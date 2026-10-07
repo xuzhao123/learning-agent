@@ -72,8 +72,8 @@
 | C10 | MCP 参数与信任边界、只读 Skills、浏览器内网拦截、Bash 隔离及联网审批。见 [Day 7](docs/day-07/day-07-lab.md)、[Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 多租户、注入攻防、跨工具外发与完整审计；现有沙箱限制见 Day 12 边界 | 待反馈 |
 | C11 | chromedp 页面读取与画面，Bash 沙箱代码执行。见 [Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 操作型浏览器、会话保持、CI 执行器与生产使用 | 待反馈 |
 | C12 | 子 agent 的独立上下文、并行、继承与恢复。见 [子 agent](docs/bonus-subagents/subagents-lab.md) | 与单 agent 的系统成本/效果对比，复杂协作 | 待反馈 |
-| C13 | 用户已指出上下文输出上限、摘要配额和展示问题；方案与风险讨论见 [Day 3 设计](docs/day-03/context-system-design.md)、[深度问题](docs/deep-questions.md) | 独立项目交付、真实上线与改进、团队评审和协作证据 | 待确认 |
-| C14 | 中文学习文档、原始资料阅读入口与 Go 实现已整理。见 [学习目录](README.md#学习目录)、[阅读材料](docs/reading-list.md) | 独立技术写作、英文交流、成果发布与开源证据 | 待确认 |
+| C13 | 用户已指出上下文输出上限、摘要配额和展示问题；方案与风险讨论见 [Day 3 设计](docs/day-03/context-system-design.md)、[深度问题](docs/deep-questions.md)；面试题库安排了 [系统设计](wiki/16-interview-preparation.md#p) 与 [项目判断练习](wiki/16-interview-preparation.md#o) | 独立项目交付、真实上线与改进、团队评审和协作证据；题库推演不等同于实践 | 待确认 |
+| C14 | 中文学习文档、基础/技术两层 Agent Wiki、原始资料与 Go 实现已整理，技术层提供算法算例、Go片段、故障推演及源码边界。见 [体系 Wiki](wiki/README.md)、[技术索引](wiki/README.md#技术展开索引)、[阅读材料](docs/reading-list.md)；[面试题库](wiki/16-interview-preparation.md) 补充中英文表达与 GitHub 资料入口 | 独立技术写作、英文交流、成果发布与开源证据；题库阅读和练习掌握待确认 | 待确认 |
 
 记录原则：
 

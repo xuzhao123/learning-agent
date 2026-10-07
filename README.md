@@ -2,6 +2,8 @@
 
 从最小工具调用循环出发，逐步学习上下文、检索、记忆、MCP、运行时和安全边界。长期目标见 [岗位能力对照](JOB_REQUIREMENTS.md)，当前进度见 [PROJECT.md](PROJECT.md)。
 
+**按模块系统学习，从 [Agent Wiki](wiki/README.md) 开始。** Wiki 分基础理解与技术展开两层，提供术语、数据结构、算法算例、Go片段、故障推演和源码对照；每日 notes 与 lab 保留按天学习和动手路径，见下方学习目录。
+
 `用户问题 → 组织上下文 → 请求模型 → tool_calls → 执行工具 → 结果回填 → 下一轮或结束`
 
 ## 快速开始
@@ -73,6 +75,7 @@ go build -o bin/learning-agent .
 
 - [28 天学习计划](plan.md)：课程安排与长期目标；[第一周复盘](docs/week-01-review.md)：模块之间的关系。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
+- [Agent 工程面试题库](wiki/16-interview-preparation.md)：126 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。
 - [课件入口](docs/slides/index.html)：当前覆盖 Day 1–5。
 
