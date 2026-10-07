@@ -124,9 +124,29 @@ Termination: no_tool_calls
 
 `[mcp-serve]` 那一行来自 server 子进程，证明这次计算发生在另一个进程里，经过了完整的 MCP 往返。问题里明确要求不用本地 calculator：本地和 MCP 的计算器同时存在时，模型可能选任何一个，这时 `mcp_` 前缀起到了区分作用。
 
+### 3.4 第二层取参校验的对照实验
+
+2026-10-07 补充：在临时副本中只移除 `server.WithInputSchemaValidation()`，保留工具 schema、`WithStrictInputSchemaDefault()` 与 handler 的 `RequireString("expression")`。分别编译原实现和该副本，用真实 SDK client 经 stdio 调用同一个 calculator，未请求模型，实验结束后删除临时副本。项目原实现仍开启 schema 校验。
+
+每个版本运行三种输入，共六次调用：
+
+| arguments | schema 开启 | schema 关闭 |
+| --- | --- | --- |
+| `{"expression":123}` | 第一层返回 `input schema validation failed`，无 handler 的 rejected 日志 | 第二层返回 `argument "expression" is not a string`，有 `calculator rejected` 日志 |
+| `{}` | 第一层返回缺少 expression，无 handler 的 rejected 日志 | 第二层返回 `required argument "expression" not found`，有 `calculator rejected` 日志 |
+| `{"expression":"1+1"}` | 返回 2，`isError=false` | 返回 2，`isError=false` |
+
+类型错误在关闭 schema 校验后的实际 server 日志：
+
+```text
+[mcp-serve] calculator rejected: argument "expression" is not a string
+```
+
+这个输入是合法 JSON，但 expression 的类型错误，因此能区分 schema 拦截和 handler 拦截。开启正确的 schema 校验时，两层的存在性和类型检查有重叠；第二层的价值是 handler 对自己的输入要求做明确检查，校验选项关闭或 schema 不完整时仍能兜底。`RequireString` 只检查存在与字符串类型，空字符串不会在这一层被拒绝；它也不替代 schema 的长度和未知字段检查。
+
 ## 4. 已知边界
 
-- 第 2 层取参检查在 schema 校验开启时实际不会触发，属于纵深防御，本次没有构造关闭 schema 校验的对照实验。
+- 第 2 层的存在性和类型检查与正确开启的 schema 校验重叠；现已用关闭 schema 校验的对照实验实际触发，见 3.4。它不是完整的 schema 校验器。
 - 没有频率限制和调用超时：`tools.Calculate` 本身很快，输入也有长度上限，暂不需要。规范要求的 rate limit 留到 Week 2。
 - server 以当前用户身份运行，并继承 client 的全部环境变量（见 Day 6 已知边界）。`tools.Calculate` 不读文件、不访问网络，所以眼下没有实际风险，但这不是一个好习惯。
 
