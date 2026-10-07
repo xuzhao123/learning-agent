@@ -216,6 +216,9 @@ func atomicWrite(path string, data []byte) error {
 3. 恢复历史里只有工具请求、没有结果，应怎样处理？  
    先当成未确认动作，根据只读、幂等或可查询性决定恢复；不能直接补一句成功。
 
+4. 把有副作用的工具误标为可重复，或者检查点只存 View，续跑会怎样？  
+   前者会让程序替模型把副作用再做一遍；后者能保证下一步输入相同，但不保证之后的压缩与不中断时一致。详见 [Q13](../docs/deep-questions.md#q13)、[Q14](../docs/deep-questions.md#q14)。
+
 ## 延伸阅读
 
 - [Day 9 笔记](../docs/day-09/day-09-notes.md)
