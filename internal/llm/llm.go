@@ -1,4 +1,4 @@
-package main
+package llm
 
 import (
 	"bytes"
@@ -14,27 +14,27 @@ import (
 	"time"
 )
 
-type modelUsage struct {
+type Usage struct {
 	Prompt     int `json:"prompt_tokens"`
 	Completion int `json:"completion_tokens"`
 	Details    struct {
 		Cached *int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
 }
-type modelReply struct {
+type Reply struct {
 	Message Message
-	Usage   *modelUsage
+	Usage   *Usage
 }
 
-var errContextLength = errors.New("模型服务报告上下文过长")
-var errModelBudget = errors.New("模型请求次数预算已用完（包含摘要和超窗重试）")
+var ErrContextLength = errors.New("模型服务报告上下文过长")
+var ErrModelBudget = errors.New("模型请求次数预算已用完（包含摘要和超窗重试）")
 
 // 普通请求和摘要共享模型、工具定义和推理配置；摘要额外通过tool_choice禁用工具。
-func callModel(ctx context.Context, config modelConfig, history []Message, withTools bool, output int, purpose string) (modelReply, error) {
+func callModel(ctx context.Context, config Config, history []Message, withTools bool, output int, purpose string) (Reply, error) {
 	endpoint, err := url.Parse(config.APIURL)
 	local := endpoint != nil && endpoint.Scheme == "http" && endpoint.Hostname() == "127.0.0.1"
 	if err != nil || (endpoint.Scheme != "https" && !local) || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" {
-		return modelReply{}, errors.New("模型地址需要是完整的HTTPS URL，或本机http://127.0.0.1观测代理")
+		return Reply{}, errors.New("模型地址需要是完整的HTTPS URL，或本机http://127.0.0.1观测代理")
 	}
 	body := map[string]any{"model": config.Model, "messages": history, "stream": false, "reasoning_effort": config.Effort}
 	// 0表示使用供应商默认值，不在客户端把推理与回答一起截在4096。
@@ -42,7 +42,7 @@ func callModel(ctx context.Context, config modelConfig, history []Message, withT
 		body["max_completion_tokens"] = output
 	}
 	if withTools {
-		body["tools"], body["parallel_tool_calls"] = modelTools(), true
+		body["tools"], body["parallel_tool_calls"] = FunctionTools(), true
 		// tool_choice只在提供工具时有意义；不少兼容接口会拒绝没有tools的tool_choice。
 		if purpose == "compact" {
 			body["tool_choice"] = "none"
@@ -50,11 +50,11 @@ func callModel(ctx context.Context, config modelConfig, history []Message, withT
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return modelReply{}, err
+		return Reply{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.APIURL, bytes.NewReader(data))
 	if err != nil {
-		return modelReply{}, errors.New("无法创建模型请求")
+		return Reply{}, errors.New("无法创建模型请求")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+config.APIKey)
@@ -66,9 +66,9 @@ func callModel(ctx context.Context, config modelConfig, history []Message, withT
 	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return modelReply{}, ctx.Err()
+			return Reply{}, ctx.Err()
 		}
-		return modelReply{}, errors.New("模型请求失败，请检查网络与超时")
+		return Reply{}, errors.New("模型请求失败，请检查网络与超时")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -82,21 +82,21 @@ func callModel(ctx context.Context, config modelConfig, history []Message, withT
 			(strings.Contains(detail, "maximum context length") && strings.Contains(detail, "exceed")) ||
 			(strings.Contains(detail, "context window") && strings.Contains(detail, "exceed"))
 		if (response.StatusCode == 400 || response.StatusCode == 413) && tooLong {
-			return modelReply{}, errContextLength
+			return Reply{}, ErrContextLength
 		}
-		return modelReply{}, fmt.Errorf("模型API返回HTTP %d", response.StatusCode)
+		return Reply{}, fmt.Errorf("模型API返回HTTP %d", response.StatusCode)
 	}
 	var result struct {
-		Usage   *modelUsage `json:"usage"`
+		Usage   *Usage `json:"usage"`
 		Choices []struct {
 			Message      Message `json:"message"`
 			FinishReason string  `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result); err != nil {
-		return modelReply{}, errors.New("模型响应不是有效JSON")
+		return Reply{}, errors.New("模型响应不是有效JSON")
 	}
-	reply := modelReply{Usage: result.Usage}
+	reply := Reply{Usage: result.Usage}
 	if len(result.Choices) == 0 {
 		return reply, errors.New("模型没有返回消息")
 	}
@@ -115,9 +115,9 @@ func callModel(ctx context.Context, config modelConfig, history []Message, withT
 	return reply, nil
 }
 
-func modelTools() []map[string]any {
-	tools := make([]map[string]any, 0, len(toolDefinitions))
-	for _, definition := range toolDefinitions {
+func FunctionTools() []map[string]any {
+	tools := make([]map[string]any, 0, len(Tools))
+	for _, definition := range Tools {
 		tools = append(tools, map[string]any{"type": "function", "function": definition})
 	}
 	return tools
@@ -125,8 +125,8 @@ func modelTools() []map[string]any {
 
 // 只有请求计数器，不做另一层重试。所有实际请求（含摘要、超窗重试、记忆背景生成与重排）共享上限。
 // 并行的 search_memory 也会请求模型，计数与用量统计由 mu 保护。
-type modelClient struct {
-	Config                                                   modelConfig
+type Client struct {
+	Config                                                   Config
 	Calls, Limit, Output                                     int
 	SummaryCalls, Input, Completion, Cached, CacheKnownInput int
 	SummaryInput, SummaryCached                              int
@@ -135,25 +135,25 @@ type modelClient struct {
 }
 
 // 记忆辅助调用不需要主任务的高推理强度；固定较低强度以控制延迟和用量。
-const memoryEffort = "low"
+const MemoryEffort = "low"
 
-func (c *modelClient) call(ctx context.Context, history []Message, withTools bool, purpose string) (modelReply, error) {
-	return c.callKeeping(ctx, history, withTools, purpose, 0)
+func (c *Client) Call(ctx context.Context, history []Message, withTools bool, purpose string) (Reply, error) {
+	return c.CallKeeping(ctx, history, withTools, purpose, 0)
 }
 
 // keep：发出这次请求后至少还要为主任务留下的请求次数；辅助调用用它保证主任务仍能回答。
-func (c *modelClient) callKeeping(ctx context.Context, history []Message, withTools bool, purpose string, keep int) (modelReply, error) {
+func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools bool, purpose string, keep int) (Reply, error) {
 	if err := ctx.Err(); err != nil {
-		return modelReply{}, err
+		return Reply{}, err
 	}
-	if _, err := contextGroups(history); err != nil {
-		return modelReply{}, err
+	if _, err := Groups(history); err != nil {
+		return Reply{}, err
 	}
 	aux := strings.HasPrefix(purpose, "memory_")
 	c.mu.Lock()
 	if c.Limit-c.Calls <= keep {
 		c.mu.Unlock()
-		return modelReply{}, errModelBudget
+		return Reply{}, ErrModelBudget
 	}
 	c.Calls++
 	n := c.Calls
@@ -166,9 +166,9 @@ func (c *modelClient) callKeeping(ctx context.Context, history []Message, withTo
 	c.mu.Unlock()
 	config := c.Config
 	if aux {
-		config.Effort = memoryEffort
+		config.Effort = MemoryEffort
 	}
-	fmt.Printf("Model request: %d/%d purpose=%s input_est=%d\n", n, c.Limit, purpose, contextTokens(history, withTools))
+	fmt.Printf("Model request: %d/%d purpose=%s input_est=%d\n", n, c.Limit, purpose, ContextTokens(history, withTools))
 	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose)
 	c.mu.Lock()
 	defer c.mu.Unlock()

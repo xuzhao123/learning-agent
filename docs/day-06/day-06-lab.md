@@ -1,6 +1,6 @@
 # Day 6 项目实践：写一个 MCP client，把 MCP 工具接进 Agent
 
-原理见 [Day 6 学习笔记](day-06-notes.md)。本文记录本项目怎样实现、怎样动手观察，以及真实运行结果。代码在 [mcp.go](../../mcp.go)，参数入口在 [main.go](../../main.go)。
+原理见 [Day 6 学习笔记](day-06-notes.md)。本文记录本项目怎样实现、怎样动手观察，以及真实运行结果。代码在 [mcp.go](../../internal/mcp/mcp.go)，参数入口在 [main.go](../../main.go)。
 
 ## 1. 实现概览
 
@@ -28,14 +28,14 @@
 
 ## 2. 读代码
 
-建议按调用顺序读 [mcp.go](../../mcp.go)：
+建议按调用顺序读 [mcp.go](../../internal/mcp/mcp.go)：
 
-1. **`connectMCP`**：`client.NewStdioMCPClientWithOptions` 启动子进程，`WithCommandStderrWriter(os.Stderr)` 把 server 日志转到本进程 stderr；`c.Initialize` 内部先试 discover 再退回 initialize；然后检查 server 是否声明了 `tools` 能力，没有就不必 `tools/list`。这里用的就是 capabilities 协商的结果。
-2. **`definitions`**：MCP tool 转 function 定义。先收集已有工具名，避免和本地 `calculator` 冲突；`m.tools` 记住“agent 侧名字 → server 原名”，调用时还原。
+1. **`mcp.Connect`**：`client.NewStdioMCPClientWithOptions` 启动子进程，`WithCommandStderrWriter(os.Stderr)` 把 server 日志转到本进程 stderr；`c.Initialize` 内部先试 discover 再退回 initialize；然后检查 server 是否声明了 `tools` 能力，没有就不必 `tools/list`。这里用的就是 capabilities 协商的结果。
+2. **`Definitions`**：MCP tool 转 function 定义。先收集已有工具名，避免和本地 `calculator` 冲突；`m.tools` 记住“agent 侧名字 → server 原名”，调用时还原。
 3. **`call`**：模型给的参数是 JSON 字符串，解析成 map 后作为 `arguments` 发出；分开处理 `err`（协议错误）和 `result.IsError`（执行错误）。
-4. **`rawMCP`**：不依赖 SDK。用 `exec.Cmd` 拿到 stdin/stdout 管道，一个 goroutine 按行读 stdout 写进 channel；`send` 写一行 JSON 加 `\n`；`receive(id)` 等待同一 `id` 的响应（期间收到的通知也打印），10 秒超时。`legacy` 和 `modern` 两种模式的区别只在两处：开场发 `initialize` + `notifications/initialized` 还是 `server/discover`，以及每个请求要不要附带 `_meta`。
+4. **`mcp.Raw`**：不依赖 SDK。用 `exec.Cmd` 拿到 stdin/stdout 管道，一个 goroutine 按行读 stdout 写进 channel；`send` 写一行 JSON 加 `\n`；`receive(id)` 等待同一 `id` 的响应（期间收到的通知也打印），10 秒超时。`legacy` 和 `modern` 两种模式的区别只在两处：开场发 `initialize` + `notifications/initialized` 还是 `server/discover`，以及每个请求要不要附带 `_meta`。
 
-接入 agent 的改动很小：[main.go](../../main.go) 在 `runAgent` 之前连接并追加工具定义；[tools.go](../../tools.go) 的 `runTool` 在 `default` 分支里先查 `mcpConn.tools`，命中就转发。并行、重试、熔断、上下文管理都沿用原有逻辑，MCP 工具和本地工具走同一条路径。
+接入 agent 的改动很小：[main.go](../../main.go) 在 `agent.Run` 之前连接并追加工具定义；[dispatch.go](../../internal/agent/dispatch.go) 的 `runTool` 在 `default` 分支里先查 `mcpConn.tools`，命中就转发。并行、重试、熔断、上下文管理都沿用原有逻辑，MCP 工具和本地工具走同一条路径。
 
 ## 3. 动手
 
@@ -136,7 +136,7 @@ Termination: no_tool_calls
 
 ## 4. 昨日回顾：本项目“程序决定能不能记”的三道检查
 
-`remember_memory` 被调用时，[memory.go](../../memory.go) 的 `remember` 依次检查：
+`remember_memory` 被调用时，[memory.go](../../internal/memory/memory.go) 的 `remember` 依次检查：
 
 1. **出处**：引文必须逐字出自本次会话的用户消息（不含摘要、模型回答、工具结果）；
 2. **内容**：`rejectReason` 检查长度（≤500 字）和疑似密钥；

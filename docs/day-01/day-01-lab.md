@@ -27,7 +27,7 @@
 
 ## 3. 关键代码
 
-参数解析（[tools.go](../../tools.go)）：
+参数解析（[tools.go](../../internal/tools/tools.go)）：
 
 ```go
 var args struct {
@@ -36,7 +36,7 @@ var args struct {
 err := json.Unmarshal([]byte(call.Function.Arguments), &args)
 ```
 
-历史的两处追加（[react.go](../../react.go)，Day 3 后经上下文管理器写入）：
+历史的两处追加（[react.go](../../internal/agent/react.go)，Day 3 后经上下文管理器写入）：
 
 ```go
 conversation.RecordReply(response)  // 模型要求做什么（原样保存assistant消息）
@@ -49,13 +49,13 @@ conversation.Append(Message{Role: "tool", ToolCallID: observation.ID, Content: s
 
 | 位置 | 带着什么问题读 |
 | --- | --- |
-| [react.go](../../react.go) 的 `runAgent` | 哪一行请求模型？哪两处更新历史？何时结束？ |
-| [tools.go](../../tools.go) 的 `toolDefinitions`、`runTool` | 定义和函数怎样对应？参数在哪里解析和校验？ |
-| react.go 的 `executeBatch` | 并发名额怎么控制？结果为什么不会串到别的调用上？ |
-| [llm.go](../../llm.go) 的 `callModel` | messages 和 tools 怎么发送？响应从哪里读出？ |
+| [react.go](../../internal/agent/react.go) 的 `agent.Run` | 哪一行请求模型？哪两处更新历史？何时结束？ |
+| [dispatch.go](../../internal/agent/dispatch.go) 的 `llm.Tools`、`runTool` | 定义和函数怎样对应？参数在哪里解析和校验？ |
+| react.go 的 `agent.ExecuteBatch` | 并发名额怎么控制？结果为什么不会串到别的调用上？ |
+| [llm.go](../../internal/llm/llm.go) 的 `callModel` | messages 和 tools 怎么发送？响应从哪里读出？ |
 | [main.go](../../main.go) | 问题、配置和运行参数如何进入循环？ |
 
-`executeBatch` 的结构：goroutine 发起执行，带缓冲 channel 控制名额，每项写入自己的 `results[i]`，WaitGroup 等整批结束后再由主循环更新历史。
+`agent.ExecuteBatch` 的结构：goroutine 发起执行，带缓冲 channel 控制名额，每项写入自己的 `results[i]`，WaitGroup 等整批结束后再由主循环更新历史。
 
 ## 5. 动手
 
@@ -71,4 +71,4 @@ go run . -parallel 1 -question '请用 calculator 分别计算 1024*7 和 243*9�
 - 第二题：观察历史怎样增长，模型在拿到查询结果之后才使用数量 4 继续计算。
 - 第三题：并发为 1 时两个调用不再重叠，但模型轮数不变。
 
-也可以在观测台（`go -C observer run .`）中提问，在"观测"标签里查看每次请求的完整 messages。
+也可以在观测台（`go run . observe`）中提问，在"观测"标签里查看每次请求的完整 messages。

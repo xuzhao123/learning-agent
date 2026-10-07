@@ -28,11 +28,11 @@
 | 文件 | 只抓住这一件事 |
 | --- | --- |
 | [main.go](../../main.go) | `-rag` 注册工具；`-search-docs` 只检索并输出 JSON（建索引日志写 stderr） |
-| [retrieval.go](../../retrieval.go) | 工具 Schema、建索引、点积排序、阈值过滤 |
-| [embedding.go](../../embedding.go) | 本地推理或方舟 API，校验维度并归一化 |
-| [tools.go](../../tools.go) | 解析 query 和 k，调用 `searchDocs` |
-| [react.go](../../react.go) | RAG 系统提示：何时检索、如何引用、资料不足时如何回答 |
-| [rag_lab.go](../../rag_lab.go) | 10 题对照实验；单题失败记录后继续 |
+| [retrieval.go](../../internal/retrieval/retrieval.go) | 工具 Schema、建索引、点积排序、阈值过滤 |
+| [embedding.go](../../internal/retrieval/embedding.go) | 本地推理或方舟 API，校验维度并归一化 |
+| [tools.go](../../internal/tools/tools.go) | 解析 query 和 k，调用 `retrieval.Search` |
+| [react.go](../../internal/agent/react.go) | RAG 系统提示：何时检索、如何引用、资料不足时如何回答 |
+| [rag_lab.go](../../internal/labs/rag_lab.go) | 10 题对照实验；单题失败记录后继续 |
 
 检索结果仍由这一行写回历史，RAG 没有新增循环：
 
@@ -42,7 +42,7 @@ conversation.Append(Message{Role: "tool", ToolCallID: observation.ID, Content: s
 
 ## 3. 动手
 
-1. 网页 `go -C observer run .`：新对话勾选"知识库 RAG"，选择向量模型，问"工具失败总共尝试几次，等待多久？"
+1. 网页 `go run . observe`：新对话勾选"知识库 RAG"，选择向量模型，问"工具失败总共尝试几次，等待多久？"
 2. 展开 search_docs，比较 query、候选编号、分数与正文；低于阈值的候选没有正文。
 3. 切到"观测"，在下一次请求的 messages 里找到 `role=tool` 的片段。
 4. 点击回答中的引用核对原文。蓝色引用是本题实际取回且过阈值的片段；红色删除线表示没有取回或低于阈值，不能作为证据。

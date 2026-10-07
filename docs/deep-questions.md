@@ -40,7 +40,7 @@
   2. **重搜没有上限**：模型每次换个说法改写查询，参数都不同，熔断器拦不住（和 Q1 是同一个漏洞）。
   3. **库外问题的处理有歧义**：库外问题该用通用知识回答，还是只说资料不足，prompt 没说清楚。
 
-**相关代码**：`retrieval.go` 中 `searchDocs` 的低分分支，以及 `react.go` 中的 `systemPrompt`。已列入 PROJECT.md「已知问题」。
+**相关代码**：`retrieval.go` 中 `retrieval.Search` 的低分分支，以及 `react.go` 中的 `agent.SystemPrompt`。已列入 PROJECT.md「已知问题」。
 
 ---
 
@@ -48,7 +48,7 @@
 
 *2026-10-05 · Day 2 循环护栏 / 并行执行*
 
-**问题**：`executeBatch` 里被取消的 observation，为什么会从 summary 里消失？（提示：Attempts 和拼装条件的关系）
+**问题**：`agent.ExecuteBatch` 里被取消的 observation，为什么会从 summary 里消失？（提示：Attempts 和拼装条件的关系）
 
 **值得琢磨的地方**：一个看起来无害的过滤条件，悄悄把"请求了但没执行"和"根本没请求"混为一谈。
 
@@ -59,7 +59,7 @@
 - 除了取消，任何调用都至少尝试 1 次。所以这个条件实际过滤掉的**只有被取消的调用**。
 - 第三种情况：执行到一半被取消。这时结果其实是**未知**的，副作用可能已经发生，但现在会被写成"失败：context canceled"，读的人会误以为可以放心重试。
 
-**相关代码**：`react.go` 中 `executeBatch`、`runWithRetry`，以及 `runAgent` 里拼装 summary 的部分。已列入 PROJECT.md「已知问题」。
+**相关代码**：`react.go` 中 `agent.ExecuteBatch`、`runWithRetry`，以及 `agent.Run` 里拼装 summary 的部分。已列入 PROJECT.md「已知问题」。
 
 ---
 
@@ -95,7 +95,7 @@
 
 **后续**：2026-10-06 已按折中方案实现：前缀匹配换成 `remember_memory(quote, kind)` 工具，`remember` 校验引文逐字出自本次会话的用户消息，再走 `rejectReason`，每轮最多 3 条，本轮结束时由 `commit` 连同来源保存；用户说了“记住”但模型没登记时只打印 `Memory hint`。漏记、误记的比例待真实对话观察。
 
-**相关代码**：[memory.go](../memory.go) 的 `remember`、`rejectReason`、`commit`。
+**相关代码**：[memory.go](../internal/memory/memory.go) 的 `remember`、`rejectReason`、`commit`。
 
 ---
 
@@ -118,7 +118,7 @@
   - **淘汰前提醒**：要删用户亲口要求记住的条目时，在观测台提示或让用户确认，不要悄悄删掉。
 - 还要明确"访问"指什么：被检索命中、调入 system、还是在回答中被引用？定义不同，"冷"记忆的含义也不同。
 
-**相关代码**：[memory.go](../memory.go) 的 `retention` 和保存时的容量淘汰循环。
+**相关代码**：[memory.go](../internal/memory/memory.go) 的 `retention` 和保存时的容量淘汰循环。
 
 ---
 
@@ -142,7 +142,7 @@
   4. **评测集**：把这类场景放进固定测试，不靠一次实验的印象下结论。
 - 只改 prompt 不够：效果没法保证，而且换个模型或改一处措辞就可能失效。
 
-**相关代码**：[memory.go](../memory.go) 中 `search_memory` 的工具描述，以及 `recall` 写入 system 的部分。
+**相关代码**：[memory.go](../internal/memory/memory.go) 中 `search_memory` 的工具描述，以及 `recall` 写入 system 的部分。
 
 ---
 
@@ -164,7 +164,7 @@
   - 引入现成的规则库（gitleaks / detect-secrets 的规则），不要自己维护一份。
 - 如果选择接受，理由要写清楚：这里只是第一道防线，记忆文件以 0600 权限存在本地，不会外发；漏报的后果是本地多存了一条，而误报会让用户明确要求记住的事被拒。同时要把这个漏洞写进「已知问题」，不能当作已经解决。
 
-**相关代码**：[memory.go](../memory.go) 的 `secretPattern`、`rejectReason`、`redact`，以及失败记录"先脱敏再截断"的那一行。
+**相关代码**：[memory.go](../internal/memory/memory.go) 的 `secretPattern`、`rejectReason`、`redact`，以及失败记录"先脱敏再截断"的那一行。
 
 ---
 
@@ -180,8 +180,8 @@
 - 不依赖 `bin/`。它只是实验时编译好的程序，写进了预设；二进制只能在编译它的平台上运行，换平台执行就是 `exec format error`。这时进程还没启动，跟 MCP 协议无关。改用 `go run . -mcp-serve`，在哪台机器运行就编译成哪台机器的程序。
 - server 必须是独立的子进程：stdio 传输就是父进程写子进程的 stdin、读它的 stdout。
 - 协议三步：discover / initialize（版本与 capabilities）→ tools/list → tools/call。前两步在启动时各做一次，第三步在每次模型调用工具时做。
-- 模型不认识 MCP：client 把 MCP tool 翻译成 function 定义（`mcp_` 前缀，inputSchema 原样作为 parameters），并记下名字映射；模型调用后，由 runTool 的 default 分支转发 tools/call。
+- 模型不认识 MCP：client 把 MCP tool 翻译成 function 定义（`mcp_` 前缀，inputSchema 原样作为 parameters），并记下名字映射；模型调用后，由 runTool 找到对应连接转发 tools/call。
 - server 侧 stdout 只用来传协议消息，日志写 stderr；参数校验分三层：schema、handler、calculate。
-- 观测台的 MCP 中心只保存命令并拼接参数，“测试连接”走的是同一个 `connectMCP`。
+- 观测台的 MCP 中心只保存命令并拼接参数，“测试连接”走的是同一个 `mcp.Connect`。
 
-**相关代码**：[mcp.go](../mcp.go) 的 `connectMCP`、`definitions`、`call`、`serveMCP`；[tools.go](../tools.go) 的 default 分支；[observer/hub.go](../observer/hub.go) 的 `appendCapabilityArgs`、`testMCP`。
+**相关代码**：[mcp.go](../internal/mcp/mcp.go) 的 `Connect`、`Definitions`、`Call`、`newServer`/`Serve`；[dispatch.go](../internal/agent/dispatch.go) 的 `runTool`（遍历 `mcp.Conns`）；[hub.go](../internal/observer/hub.go) 的 `appendCapabilityArgs`、`testMCP`。

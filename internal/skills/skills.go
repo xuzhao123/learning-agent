@@ -1,4 +1,4 @@
-package main
+package skills
 
 import (
 	"errors"
@@ -9,19 +9,21 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"learning-agent/internal/llm"
 )
 
 // Bonus：知识型 skill。三级加载：索引常驻 system → load_skill 读全文 →（v1 不做）references/scripts。
 // v1 只读 Markdown，不执行 skill 自带脚本；脚本执行等沙箱。
-var skillsEnabled bool
-var skillIndex []skill // nil 表示未启用
+var Enabled bool
+var Index []Skill // nil 表示未启用
 
-type skill struct{ Name, Description, Path string }
+type Skill struct{ Name, Description, Path string }
 
-var loadSkillDefinition = map[string]any{
+var LoadDefinition = map[string]any{
 	"name":        "load_skill",
 	"description": "按名称读取一个 skill 的完整操作指南（SKILL.md 正文）。只在任务与 system 中列出的某个 skill 相关时调用；name 必须是列表里的名字。",
-	"parameters":  parameters("name"),
+	"parameters":  llm.Parameters("name"),
 }
 
 // spec：小写字母、数字、单个连字符分隔，不以连字符开头或结尾。
@@ -31,9 +33,9 @@ const maxSkillBytes = 64 << 10
 
 // 坏文件逐个报错并跳过，不让一个 skill 拖垮启动：索引是可选增强，降级比 fail-fast 合适。
 // only 非空时只启用其中的名字（观测台 Skills 中心的开关）；列了却不存在的名字同样报错跳过。
-func loadSkills(dir string, only []string) []skill {
+func Scan(dir string, only []string) []Skill {
 	paths, _ := filepath.Glob(filepath.Join(dir, "*", "SKILL.md"))
-	skills := []skill{}
+	skills := []Skill{}
 	names := []string{}
 	found := map[string]bool{}
 	for _, path := range paths {
@@ -59,7 +61,7 @@ func loadSkills(dir string, only []string) []skill {
 }
 
 // -skills-list：观测台 Skills 中心用同一套解析与校验列出 skill，不在网页端另写一份规则。
-func listSkills(dir string) map[string]any {
+func List(dir string) map[string]any {
 	paths, _ := filepath.Glob(filepath.Join(dir, "*", "SKILL.md"))
 	skills, failures := []map[string]any{}, []map[string]string{}
 	for _, path := range paths {
@@ -73,39 +75,39 @@ func listSkills(dir string) map[string]any {
 	return map[string]any{"skills": skills, "errors": failures}
 }
 
-func readSkill(path string) (skill, string, error) {
+func readSkill(path string) (Skill, string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return skill{}, "", err
+		return Skill{}, "", err
 	}
 	if info.Size() > maxSkillBytes {
-		return skill{}, "", fmt.Errorf("文件超过 %d 字节", maxSkillBytes)
+		return Skill{}, "", fmt.Errorf("文件超过 %d 字节", maxSkillBytes)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return skill{}, "", err
+		return Skill{}, "", err
 	}
 	fields, body, err := parseFrontmatter(string(data))
 	if err != nil {
-		return skill{}, "", err
+		return Skill{}, "", err
 	}
 	name, description := fields["name"], fields["description"]
 	dir := filepath.Base(filepath.Dir(path))
 	switch {
 	case name == "":
-		return skill{}, "", errors.New("缺少 name")
+		return Skill{}, "", errors.New("缺少 name")
 	case len(name) > 64 || !skillNamePattern.MatchString(name):
-		return skill{}, "", fmt.Errorf("name %q 不合规：只能用小写字母、数字和单个连字符，最长64", name)
+		return Skill{}, "", fmt.Errorf("name %q 不合规：只能用小写字母、数字和单个连字符，最长64", name)
 	case name != dir:
-		return skill{}, "", fmt.Errorf("name %q 与目录名 %q 不一致", name, dir)
+		return Skill{}, "", fmt.Errorf("name %q 与目录名 %q 不一致", name, dir)
 	case description == "":
-		return skill{}, "", errors.New("缺少 description")
+		return Skill{}, "", errors.New("缺少 description")
 	case utf8.RuneCountInString(description) > 1024:
-		return skill{}, "", errors.New("description 超过1024字符")
+		return Skill{}, "", errors.New("description 超过1024字符")
 	case utf8.RuneCountInString(fields["compatibility"]) > 500:
-		return skill{}, "", errors.New("compatibility 超过500字符")
+		return Skill{}, "", errors.New("compatibility 超过500字符")
 	}
-	return skill{Name: name, Description: description, Path: path}, body, nil
+	return Skill{Name: name, Description: description, Path: path}, body, nil
 }
 
 // 只解析顶层 key: value；缩进行属于上一个键的嵌套值（如 metadata），v1 跳过。
@@ -145,9 +147,9 @@ func parseFrontmatter(text string) (map[string]string, string, error) {
 	return fields, strings.TrimSpace(body), nil
 }
 
-func skillPrompt() string {
+func Prompt() string {
 	lines := []string{"\n可用 skills（只列名字与用途）。任务与某个 skill 相关时，先调用 load_skill 读取全文，再按其中的步骤执行；无关任务不要加载："}
-	for _, s := range skillIndex {
+	for _, s := range Index {
 		lines = append(lines, "- "+s.Name+"："+s.Description)
 	}
 	return strings.Join(lines, "\n")
@@ -155,9 +157,9 @@ func skillPrompt() string {
 
 // 只按索引里的名字找文件，模型传入的字符串不会拼进路径。
 // 名字不存在时返回结构化结果而不是 error：这是可自我纠正的业务错误，重试同样的参数没有意义。
-func loadSkill(name string) (any, error) {
+func Load(name string) (any, error) {
 	available := []string{}
-	for _, s := range skillIndex {
+	for _, s := range Index {
 		available = append(available, s.Name)
 		if s.Name != name {
 			continue

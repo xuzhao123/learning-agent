@@ -145,7 +145,7 @@ err := json.Unmarshal([]byte(call.Function.Arguments), &amp;args)
     <p class="say" data-step="0" data-until="0">模型给的参数，要经过两层解析才能变成 Go 能用的值。</p>
     <p class="say" data-step="1" data-until="1">第一层：解码整个 API 响应，拿到 tool_calls 列表。</p>
     <p class="say" data-step="2" data-until="2">这时 arguments 还只是一个字符串，Go 还不能直接用。</p>
-    <p class="say" data-step="3" data-until="3">第二层：把这个字符串再 Unmarshal 成结构体，见 tools.go 的 runTool。</p>
+    <p class="say" data-step="3" data-until="3">第二层：把这个字符串再 Unmarshal 成结构体，见 internal/agent/dispatch.go 的 runTool。</p>
     <p class="say" data-step="4">参数可能写错。错误也是一种结果，要回到模型手里。</p>
   </div>
 </section>
@@ -185,7 +185,7 @@ err := json.Unmarshal([]byte(call.Function.Arguments), &amp;args)
     </div>
   </div>
   <div class="says">
-    <p class="say" data-step="0" data-until="0">llm.go 的 callModel 每次都发送这样一个请求体。</p>
+    <p class="say" data-step="0" data-until="0">internal/llm/llm.go 的 callModel 每次都发送这样一个请求体。</p>
     <p class="say" data-step="1" data-until="1">提示词很短，因为“怎么调用工具”不靠文字约定。</p>
     <p class="say" data-step="2" data-until="2">工具清单单独放在 <b>tools</b> 字段，每次请求都带上。</p>
     <p class="say" data-step="3" data-until="3">两种残缺的情况，都走不通。</p>
@@ -394,7 +394,7 @@ for step := 1; step &lt;= maxSteps; step++ {
     <p class="say" data-step="2" data-until="2">两个 goroutine 拿到名额先执行，结果写进各自的 results[i]。</p>
     <p class="say" data-step="3" data-until="3">有名额释放，等待的 goroutine 接着执行。名额为 1 时也不保证按数组顺序。</p>
     <p class="say" data-step="4" data-until="4">WaitGroup 计数归零，说明整批结束。</p>
-    <p class="say" data-step="5">最后由主循环一次性写回历史，见 react.go 的 executeBatch。</p>
+    <p class="say" data-step="5">最后由主循环一次性写回历史，见 internal/agent/react.go 的 ExecuteBatch。</p>
   </div>
 </section>
 
@@ -442,7 +442,7 @@ for step := 1; step &lt;= maxSteps; step++ {
   </div>
   <div class="says">
     <p class="say" data-step="0" data-until="0">先自己回答，再按 → 看参考答案。</p>
-    <p class="say" data-step="1" data-until="3">对照代码：tools.go 的 runTool，react.go 的 runAgent 和 executeBatch。</p>
+    <p class="say" data-step="1" data-until="3">对照代码：internal/agent 下 dispatch.go 的 runTool，react.go 的 Run 和 ExecuteBatch。</p>
     <p class="say" data-step="4">下一课：循环失控、工具失败、原地打转时，怎样让它停下来。</p>
   </div>
 </section>

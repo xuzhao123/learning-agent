@@ -1,6 +1,6 @@
 # Skills 项目实践：给 Agent 加上知识型 skill
 
-原理见 [Skills 学习笔记](skills-notes.md)。代码在 [skills.go](../../skills.go)，第一个 skill 是 [skills/code-review/SKILL.md](../../skills/code-review/SKILL.md)。
+原理见 [Skills 学习笔记](skills-notes.md)。代码在 [skills.go](../../internal/skills/skills.go)，第一个 skill 是 [skills/code-review/SKILL.md](../../skills/code-review/SKILL.md)。
 
 ## 1. 实现概览
 
@@ -30,15 +30,15 @@
 
 ## 2. 读代码
 
-按调用顺序读 [skills.go](../../skills.go)：
+按调用顺序读 [skills.go](../../internal/skills/skills.go)：
 
 1. **`parseFrontmatter`**：先统一换行、去掉 BOM，再用 `strings.Cut` 找结尾的 `\n---\n`。逐行处理时注意报错行号要加 2（第 1 行是开头的 `---`）。
-2. **`readSkill`**：解析之后用一个 `switch` 依次检查各项约束，第一个不满足的就返回；成功时同时返回正文，供 `loadSkill` 复用。
-3. **`loadSkills`**：`filepath.Glob` 扫描，错误逐条打印，最后打印汇总。
-4. **`skillPrompt`**：生成 system 里的索引，同时写明使用规则：相关时先 `load_skill` 再照做，无关时不要加载。
-5. **`loadSkill`**：在索引里找名字；找到就重新 `readSkill` 返回正文，找不到就返回可用名字列表，让模型改正。
+2. **`readSkill`**：解析之后用一个 `switch` 依次检查各项约束，第一个不满足的就返回；成功时同时返回正文，供 `skills.Load` 复用。
+3. **`skills.Scan`**：`filepath.Glob` 扫描，错误逐条打印，最后打印汇总。
+4. **`skills.Prompt`**：生成 system 里的索引，同时写明使用规则：相关时先 `load_skill` 再照做，无关时不要加载。
+5. **`skills.Load`**：在索引里找名字；找到就重新 `readSkill` 返回正文，找不到就返回可用名字列表，让模型改正。
 
-接入点：[main.go](../../main.go) 在 `runAgent` 之前调用 `loadSkills` 并注册工具；[react.go](../../react.go) 的 `systemPrompt` 末尾追加 `skillPrompt()`；[tools.go](../../tools.go) 的 `runTool` 增加 `load_skill` 分支。
+接入点：[main.go](../../main.go) 在 `agent.Run` 之前调用 `skills.Scan` 并注册工具；[react.go](../../internal/agent/react.go) 的 `agent.SystemPrompt` 末尾追加 `skills.Prompt()`；[dispatch.go](../../internal/agent/dispatch.go) 的 `runTool` 增加 `load_skill` 分支。
 
 ## 3. 第一个 skill：code-review
 

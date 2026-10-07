@@ -1,4 +1,4 @@
-package main
+package observer
 
 import (
 	"context"
@@ -130,7 +130,7 @@ func (s *server) enabledHub(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"skills": skills, "mcp": servers, "mcp_servers": config.MCPServers, "hosted": s.mcp.status()})
+	json.NewEncoder(w).Encode(map[string]any{"skills": skills, "mcp": servers, "mcp_servers": config.MCPServers, "hosted": "与观测台同一进程，随观测台启动和退出"})
 }
 
 // 列表直接来自 agent 的 -skills-list：和运行时用的是同一套 frontmatter 解析与校验。
@@ -144,8 +144,7 @@ func (s *server) listHub(w http.ResponseWriter, req *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "run", ".", "-skills-list")
-	cmd.Dir = s.agentDir
+	cmd := s.agentCommand(ctx, "-skills-list")
 	output, err := cmd.Output()
 	var listed struct {
 		Skills []map[string]any `json:"skills"`
@@ -196,8 +195,7 @@ func (s *server) createSkill(w http.ResponseWriter, req *http.Request) {
 	content := "---\nname: " + input.Name + "\ndescription: " + input.Description + "\n---\n\n" + input.Body + "\n"
 	err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644)
 	if err == nil {
-		cmd := exec.CommandContext(req.Context(), "go", "run", ".", "-skills-list")
-		cmd.Dir = s.agentDir
+		cmd := s.agentCommand(req.Context(), "-skills-list")
 		var output []byte
 		var listed struct{ Errors []struct{ Dir, Error string } }
 		if output, err = cmd.Output(); err == nil {
@@ -320,8 +318,7 @@ func (s *server) testMCP(w http.ResponseWriter, req *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "run", ".", "-mcp-server", config.MCPServers[i].Command, "-mcp-list")
-	cmd.Dir = s.agentDir
+	cmd := s.agentCommand(ctx, "-mcp-server", config.MCPServers[i].Command, "-mcp-list")
 	output, err := cmd.CombinedOutput()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": err == nil, "output": string(output)})

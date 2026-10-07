@@ -1,8 +1,8 @@
 # 观测台：把 agent 的每次模型调用画出来
 
-观测台是独立程序，放在 `observer/`，有自己的 `go.mod`。agent 只负责完成任务，观测台负责启动 agent、记录过程并在网页上展示。页面参考了 DeepSeek Harness 官方的 Trajectory 视图，以及社区插件 dsh-maze / trace compare 的展示方式，提供三个视图：轨迹、迷宫、对比。
+观测台的代码在 [internal/observer](../../internal/observer/)，与 agent 是同一个程序：`go run . observe` 启动它。agent 只负责完成任务，观测台负责启动 agent、记录过程并在网页上展示；每次对话都是一个独立的 agent 子进程。页面参考了 DeepSeek Harness 官方的 Trajectory 视图，以及社区插件 dsh-maze / trace compare 的展示方式，提供三个视图：轨迹、迷宫、对比。
 
-顶栏显示当前对话 ID，点击可复制；它与 `runs/<ID>.jsonl` 的存档编号一致，续聊不会改变 ID。选择或新建一条实际对话后，URL 自动更新为 `/?run=<对话ID>`，复制链接、刷新页面都能打开同一条记录。切换对话支持浏览器前进与后退；点击“新对话”清除 URL 中的 `run` 参数，提交首个问题后再写入新 ID。
+顶栏显示当前对话 ID，点击可复制；它与 `.data/runs/<ID>.jsonl` 的存档编号一致，续聊不会改变 ID。选择或新建一条实际对话后，URL 自动更新为 `/?run=<对话ID>`，复制链接、刷新页面都能打开同一条记录。切换对话支持浏览器前进与后退；点击“新对话”清除 URL 中的 `run` 参数，提交首个问题后再写入新 ID。
 
 ## Turn、Step 与原始输入输出
 
@@ -19,7 +19,7 @@ Turn表示一次用户回合，Step表示其中一次任务模型调用及工具
 
 ## Day 4：看检索片段怎样成为证据
 
-只需在项目根目录启动`go -C observer run .`。新对话勾选“知识库 RAG”，选择线上方舟或本地MiniLM，观测台以`-rag -embedding ark/local`启动Agent；检索在Agent进程内初始化和调用，没有8092端口。续聊从存档恢复RAG模式与向量模型；旧存档优先读取实际工具结果中的backend，无法确定时使用默认ark。
+只需在项目根目录启动`go run . observe`。新对话勾选“知识库 RAG”，选择线上方舟或本地MiniLM，观测台以`-rag -embedding ark/local`启动Agent；检索在Agent进程内初始化和调用，没有8092端口。续聊从存档恢复RAG模式与向量模型；旧存档优先读取实际工具结果中的backend，无法确定时使用默认ark。
 
 - `search_docs` 工具详情把返回值展开为候选卡片：编号、标题、score、阈值、是否接受、正文和来源。未过阈值的候选仅保留元信息，正文不会进入模型上下文。JSON原文仍可展开。score是相似度，卡片“通过阈值”不等于事实已验证。
 - 答案中的 `[D05]` 等编号，只有在本题此前实际检索到且通过阈值时才变为可点击引用。点击后进入对应工具的观测详情；编号拼错不会被当作有效引用。
@@ -47,14 +47,18 @@ MCP 中心的预设使用 `go run` 从源码启动，命令在项目根目录执
 ### 内置远程 MCP server
 
 ```
-agent（client）──POST http://127.0.0.1:8090/mcp──▶ 观测台反向代理 ──▶ 127.0.0.1:8091/mcp
-                                                              agent -mcp-serve -mcp-http（常驻子进程）
+agent（client）──POST http://127.0.0.1:8090/mcp──▶ 观测台进程：mcp.Handler()（Streamable HTTP）
+                                                    └─ 与 -mcp-serve 同一个 calculator server 定义
 ```
 
-- 工具实现仍在 agent：`-mcp-serve` 加 `-mcp-http` 后，同一个 server 对象、同一套三层校验，只把传输从 stdio 换成 Streamable HTTP。观测台只做托管和转发，不引入 MCP SDK。
-- 先 `go build` 到临时目录再运行，而不是 `go run`：结束 `go run` 不会结束它编译出的子进程，Ctrl+C 后会留下进程占着端口。
-- 反向代理保留原请求的 Host，`FlushInterval: -1` 让 SSE 分段立即转发；`/mcp` 同样经过本机 Host + 同源 Origin 检查，SDK 自己还有一层 DNS 重绑定防护。
-- 远程与 stdio 的协议消息完全相同（discover → tools/list → tools/call），区别是：远程 server 不随 agent 启动和退出，能被多个 agent 同时使用；连接时没有子进程，也就没有 stderr 日志转发，server 日志打印在观测台终端。
+- server 的定义只有一份（[mcp.go](../../internal/mcp/mcp.go) 的 `newServer`），换的只是传输：`-mcp-serve` 走 stdio，加 `-mcp-http` 走独立端口，观测台则把 `mcp.Handler()` 直接挂在自己的 `/mcp` 上。
+- 因为在同一进程里，不需要另开端口、反向代理或临时编译；随观测台启动和退出，日志以 `[mcp]` 开头打印在观测台终端。
+- `/mcp` 同样经过本机 Host + 同源 Origin 检查，SDK 自己还有一层 DNS 重绑定防护。
+- 远程与 stdio 的协议消息完全相同（discover → tools/list → tools/call），区别是：远程 server 不随 agent 启动和退出，能被多个 agent 同时使用；连接时没有子进程，也就没有 stderr 日志转发。
+
+### 为什么观测台与 agent 同一个程序，却仍为每次对话启动子进程
+
+agent 的功能开关是包级变量（`retrieval.Enabled`、`memory.Active`、`llm.Tools` 等），一个进程只适合跑一个任务。观测台若在自己进程里并发跑多条对话，这些状态会互相覆盖；一次 panic 也会拖垮页面。所以观测台把“当前程序 + 参数”作为子进程启动：每次运行状态独立、终端输出天然分开，模型请求仍通过 `LLM_API_URL` 指向本机代理被记录，agent 代码里没有观测专用埋点。默认直接执行当前程序本身（`os.Executable()`），`-dev` 时改用 `go run .` 读取最新源码。
 
 能力卡片只从 agent 的终端行还原（`Skills: loaded=…`、`Skill error`、`MCP connect/initialize/tools/list/register/skip/error`），和对话流一样不加观测专用埋点。
 
@@ -98,8 +102,8 @@ agent 每次请求模型都会把完整消息历史发出去：
 - 运行 ID 放在代理路径里，几次运行同时进行也不会混在一起。
 - agent 读取配置时环境变量优先，新对话的密钥和模型来自 agent 自己的配置；续聊沿用存档中的模型与推理强度，密钥仍从本地读取。观测台把 `LLM_API_URL` 指向该记录的代理地址。
 - 观测台转发 `Authorization`，但不记录。真实上游地址从环境变量或 agent 的 `.env` 里读取。
-- 事件类型：`start`（首个问题）、`continue`（续聊问题）、`request`、`response`、`stdout`、`stderr`、`exit`。事件同时写入 `observer/runs/<运行ID>.jsonl`，该目录已加入 `.gitignore`。
-- 观测台启动时会读回 `runs/*.jsonl`，重启后仍可查看、回放和对比历史运行。早期存档没有 `start` 事件，问题取自第一次请求里的 user 消息。
+- 事件类型：`start`（首个问题）、`continue`（续聊问题）、`request`、`response`、`stdout`、`stderr`、`exit`。事件同时写入 `.data/runs/<运行ID>.jsonl`，该目录已加入 `.gitignore`。
+- 观测台启动时会读回 `.data/runs/*.jsonl`，重启后仍可查看、回放和对比历史运行。早期存档没有 `start` 事件，问题取自第一次请求里的 user 消息。
 - SSE 先回放已有事件，再推送新事件；运行结束后发送 `end` 并关闭连接。
 
 agent 通过 `llm.go` 接受本机 `http://127.0.0.1` 观测代理；通过通用的 `-history-stdin` 参数接收续聊上下文，不需要知道观测台存档的位置。
@@ -195,11 +199,11 @@ Enter 发送，Shift+Enter 换行；输入法选词时的 Enter 不会发送。
 在项目根目录执行：
 
 ```sh
-go -C observer run .
+go run . observe
 # 打开 http://127.0.0.1:8090
 ```
 
-参数：`-addr` 指定页面地址，默认 `127.0.0.1:8090`；`-agent` 相对于 `observer/` 指定项目目录，默认 `..`。按上述命令启动时无需额外指定目录。
+参数：`-addr` 指定页面地址，默认 `127.0.0.1:8090`；`-dev` 每次对话用 `go run .` 启动 agent（改了 agent 代码不必重启观测台）。必须在项目根目录运行：agent 读取的 `.env`、`skills/`、`docs/`、`.data/` 都相对这里。
 
 要继续对话：
 
@@ -222,7 +226,7 @@ Day 3实验包含两个独立场景；首次续聊接在33轮学习对话之后�
 4. 点击“终端输出”查看压缩前后大小、`Recall` 账号与学习范围、`Large tool` 截断情况和最终统计。运行中也能查看。
 5. 切换“迷宫”看输入量增长和压缩后的下降。实验默认输入容量7168 token，页面从实际输出读取。
 
-原来的终端命令直接请求方舟，没有经过代理，因此不会自动出现，也无法补录已结束的对话。通过页面重新运行才能完整观测；运行结果仍存到已有的 `observer/runs/`，每日学习目录不新增日志。
+原来的终端命令直接请求方舟，没有经过代理，因此不会自动出现，也无法补录已结束的对话。通过页面重新运行才能完整观测；运行结果仍存到已有的 `.data/runs/`，每日学习目录不新增日志。
 
 ## 5. 兼容边界
 

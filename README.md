@@ -72,21 +72,29 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 
 ## 源码阅读
 
-| 文件 | 阅读重点 |
+整个项目只有一个 Go 模块、一个入口：`go run .` 是 agent 本身，`go run . observe` 启动观测台。代码按功能分在 `internal/` 下（`internal` 里的包只能被本项目引用），依赖方向：
+
+```
+llm ← tools、retrieval、skills
+      tools ← mcp；retrieval ← memory
+      全部功能包 ← agent ← labs
+observer 不引用任何内部包：它只通过命令行启动 agent；main.go 把 mcp.Handler() 交给它挂在 /mcp
+```
+
+| 包 / 文件 | 阅读重点 |
 | --- | --- |
-| [main.go](main.go) | 输入问题、读取方舟配置、启动任务 |
-| [llm.go](llm.go) | 发送消息历史与 tools，接收真实方舟模型消息 |
-| [react.go](react.go) | 原生调用结构、并行调度、tool 结果回流、终止 |
-| [tools.go](tools.go) | 工具 Schema、实际执行、实际笔记检索 |
-| [context_manager.go](context_manager.go) | Transcript/View、usage用量、集中清理与摘要 |
-| [context_lab.go](context_lab.go) | 真实33轮召回、约束与大工具输出观察 |
-| [retrieval.go](retrieval.go) | search_docs定义、进程内索引、点积排序、低分过滤与文件缓存 |
-| [rag_lab.go](rag_lab.go) | 10题真实检索与无检索/有检索对比；不写死模型回答 |
-| [embedding.go](embedding.go) | 本地纯Go推理 / 线上方舟embedding |
-| [memory.go](memory.go) | 长期记忆依据层：原文与来源上下文、文件锁事务、规则写入、过期与淘汰、删除 |
-| [mcp.go](mcp.go) | MCP client（SDK 连接、工具注册与转发）、手写 JSON-RPC、calculator MCP server |
-| [skills.go](skills.go) | frontmatter 解析、启动扫描与校验、skill 索引、load_skill |
-| [memory_retrieval.go](memory_retrieval.go) | Contextual Retrieval：切块、背景生成与缓存、向量与BM25召回、RRF、LLM重排、预算与降级 |
+| [main.go](main.go) | 唯一入口：解析参数、按开关组装工具、启动任务；`observe` 子命令转到观测台 |
+| [internal/llm](internal/llm/) | [llm.go](internal/llm/llm.go) 发送消息历史与 tools、请求计数与用量；[protocol.go](internal/llm/protocol.go) Message/ToolCall/Observation、本次运行的工具定义 `llm.Tools`、token 粗估、消息组校验、`.env` 配置 |
+| [internal/agent](internal/agent/) | [react.go](internal/agent/react.go) ReAct 循环、并行调度、重试、终止与 system prompt；[dispatch.go](internal/agent/dispatch.go) 按工具名分发（检索、记忆、skill、MCP、内置）；[context_manager.go](internal/agent/context_manager.go) Transcript/View、usage、集中清理与摘要 |
+| [internal/tools](internal/tools/tools.go) | 内置工具 calculator、get_current_datetime、search_notes 与 Day 2/3 实验工具 |
+| [internal/retrieval](internal/retrieval/) | [retrieval.go](internal/retrieval/retrieval.go) search_docs、进程内索引、点积排序与低分过滤；[embedding.go](internal/retrieval/embedding.go) 本地纯Go推理 / 线上方舟embedding |
+| [internal/memory](internal/memory/) | [memory.go](internal/memory/memory.go) 依据层：原文与来源、文件锁事务、规则写入、过期淘汰、删除；[memory_retrieval.go](internal/memory/memory_retrieval.go) Contextual Retrieval：切块、背景、两路召回、RRF、重排 |
+| [internal/mcp](internal/mcp/mcp.go) | MCP client（stdio 与 Streamable HTTP）、手写 JSON-RPC、calculator MCP server（stdio / 独立端口 / 观测台 `/mcp`） |
+| [internal/skills](internal/skills/skills.go) | frontmatter 解析、启动扫描与校验、skill 索引、load_skill |
+| [internal/labs](internal/labs/) | [context_lab.go](internal/labs/context_lab.go) Day 3 真实33轮召回与大工具输出；[rag_lab.go](internal/labs/rag_lab.go) Day 4 10题有无检索对比 |
+| [internal/observer](internal/observer/) | [server.go](internal/observer/server.go) 代理、存档、SSE、启动 agent 子进程；[hub.go](internal/observer/hub.go) Skills/MCP 中心；[index.html](internal/observer/index.html) 页面 |
+
+各功能的启用状态是包级变量（如 `retrieval.Enabled`、`memory.Active`、`skills.Index`、`mcp.Conns`），由 `main.go` 按命令行参数设置；一个 agent 进程只跑一个任务，所以这样足够，观测台的每次对话也都是独立子进程。
 
 默认三个工具是 calculator、get_current_datetime、search_notes；显式 `-lab-tools` 增加 always_fail 和 check_task_status 两个实验工具。学习笔记检索读取 `docs/day-01/day-01-notes.md`，工具选择和参数由模型生成。
 
@@ -102,20 +110,22 @@ go run . -context-lab -max-steps 60 -context-window 8192 -max-output-tokens 2048
 
 ## 观测台
 
-`observer/` 是独立程序（有自己的 go.mod）。网页是类似 Codex 客户端的对话界面：左侧对话列表，主区显示用户消息、思考、工具调用和回答，底部输入框发送。顶栏切到“观测”有三个视图：轨迹（用户Turn → 模型Step的事件账本 + 瀑布时间轴）、迷宫（主路径、绕路、回退 + token与上下文压力数据轨）、对比（2–5次运行按请求序号对齐），并支持回放：
+观测台和 agent 是同一个程序：`go run . observe` 启动观测台，内置远程 MCP 也在这个进程里；每次对话由观测台再启动一个 agent 子进程。网页是类似 Codex 客户端的对话界面：左侧对话列表，主区显示用户消息、思考、工具调用和回答，底部输入框发送。顶栏切到“观测”有三个视图：轨迹（用户Turn → 模型Step的事件账本 + 瀑布时间轴）、迷宫（主路径、绕路、回退 + token与上下文压力数据轨）、对比（2–5次运行按请求序号对齐），并支持回放：
 
 ```sh
-cd observer && go run .
-# 打开 http://127.0.0.1:8090
+go run . observe          # 在项目根目录运行；打开 http://127.0.0.1:8090
+go run . observe -dev     # 每次对话用 go run . 启动 agent，改完 agent 代码不必重启观测台
 ```
+
+默认情况下，观测台启动 agent 时直接执行当前程序本身：不用编译、与观测台代码版本一致、在哪台机器上运行就是哪台机器的格式；代价是改了 agent 代码要重启观测台。`-dev` 反过来，每次对话多一次编译。
 
 回答结束后，在底部输入下一句话并按 Enter，会延续同一条对话；也可以先选择左侧的历史记录再续聊。点击“新对话”开始独立任务。运行中禁止重复发送，观测台重启后仍可从存档恢复。每个新问题开启下一个Turn并重新获得默认10次模型请求预算；Turn内Step从1编号，全局请求#N保持连续。摘要单独展示，不占任务Step，但仍计入请求预算。每个Step可查看全部messages和原始输入/输出。
 
 点击左侧“Day 3 上下文实验”并确认，即可在对话流中看到33轮对话、压缩分隔线和大工具调用。它等价于 `go run . -context-lab -max-steps 60 -reasoning-effort minimal`，由观测台启动并接入代理，无需另开终端执行实验命令。切到“观测”，点击“终端输出”查看 `Context`、`Compact`、`Recall` 和 `Lab complete`；“迷宫”查看上下文压力与压缩位置。更新观测台源码后，需要重启观测台并刷新网页。
 
-单独在项目根目录运行实验会直连方舟，不会自动出现在观测台；已经绕过代理的对话无法事后补录。通过观测台启动时，沿用观测台的 `observer/runs/` 存档；实验程序本身不另写日志。
+单独在项目根目录运行实验会直连方舟，不会自动出现在观测台；已经绕过代理的对话无法事后补录。通过观测台启动时，沿用观测台的 `.data/runs/` 存档；实验程序本身不另写日志。
 
-左侧“Skills 中心”和“MCP 中心”类似 Codex 客户端的管理页。Skills 中心列出 `skills/` 下的 skill（数据来自 agent 的 `-skills-list`，与运行时同一套校验），可以查看正文、启停、删除，或填表新建一份 SKILL.md（写入后立即校验，不合规自动撤销）。MCP 中心添加 stdio server（名字 + 一行命令，相对项目根目录执行），可以启停、删除，“测试连接”调用 agent 的 `-mcp-list` 显示协商版本和工具列表。命令栏填 `http(s)://…` 地址即为远程 server。观测台自带一个远程 MCP server：启动时把 agent 编译到临时目录，以 `-mcp-serve -mcp-http 127.0.0.1:8091` 常驻运行，`http://127.0.0.1:8090/mcp` 转发过去（工具是 calculator）；在 MCP 中心用“快速填入 → observer”添加即可在对话中使用。Ctrl+C 退出观测台时它一起结束；`-mcp-addr ''` 可关闭。开关保存在 `.data/hub.json`。新对话勾选输入框里的 Skills / MCP 后，观测台把当时打开的 skill 与 server 作为快照写进 start 事件，转成 `-skills -skill …` 和多个 `-mcp-server`；续聊沿用快照，之后在中心里的改动只影响新对话。对话流在用户消息下方显示“✦”能力卡片（启用了哪些、注册了几个工具、哪些被跳过），`load_skill` 与 `mcp_*` 工具带 SKILL / MCP 标记。中心接口只接受本机 Host 且同源的请求，防止其他网页借浏览器添加命令。
+左侧“Skills 中心”和“MCP 中心”类似 Codex 客户端的管理页。Skills 中心列出 `skills/` 下的 skill（数据来自 agent 的 `-skills-list`，与运行时同一套校验），可以查看正文、启停、删除，或填表新建一份 SKILL.md（写入后立即校验，不合规自动撤销）。MCP 中心添加 stdio server（名字 + 一行命令，相对项目根目录执行），可以启停、删除，“测试连接”调用 agent 的 `-mcp-list` 显示协商版本和工具列表。命令栏填 `http(s)://…` 地址即为远程 server。观测台自带一个远程 MCP server：`http://127.0.0.1:8090/mcp`，由观测台进程直接处理（工具是 calculator，与 `-mcp-serve` 同一个 server 定义），在 MCP 中心用“快速填入 → observer”添加即可在对话中使用。中心接口只接受本机 Host 且同源的请求，防止其他网页借浏览器添加命令。
 
 观测台把 agent 的 `LLM_API_URL` 指向本机代理，从模型协议本身还原过程，agent 代码不含观测台专用埋点。摘要作为独立模型调用展示；视图重建在上下文压力轨中标记，工具结果按调用ID跨请求关联。详见 [观测台笔记](docs/observer/observer-notes.md)。
 
@@ -139,7 +149,7 @@ go run . -rag-lab -max-steps 6 -reasoning-effort minimal
 网页使用时，只需一条命令：
 
 ```sh
-go -C observer run .
+go run . observe
 # 打开 http://127.0.0.1:8090
 ```
 

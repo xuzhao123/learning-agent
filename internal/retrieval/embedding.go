@@ -1,4 +1,4 @@
-package main
+package retrieval
 
 import (
 	"bytes"
@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"learning-agent/internal/llm"
+
 	"github.com/knights-analytics/hugot"
 	"github.com/knights-analytics/hugot/pipelines"
 )
@@ -24,7 +26,7 @@ const arkURL = "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
 const documentInstruction = "Target_modality: text.\nInstruction:Compress the text into one word.\nQuery:"
 const queryInstruction = "Target_modality: text.\nInstruction:根据这个问题，找到能回答这个问题的相应文本。\nQuery:"
 
-type embedder struct {
+type Embedder struct {
 	Model, Key string
 	Dimensions int
 	Encode     func(context.Context, string, bool) ([]float32, error) // bool区分query和入库文档。
@@ -34,12 +36,12 @@ type embedder struct {
 	Limit int
 }
 
-// 同一进程只加载一次向量模型：search_docs 与长期记忆共用，进程退出时由 closeEmbedders 释放。
-var embedders = map[string]*embedder{}
+// 同一进程只加载一次向量模型：search_docs 与长期记忆共用，进程退出时由 CloseEmbedders 释放。
+var embedders = map[string]*Embedder{}
 var embedderErrors = map[string]error{}
 var embeddersMu sync.Mutex
 
-func sharedEmbedder(provider string) (*embedder, error) {
+func SharedEmbedder(provider string) (*Embedder, error) {
 	embeddersMu.Lock()
 	defer embeddersMu.Unlock()
 	if e := embedders[provider]; e != nil {
@@ -61,7 +63,7 @@ func sharedEmbedder(provider string) (*embedder, error) {
 	return e, nil
 }
 
-func closeEmbedders() {
+func CloseEmbedders() {
 	embeddersMu.Lock()
 	defer embeddersMu.Unlock()
 	for name, e := range embedders {
@@ -70,15 +72,15 @@ func closeEmbedders() {
 	}
 }
 
-func newEmbedder(provider, cache string) (*embedder, error) {
+func newEmbedder(provider, cache string) (*Embedder, error) {
 	switch provider {
 	case "ark":
-		config, err := loadConfig()
+		config, err := llm.LoadConfig()
 		if err != nil {
 			return nil, err
 		}
 		// 方舟单条输入上限远大于记忆片段；本项目未实测上限，Count 用字符数作保守估计。
-		return &embedder{Model: arkModel, Dimensions: 1024, Limit: 4096, Count: utf8.RuneCountInString,
+		return &Embedder{Model: arkModel, Dimensions: 1024, Limit: 4096, Count: utf8.RuneCountInString,
 			Key:   arkURL + arkModel + "1024/dense-only/normalized/" + documentInstruction + queryInstruction,
 			Close: func() {}, Encode: func(ctx context.Context, text string, query bool) ([]float32, error) {
 				return arkEmbedding(ctx, config.APIKey, text, query)
@@ -107,13 +109,13 @@ func newEmbedder(provider, cache string) (*embedder, error) {
 			defer mu.Unlock()
 			return len(pipeline.Model.Tokenizer.GoTokenizer.Tokenizer.EncodeWithAnnotations(text).IDs)
 		}
-		return &embedder{Model: modelName, Dimensions: 384, Key: modelName + revision + "hugot-v0.7.0/mean-normalized", Limit: tokenLimit, Count: count,
+		return &Embedder{Model: modelName, Dimensions: 384, Key: modelName + revision + "hugot-v0.7.0/mean-normalized", Limit: TokenLimit, Count: count,
 			Close: func() { mu.Lock(); defer mu.Unlock(); _ = session.Destroy() }, Encode: func(ctx context.Context, text string, _ bool) ([]float32, error) {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if n := count(text); n > tokenLimit {
-					return nil, fmt.Errorf("文本有%d个模型token，超过%d，请按语义拆分或缩短查询", n, tokenLimit)
+				if n := count(text); n > TokenLimit {
+					return nil, fmt.Errorf("文本有%d个模型token，超过%d，请按语义拆分或缩短查询", n, TokenLimit)
 				}
 				mu.Lock()
 				out, err := pipeline.RunPipeline([]string{text})

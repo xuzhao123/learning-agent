@@ -1,15 +1,15 @@
 # Day 7 项目实践：把 calculate 暴露成 MCP server，跑通自举闭环
 
-原理见 [Day 7 学习笔记](day-07-notes.md)。Day 6 的 client 见 [Day 6 项目实践](../day-06/day-06-lab.md)。代码在 [mcp.go](../../mcp.go) 的 `serveMCP`。
+原理见 [Day 7 学习笔记](day-07-notes.md)。Day 6 的 client 见 [Day 6 项目实践](../day-06/day-06-lab.md)。代码在 [mcp.go](../../internal/mcp/mcp.go) 的 `mcp.Serve`。
 
 ## 1. 实现概览
 
-server 不是一个单独的程序，而是 agent 的一种运行模式：`learning-agent -mcp-serve`。这样可以直接复用 [tools.go](../../tools.go) 里现有的 `calculate`，不需要为了跨程序共享而把它挪进单独的包。
+server 不是一个单独的程序，而是 agent 的一种运行模式：`learning-agent -mcp-serve`。这样可以直接复用 [tools.go](../../internal/tools/tools.go) 里现有的 `tools.Calculate`，不需要为了跨程序共享而把它挪进单独的包。
 
 ```text
 learning-agent（client 模式）                     learning-agent -mcp-serve（server 子进程）
   模型 → tool_calls: mcp_calculator                 stdin ─▶ mcp-go ServeStdio
-  runTool → mcpConn.call ──tools/call──stdio──▶      ① schema 校验（类型/必填/长度/多余字段）
+  runTool → conn.Call ───tools/call──stdio──▶      ① schema 校验（类型/必填/长度/多余字段）
                                                      ② handler: RequireString("expression")
                                                      ③ calculate：只解释数学 AST
   ◀── content: "2647", structured: {result: 2647} ◀── stdout；日志写 stderr
@@ -19,7 +19,7 @@ learning-agent（client 模式）                     learning-agent -mcp-serve�
 | --- | --- |
 | 工具 | `calculator`，参数 `expression`（必填字符串，最长 1024），描述与本地工具一致 |
 | 能力 | 只声明 `tools`，`listChanged: false`（工具固定不变） |
-| 校验 | `WithInputSchemaValidation()` 开启 schema 校验；`WithStrictInputSchemaDefault()` 自动加 `additionalProperties: false`；handler 显式取参；`calculate` 白名单解释 |
+| 校验 | `WithInputSchemaValidation()` 开启 schema 校验；`WithStrictInputSchemaDefault()` 自动加 `additionalProperties: false`；handler 显式取参；`tools.Calculate` 白名单解释 |
 | 结果 | `NewToolResultStructured`：`structuredContent: {"result": 值}`，同时 `content` 里放文本 |
 | 错误 | 参数和表达式错误都用 `NewToolResultError` 返回 `isError: true`；未知工具由 SDK 返回 JSON-RPC -32602 |
 | 崩溃保护 | `WithRecovery()`：handler panic 不会让 server 退出 |
@@ -29,7 +29,7 @@ learning-agent（client 模式）                     learning-agent -mcp-serve�
 
 ## 2. 读代码
 
-`serveMCP` 一共 30 多行，按顺序看：
+`mcp.Serve` 一共 30 多行，按顺序看：
 
 1. `server.NewMCPServer(名字, 版本, 选项...)`：名字和版本会出现在 discover/initialize 的 serverInfo 里；
 2. `mcp.NewTool("calculator", mcp.WithString("expression", mcp.Required(), mcp.MaxLength(1024), …))`：用 Go 代码生成 inputSchema，`tools/list` 返回的就是它；
@@ -127,9 +127,13 @@ Termination: no_tool_calls
 ## 4. 已知边界
 
 - 第 2 层取参检查在 schema 校验开启时实际不会触发，属于纵深防御，本次没有构造关闭 schema 校验的对照实验。
-- 没有频率限制和调用超时：`calculate` 本身很快，输入也有长度上限，暂不需要。规范要求的 rate limit 留到 Week 2。
-- server 以当前用户身份运行，并继承 client 的全部环境变量（见 Day 6 已知边界）。`calculate` 不读文件、不访问网络，所以眼下没有实际风险，但这不是一个好习惯。
+- 没有频率限制和调用超时：`tools.Calculate` 本身很快，输入也有长度上限，暂不需要。规范要求的 rate limit 留到 Week 2。
+- server 以当前用户身份运行，并继承 client 的全部环境变量（见 Day 6 已知边界）。`tools.Calculate` 不读文件、不访问网络，所以眼下没有实际风险，但这不是一个好习惯。
 
 ## 补充：同一个 server 换成远程传输
 
-`-mcp-serve -mcp-http 127.0.0.1:8091` 用 Streamable HTTP 提供同一个 calculator，client 侧 `-mcp-server http://127.0.0.1:8091/mcp` 即可连接（[mcp.go](../../mcp.go) 的 `isMCPURL` 分支）。HTTP 模式下 stdout 不再承载协议，但日志仍写 stderr。观测台把它作为内置远程 server 托管在 `/mcp`，见 [观测台笔记](../observer/observer-notes.md)。
+server 的定义只有一份（[mcp.go](../../internal/mcp/mcp.go) 的 `newServer`），传输有三种用法：
+
+- `-mcp-serve`：stdio，由 client 启动为子进程。
+- `-mcp-serve -mcp-http 127.0.0.1:8091`：Streamable HTTP，独立端口常驻；client 用 `-mcp-server http://127.0.0.1:8091/mcp` 连接（`mcp.IsURL` 分支）。HTTP 模式下 stdout 不再承载协议，日志仍写 stderr。
+- 观测台：`mcp.Handler()` 直接挂在观测台的 `/mcp` 上，同一进程、不另开端口，见 [观测台笔记](../observer/observer-notes.md)。

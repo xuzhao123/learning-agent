@@ -1,8 +1,9 @@
-package main
+package observer
 
 import (
 	"bufio"
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -12,12 +13,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -60,28 +59,46 @@ type server struct {
 	upstream, agentDir, addr string
 	mu                       sync.Mutex
 	runs                     []*run
+	runsDir, agentBin        string     // 存档目录 .data/runs；agentBin 为空表示 -dev（go run .）
 	hubMu                    sync.Mutex // 保护 .data/hub.json 的读改写
-	mcp                      *mcpHost
 }
 
-func main() {
-	addr := flag.String("addr", "127.0.0.1:8090", "观测页面地址")
-	agentDir := flag.String("agent", "..", "agent 项目目录")
-	mcpAddr := flag.String("mcp-addr", "127.0.0.1:8091", "内置远程 MCP server 的内部地址，观测台 /mcp 转发到这里；空字符串表示不启动")
-	flag.Parse()
-	dir, err := filepath.Abs(*agentDir)
-	if err == nil {
-		err = os.MkdirAll("runs", 0o700)
+// Run 启动观测台：go run . observe [-addr …] [-dev]，须在项目根目录运行。
+// 观测台与内置 MCP server 在同一个进程；每次对话仍启动一个独立的 agent 子进程，
+// 这样各次运行的全局状态、终端输出和故障互不影响，模型请求也照旧经过本机代理记录。
+func Run(args []string, mcpHandler http.Handler) error {
+	flags := flag.NewFlagSet("observe", flag.ContinueOnError)
+	addr := flags.String("addr", "127.0.0.1:8090", "观测页面地址")
+	dev := flags.Bool("dev", false, "每次对话用 go run . 启动 agent：改完 agent 代码不必重启观测台，代价是每次多一次编译")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("observe 只接受 -addr 与 -dev")
+	}
+	// agent 读 .env、skills/、docs/、.data/ 都相对项目根目录，所以观测台以当前目录为准。
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
+		return errors.New("请在项目根目录运行 go run . observe")
+	}
+	agentBin := ""
+	if !*dev {
+		if agentBin, err = os.Executable(); err != nil {
+			return err
+		}
+	}
+	runsDir := filepath.Join(dir, ".data", "runs")
+	if err := os.MkdirAll(runsDir, 0o700); err != nil {
+		return err
 	}
 	upstream := upstreamURL(dir)
-	if err == nil && upstream == "" {
-		err = errors.New("请在环境变量或 agent 的 .env 中配置 LLM_API_URL")
+	if upstream == "" {
+		return errors.New("请在环境变量或 .env 中配置 LLM_API_URL")
 	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
-	s := &server{upstream: upstream, agentDir: dir, addr: *addr, mcp: &mcpHost{addr: *mcpAddr}}
+	s := &server{upstream: upstream, agentDir: dir, addr: *addr, runsDir: runsDir, agentBin: agentBin}
 	s.loadRuns()
 	mux := http.NewServeMux()
 	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
@@ -106,25 +123,25 @@ func main() {
 	hub("DELETE /hub/mcp/{name}", s.deleteMCP)
 	hub("POST /hub/mcp/{name}/enabled", s.toggleMCP)
 	hub("POST /hub/mcp/{name}/test", s.testMCP)
-	if *mcpAddr != "" {
-		mux.Handle("/mcp", sameOrigin(s.mcp.handler()))
-		go s.mcp.start(dir)
-		// Ctrl+C 时先结束内置 server，避免它留在后台占着端口。
-		go func() {
-			signals := make(chan os.Signal, 1)
-			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-			<-signals
-			s.mcp.stop()
-			os.Exit(0)
-		}()
-		fmt.Printf("远程 MCP：http://%s/mcp（内置 calculator，Streamable HTTP）\n", *addr)
+	// 内置远程 MCP：同一进程直接处理，不另开端口、不转发；同样只接受本机同源请求。
+	mux.Handle("/mcp", sameOrigin(mcpHandler))
+	mode := "直接执行当前程序（改了 agent 代码需重启观测台）"
+	if *dev {
+		mode = "go run .（每次读取最新源码）"
 	}
-	fmt.Printf("观测页面：http://%s\nAgent：项目根目录\n模型上游：%s\n", *addr, upstream)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
-		s.mcp.stop()
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
+	fmt.Printf("观测页面：http://%s\n远程 MCP：http://%s/mcp（内置 calculator，Streamable HTTP）\nAgent：项目根目录 · %s\n模型上游：%s\n", *addr, *addr, mode, upstream)
+	return http.ListenAndServe(*addr, mux)
+}
+
+// agent 子进程：默认执行当前程序本身，与观测台同一份代码、不需要编译、在哪台机器运行就是哪台机器的格式；
+// -dev 时改用 go run .，读取最新源码。
+func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, s.agentBin, args...)
+	if s.agentBin == "" {
+		cmd = exec.CommandContext(ctx, "go", append([]string{"run", "."}, args...)...)
 	}
+	cmd.Dir = s.agentDir
+	return cmd
 }
 
 // 真实上游地址：环境变量优先，其次是 agent 目录的 .env。
@@ -142,7 +159,7 @@ func upstreamURL(agentDir string) string {
 	return ""
 }
 
-// 每次运行都用 go run 启动 agent，agent 代码更新后无需改动观测系统。
+// 每次运行都启动一个独立的 agent 子进程（见 agentCommand），各次运行的状态与输出互不影响。
 func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	var input struct {
 		Query      string `json:"query"`
@@ -176,7 +193,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "memory_ttl须为正的时长（如1m），且需开启长期记忆", http.StatusBadRequest)
 		return
 	}
-	args := []string{"run", ".", "-question", input.Query}
+	args := []string{"-question", input.Query}
 	if input.RAG {
 		args = append(args, "-rag")
 	}
@@ -199,18 +216,18 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	args = appendCapabilityArgs(args, skills, servers)
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
-		args = []string{"run", ".", "-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
+		args = []string{"-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
 		input.Query = contextLabTitle
 	}
 	if input.RAGLab {
-		args = []string{"run", ".", "-rag-lab", "-max-steps", "6", "-reasoning-effort", "minimal"}
+		args = []string{"-rag-lab", "-max-steps", "6", "-reasoning-effort", "minimal"}
 		input.Query = ragLabTitle
 	}
 	if input.RAG || input.RAGLab || input.Memory {
 		args = append(args, "-embedding", input.Embedding)
 	}
 	id := time.Now().Format("20060102-150405.000")
-	file, err := os.OpenFile(filepath.Join("runs", id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(filepath.Join(s.runsDir, id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -250,7 +267,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	file, err := os.OpenFile(filepath.Join("runs", r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := os.OpenFile(filepath.Join(s.runsDir, r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		r.mu.Unlock()
 		http.Error(w, "无法追加对话记录", http.StatusInternalServerError)
@@ -268,7 +285,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	r.file, r.Done = file, false
 	r.mu.Unlock()
 	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers})
-	args := []string{"run", ".", "-history-stdin", "-question", strings.TrimSpace(input.Query)}
+	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
 	}
@@ -285,8 +302,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *server) launch(r *run, args []string, history *resumeInput) {
-	cmd := exec.Command("go", args...)
-	cmd.Dir = s.agentDir
+	cmd := s.agentCommand(context.Background(), args...)
 	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID)
 	if history != nil {
 		data, err := json.Marshal(history)
@@ -356,8 +372,7 @@ func (s *server) forgetMemory(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "记忆编号格式为M加数字", http.StatusBadRequest)
 		return
 	}
-	cmd := exec.Command("go", "run", ".", "-memory-forget", id)
-	cmd.Dir = s.agentDir
+	cmd := s.agentCommand(req.Context(), "-memory-forget", id)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, strings.TrimSpace(string(output)), http.StatusConflict)
@@ -483,7 +498,7 @@ func (r *run) canContinue() bool {
 
 // 启动时读回 runs/*.jsonl，重启后仍能查看、回放和对比历史运行。
 func (s *server) loadRuns() {
-	paths, _ := filepath.Glob(filepath.Join("runs", "*.jsonl"))
+	paths, _ := filepath.Glob(filepath.Join(s.runsDir, "*.jsonl"))
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {

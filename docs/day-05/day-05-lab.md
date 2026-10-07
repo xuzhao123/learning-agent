@@ -36,7 +36,7 @@
 | 重排 | 当前聊天模型、推理强度 low、不带工具；只接受候选编号，重复取第一条，缺失按不相关，JSON 无效判失败 |
 | 注入 | 完整原文，不注入片段；最多 5 条，独立预算 `-memory-tokens`（默认800估算token），放不下整条跳过 |
 | 降级 | 向量不可用 → 只用 BM25；重排失败或预算不足 → 只保留两路都召回的候选，最多 3 条；原因写进 `Memory retrieve` 行和 search_memory 结果 |
-| 预算 | 背景生成和重排都走本轮的 `modelClient`，计入 `-max-steps`；每次辅助调用后至少给主任务留 2 次请求 |
+| 预算 | 背景生成和重排都走本轮的 `llm.Client`，计入 `-max-steps`；每次辅助调用后至少给主任务留 2 次请求 |
 | 一致性 | 文件锁内只读写文件；embedding 与模型请求都在锁外；使用结果前回到锁内校验；删除、过期、淘汰后同一事务里清掉对应的块、背景和向量；锁外算好的向量写回时只保留当前索引仍引用的，并发删除后不会重新落盘 |
 | 敏感信息 | 所有记忆落盘前统一检查：用户原话含疑似密钥整条拒存（原话不能改写）；程序生成的工具失败记录先脱敏再截断，再检查；来源、背景、错误原因和日志统一经过 `redact` |
 
@@ -56,16 +56,16 @@
 
 | 文件 | 只抓住这一件事 |
 | --- | --- |
-| [memory.go](../../memory.go) | 依据层：`Memory` / `MemorySource`；`locked` 与 `update` 事务；`commit` 写入与 `sourceFromTranscript` 来源摘录；`recall`、`search`、`forget` |
-| [memory_retrieval.go](../../memory_retrieval.go) | 派生层与检索：`retrieve` 主流程；`splitMemory` 切块；`ensureIndex` / `contextualize` 背景；`vectorSearch`；`bm25Tokens` / `bm25Search`；`fuse`；`rerank`；`pick`；`touch` |
-| [embedding.go](../../embedding.go) | `sharedEmbedder`：同一进程只加载一次向量模型，本地推理加锁；`Count` / `Limit` 给切块用 |
-| [llm.go](../../llm.go) | `callKeeping`：辅助调用至少给主任务留下 keep 次请求；计数和用量有锁；`X-Agent-Purpose` 标明用途 |
-| [react.go](../../react.go) | `runAgent` 先建客户端再 recall；结尾 `commit` 的错误向上返回 |
-| [observer/main.go](../../observer/main.go) | 记录请求用途；续聊恢复跳过 `memory_*` 调用；`GET /memory` 附带派生索引 |
+| [memory.go](../../internal/memory/memory.go) | 依据层：`Memory` / `MemorySource`；`locked` 与 `update` 事务；`commit` 写入与 `sourceFromTranscript` 来源摘录；`recall`、`search`、`forget` |
+| [memory_retrieval.go](../../internal/memory/memory_retrieval.go) | 派生层与检索：`retrieve` 主流程；`splitMemory` 切块；`ensureIndex` / `contextualize` 背景；`vectorSearch`；`bm25Tokens` / `bm25Search`；`fuse`；`rerank`；`pick`；`touch` |
+| [embedding.go](../../internal/retrieval/embedding.go) | `retrieval.SharedEmbedder`：同一进程只加载一次向量模型，本地推理加锁；`Count` / `Limit` 给切块用 |
+| [llm.go](../../internal/llm/llm.go) | `callKeeping`：辅助调用至少给主任务留下 keep 次请求；计数和用量有锁；`X-Agent-Purpose` 标明用途 |
+| [react.go](../../internal/agent/react.go) | `agent.Run` 先建客户端再 recall；结尾 `commit` 的错误向上返回 |
+| [internal/observer/server.go](../../internal/observer/server.go) | 记录请求用途；续聊恢复跳过 `memory_*` 调用；`GET /memory` 附带派生索引 |
 
 **一次写入**：`go run . -memory -question "对了，别忘了报销系统只接受 PDF 发票"`
 
-1. `runAgent` 把本次会话的用户原话交给 `memories.userTexts`。
+1. `agent.Run` 把本次会话的用户原话交给 `memories.userTexts`。
 2. 模型判断这是要记住的事实，调用 `remember_memory`，参数如 `{"quote":"报销系统只接受 PDF 发票","kind":"semantic"}`。
 3. `remember` 去掉引文开头的请求词（“记住”“流程：”），校验它是 `userTexts` 中某条的子串（空白归一化），再用 `rejectReason` 检查长度和密钥、每轮上限 3 条；通过则加入 `requests`，返回 `accepted=true`，日志 `Memory request`；不通过返回 `accepted=false` 和原因，模型据此如实告诉用户。
 4. 主任务结束，`defer` 里调用 `memories.commit(question, conversation.Transcript)`；没有登记、但用户消息里有“记住/别忘”时打印 `Memory hint`。
@@ -74,8 +74,8 @@
 
 **一次查询**：新进程 `go run . -memory -question "报销系统支持什么格式的发票？"`
 
-1. `runAgent` 建 `modelClient`，交给 `memories.client`，调用 `recall` → `retrieve(ctx, "recall", question, "rerank")`。
-2. `update(0, …)` 只取快照；`sharedEmbedder` 取向量模型；`planFor` 决定切块上限。
+1. `agent.Run` 建 `llm.Client`，交给 `memories.client`，调用 `recall` → `retrieve(ctx, "recall", question, "rerank")`。
+2. `update(0, …)` 只取快照；`retrieval.SharedEmbedder` 取向量模型；`planFor` 决定切块上限。
 3. `ensureIndex`：每块算指纹 `chunkKey`（ID、内容、来源、切块方案、背景配置）；缓存没有就 `contextualize`，日志 `Memory contextualize: … status=ok`。
 4. `vectorSearch` 编码问题，缓存里没有的块现算向量；`bm25Search` 在同一批"背景 + 原文"上打分。日志 `Memory index`。
 5. `fuse` 按记忆去重并算 RRF；`rerank` 发 `memory_rerank` 请求并校验；`pick` 过滤和控预算；`touch` 校验并刷新访问时间。
@@ -125,7 +125,7 @@ go run . -memory-search '我现在用什么编程语言？' -memory-mode rerank 
 
 **四种方法的手动对比**：选 5–10 个你自己的真实问题（同义改写、编号、指代、无关、冲突各至少一个），每个问题跑一遍上面五条命令，记录 `selected` 里的编号和 `stages`。对比时看三件事：该出现的是否出现（召回），不该出现的是否出现（精度，尤其无关问题是否为 0 条），冲突时是否只保留新的那条。只记录真实输出，不要估算。
 
-**观测台**（`go -C observer run .`；本次改了 `observer/main.go` 与 `index.html`，需要你方便时自行重启观测台才会生效）
+**观测台**（`go run . observe`；本次改了观测台的 server 与 `index.html`，需要你方便时自行重启观测台才会生效）
 
 1. 新对话勾选"长期记忆"，选择"线上方舟 / 本地 MiniLM"，续聊沿用选择。
 2. 回答上方的"◎ 调入长期记忆"卡片：标题显示"向量 n / BM25 n → 融合 n → 重排 完成/失败/跳过"；卡片内有索引状态（已补背景、无来源、待处理、向量缓存/新算）、降级原因、每条调入与被过滤记忆的各阶段分数，以及 `memory_contextualize`、`memory_rerank` 两类辅助调用的原始输入/输出和 token。

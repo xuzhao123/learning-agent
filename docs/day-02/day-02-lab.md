@@ -15,11 +15,11 @@
 
 | 位置 | 看什么 |
 | --- | --- |
-| [react.go](../../react.go) 的 `runAgent` | 循环上限来自 maxSteps；执行前按调用顺序检查重复动作 |
+| [react.go](../../internal/agent/react.go) 的 `agent.Run` | 循环上限来自 maxSteps；执行前按调用顺序检查重复动作 |
 | react.go 的 `runWithRetry` | 保留同一调用 ID，增加 attempts；退避用 timer + context，Ctrl+C 可中断等待 |
 | react.go 的 `actionKey` | 工具名 + 规范化参数；忽略调用 ID、JSON 空白与键顺序 |
 | react.go 的 `stopRun` | 打印 `Termination:` 原因，返回未完成与已执行步骤摘要，不再调用模型 |
-| [tools.go](../../tools.go) 的 `runTool` | 在边界用 recover 把 panic 转为 error，进入重试与回填流程 |
+| [dispatch.go](../../internal/agent/dispatch.go) 的 `runTool` | 在边界用 recover 把 panic 转为 error，进入重试与回填流程 |
 
 ## 3. 故障实验
 
@@ -61,4 +61,4 @@ go run . -max-steps 1 -question '请先用 search_notes 查询循环职责，再
 
 已实现：参数与协议的基础校验、请求预算、统一的工具重试与指数退避、错误回填、重复动作熔断、未完成摘要。模型 API 错误不重试，直接停止。
 
-未实现（笔记中的知识扩展）：按错误类型分类重试、抖动、单个工具超时与任务总时限、业务幂等键、执行进度持久化与恢复、部分成功的分项处理。未来最小的演进方向是：`runTool` 返回少量可识别的错误类别，`runWithRetry` 据此决定是否原样重试，`runAgent` 的结果回填保持不变。
+未实现（笔记中的知识扩展）：按错误类型分类重试、抖动、单个工具超时与任务总时限、业务幂等键、执行进度持久化与恢复、部分成功的分项处理。未来最小的演进方向是：`runTool` 返回少量可识别的错误类别，`runWithRetry` 据此决定是否原样重试，`agent.Run` 的结果回填保持不变。

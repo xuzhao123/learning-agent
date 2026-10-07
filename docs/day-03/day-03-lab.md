@@ -6,7 +6,7 @@
 
 | 项 | 本项目 |
 | --- | --- |
-| 数据 | `Context` 在进程内存中维护 Transcript 与 View（[context_manager.go](../../context_manager.go)）；主循环用 `Append` 写入、`Next` 在请求前准备、`RecordReply` 记录回复与用量位置 |
+| 数据 | `Context` 在进程内存中维护 Transcript 与 View（[context_manager.go](../../internal/agent/context_manager.go)）；主循环用 `Append` 写入、`Next` 在请求前准备、`RecordReply` 记录回复与用量位置 |
 | 输入容量 | `-context-window 12288` − 输出预留 4096 − `-reasoning-reserve 1024` = 7168。这是学习用的配置窗口，不是模型官方窗口 |
 | 输出上限 | `-max-output-tokens` 默认 0：不向 API 发送上限，4096 只作本地预留；设为正数才发送 `max_completion_tokens`（含推理），并按该值预留 |
 | 三条线 | 触发 90%（6451）、软目标 40%、接受上限 60%；摘要目标约 5% |
@@ -87,11 +87,11 @@ go run . -context-lab -max-steps 60 -context-window 8192 -max-output-tokens 2048
 
 实验第 1 轮给出账号，第 2 轮规定只讨论 Day 3，第 33 轮询问这两条。所有回复与摘要都由真实模型生成，程序检查 Transcript 未被压缩改写。召回之后，模型通过仅实验启用的 `read_day3_notes` 读取 Day 3 学习笔记全文，观察写入截断与原文保留。
 
-网页观察：`go -C observer run .`，点击左侧"Day 3 上下文实验"。对话流中压缩显示为"上下文已压缩"分隔线；切到"观测"，点"终端输出"看 `Context`、`Compact`、`Recall`，切"迷宫"看输入量曲线。直接在根目录运行实验会绕过代理，不会出现在网页里。观测台续聊会恢复上次 View（含摘要），新问题重新获得请求预算。
+网页观察：`go run . observe`，点击左侧"Day 3 上下文实验"。对话流中压缩显示为"上下文已压缩"分隔线；切到"观测"，点"终端输出"看 `Context`、`Compact`、`Recall`，切"迷宫"看输入量曲线。直接在根目录运行实验会绕过代理，不会出现在网页里。观测台续聊会恢复上次 View（含摘要），新问题重新获得请求预算。
 
 ## 6. 阅读代码
 
-先读 [react.go](../../react.go) 中的 `Append`、`Next`、`RecordReply` 调用位置，再读 [context_manager.go](../../context_manager.go) 的 `Prepare` 与 `summarize`，最后对照 [llm.go](../../llm.go) 的 usage 结构与请求计数器。[context_lab.go](../../context_lab.go) 是实验入口。
+先读 [react.go](../../internal/agent/react.go) 中的 `Append`、`Next`、`RecordReply` 调用位置，再读 [context_manager.go](../../internal/agent/context_manager.go) 的 `Prepare` 与 `summarize`，最后对照 [llm.go](../../internal/llm/llm.go) 的 usage 结构与请求计数器。[context_lab.go](../../internal/labs/context_lab.go) 是实验入口。
 
 | 带着问题读 | 在哪里 |
 | --- | --- |

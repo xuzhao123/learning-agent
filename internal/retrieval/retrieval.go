@@ -1,4 +1,4 @@
-package main
+package retrieval
 
 import (
 	"context"
@@ -17,13 +17,13 @@ import (
 	"unicode/utf8"
 )
 
-var ragEnabled bool
-var docsRetriever *retriever
+var Enabled bool
+var Docs *Retriever
 
 // 建索引进度默认随终端轨迹输出；-search-docs 改写到stderr，让stdout只有JSON结果。
-var indexLog io.Writer = os.Stdout
+var IndexLog io.Writer = os.Stdout
 
-var searchDocsDefinition = map[string]any{
+var SearchDefinition = map[string]any{
 	"name":        "search_docs",
 	"description": "按语义检索本项目 Day 1–4 知识库。返回最多 k 条片段、来源、余弦相似度及 accepted 标记；只用 accepted=true 且正文支持结论的片段作证据，以 [D编号] 引用。无充分证据时说明资料不足。",
 	"parameters": map[string]any{
@@ -35,7 +35,7 @@ var searchDocsDefinition = map[string]any{
 	},
 }
 
-type docHit struct {
+type Hit struct {
 	ID       string  `json:"id"`
 	Title    string  `json:"title"`
 	Source   string  `json:"source"`
@@ -44,21 +44,21 @@ type docHit struct {
 	Accepted bool    `json:"accepted"`
 }
 
-type searchResult struct {
-	Query     string   `json:"query"`
-	K         int      `json:"k"`
-	Threshold float64  `json:"threshold"`
-	Model     string   `json:"model"`
-	Backend   string   `json:"backend"`
-	Corpus    string   `json:"corpus"`
-	Status    string   `json:"status"`
-	Hits      []docHit `json:"hits"`
+type Result struct {
+	Query     string  `json:"query"`
+	K         int     `json:"k"`
+	Threshold float64 `json:"threshold"`
+	Model     string  `json:"model"`
+	Backend   string  `json:"backend"`
+	Corpus    string  `json:"corpus"`
+	Status    string  `json:"status"`
+	Hits      []Hit   `json:"hits"`
 }
 
 const modelName = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 const revision = "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
-const minScore = 0.40 // 教学起点，不是答案正确率；更换模型或语料后需重新评估。
-const tokenLimit = 128
+const MinScore = 0.40 // 教学起点，不是答案正确率；更换模型或语料后需重新评估。
+const TokenLimit = 128
 
 type document struct {
 	ID     string    `json:"id"`
@@ -69,16 +69,16 @@ type document struct {
 }
 
 // 检索与Agent在同一进程；索引只初始化一次，工具调用直接读取它。
-type retriever struct {
-	embedding             *embedder
+type Retriever struct {
+	embedding             *Embedder
 	docs                  []document
 	provider, fingerprint string
 	threshold             float64
 }
 
-func newRetriever(ctx context.Context, provider string, threshold float64) (*retriever, error) {
+func New(ctx context.Context, provider string, threshold float64) (*Retriever, error) {
 	// 向量模型按进程共享（长期记忆也用它），由 main 退出时统一释放。
-	embedding, err := sharedEmbedder(provider)
+	embedding, err := SharedEmbedder(provider)
 	if err != nil {
 		return nil, err
 	}
@@ -86,32 +86,32 @@ func newRetriever(ctx context.Context, provider string, threshold float64) (*ret
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(indexLog, "Index ready: documents=%d dimensions=%d model=%s corpus=%s backend=%s\n", len(docs), embedding.Dimensions, embedding.Model, fingerprint[:12], provider)
-	return &retriever{embedding: embedding, docs: docs, provider: provider, fingerprint: fingerprint, threshold: threshold}, nil
+	fmt.Fprintf(IndexLog, "Index ready: documents=%d dimensions=%d model=%s corpus=%s backend=%s\n", len(docs), embedding.Dimensions, embedding.Model, fingerprint[:12], provider)
+	return &Retriever{embedding: embedding, docs: docs, provider: provider, fingerprint: fingerprint, threshold: threshold}, nil
 }
 
-func searchDocs(ctx context.Context, query string, k int) (searchResult, error) {
+func Search(ctx context.Context, query string, k int) (Result, error) {
 	if strings.TrimSpace(query) == "" || utf8.RuneCountInString(query) > 1000 || k < 1 || k > 6 {
-		return searchResult{}, errors.New("query需为1–1000字符，k需为1–6的整数")
+		return Result{}, errors.New("query需为1–1000字符，k需为1–6的整数")
 	}
-	r := docsRetriever
+	r := Docs
 	if r == nil {
-		return searchResult{}, errors.New("知识库未初始化，请使用-rag或-search-docs")
+		return Result{}, errors.New("知识库未初始化，请使用-rag或-search-docs")
 	}
 	vector, err := r.embedding.Encode(ctx, query, true)
 	if err != nil {
-		return searchResult{}, err
+		return Result{}, err
 	}
 	// 单位向量的点积就是余弦相似度；24条文档直接遍历即可。
-	hits := make([]docHit, 0, len(r.docs))
+	hits := make([]Hit, 0, len(r.docs))
 	for _, doc := range r.docs {
 		var score float64
 		for i, x := range vector {
 			score += float64(x) * float64(doc.Vector[i])
 		}
-		hits = append(hits, docHit{ID: doc.ID, Title: doc.Title, Source: doc.Source, Text: doc.Text, Score: score})
+		hits = append(hits, Hit{ID: doc.ID, Title: doc.Title, Source: doc.Source, Text: doc.Text, Score: score})
 	}
-	slices.SortStableFunc(hits, func(a, b docHit) int {
+	slices.SortStableFunc(hits, func(a, b Hit) int {
 		if a.Score > b.Score {
 			return -1
 		}
@@ -132,10 +132,10 @@ func searchDocs(ctx context.Context, query string, k int) (searchResult, error) 
 			h.Text = ""
 		} // 低分正文不进入模型上下文。
 	}
-	return searchResult{Query: query, K: k, Threshold: r.threshold, Model: r.embedding.Model, Backend: r.provider, Corpus: r.fingerprint[:12], Status: status, Hits: hits}, nil
+	return Result{Query: query, K: k, Threshold: r.threshold, Model: r.embedding.Model, Backend: r.provider, Corpus: r.fingerprint[:12], Status: status, Hits: hits}, nil
 }
 
-func buildIndex(ctx context.Context, cache string, embedding *embedder) ([]document, string, error) {
+func buildIndex(ctx context.Context, cache string, embedding *Embedder) ([]document, string, error) {
 	text, err := os.ReadFile("retrieval/corpus.md")
 	if err != nil {
 		return nil, "", err
@@ -177,7 +177,7 @@ func buildIndex(ctx context.Context, cache string, embedding *embedder) ([]docum
 			return nil, "", fmt.Errorf("%s: %w", docs[i].ID, err)
 		}
 		docs[i].Vector = vector
-		fmt.Fprintf(indexLog, "Index: %d/%d %s\n", i+1, len(docs), docs[i].ID)
+		fmt.Fprintf(IndexLog, "Index: %d/%d %s\n", i+1, len(docs), docs[i].ID)
 	}
 	saved.Fingerprint, saved.Documents = fingerprint, docs
 	data, err := json.Marshal(saved)
@@ -199,7 +199,7 @@ func downloadModel(dir string) error {
 		if info, err := os.Stat(target); err == nil && info.Size() > 0 {
 			continue
 		}
-		fmt.Fprintln(indexLog, "Download:", name, "（首次下载，后续复用本地缓存）")
+		fmt.Fprintln(IndexLog, "Download:", name, "（首次下载，后续复用本地缓存）")
 		client := &http.Client{Timeout: 10 * time.Minute}
 		resp, err := client.Get("https://huggingface.co/" + modelName + "/resolve/" + revision + "/" + name)
 		if err != nil {
