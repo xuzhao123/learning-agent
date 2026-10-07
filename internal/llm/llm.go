@@ -65,6 +65,8 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		if TaskID != "" {
 			request.Header.Set("X-Agent-Task", TaskID)
 		}
+		// 模型路由：告诉代理这次请求本该发往哪家供应商；代理按它转发，观测台不必知道路由表。
+		request.Header.Set("X-Agent-Upstream", config.Upstream)
 	}
 	client := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)

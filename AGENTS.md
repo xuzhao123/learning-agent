@@ -26,6 +26,8 @@
 - 工具数据使用实际来源；`search_notes` 读取项目学习笔记，去掉假笔记字典。
 - Day 8 按用户任务在 `-lab-tools` 中增加 `slow_job`（真实等待、响应取消），用于观察超时、取消与续跑；不模拟模型输出。错误是否可重试由工具封装用 `llm.Permanent` 标记，执行器不解析错误文本。
 - Day 9–10 检查点与队列日志放 `.data/checkpoints/`，不提交；任务队列与子 agent 都通过 `agent.RunChild` 为每个任务启动一个 agent 子进程（一个进程只跑一个任务），不在同一进程里并发运行多个 agent。示例任务放 `queue/tasks.jsonl`。
+- Day 11 浏览器用 chromedp，只做读取型工具（web_search、open_page），每次调用一个标签页；不伪装 User-Agent、不绕过验证码；画面写到 `.data/browser/<任务ID>/<调用ID>.jpg`，观测台只读这些文件。`CHROME_PATH`、`CHROME_NO_SANDBOX` 只从环境变量读取。
+- 模型路由只做手动选择：路由表在 `llm.Providers`（方舟、DeepSeek，均为 OpenAI 兼容接口），`-provider` 选择；观测台按 agent 在 `X-Agent-Upstream` 里声明的地址转发，不复制路由表。各家密钥只放 `.env` 或环境变量。
 - 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP）。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。
 - 保留当前学习任务必需的参数解析、并行工具调用、消息历史、错误反馈和终止条件。

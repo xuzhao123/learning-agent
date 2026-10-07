@@ -11,14 +11,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 //go:embed index.html
@@ -44,6 +48,8 @@ type event struct {
 	Skills    []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
 	MCP       []mcpServer     `json:"mcp,omitempty"`
 	Subagents bool            `json:"subagents,omitempty"` // 本对话允许 spawn_agent，续聊沿用
+	Browser   bool            `json:"browser,omitempty"`   // 本对话启用浏览器工具，续聊沿用
+	Provider  string          `json:"provider,omitempty"`  // 本对话的模型供应商（-provider），续聊沿用
 	Task      string          `json:"task,omitempty"`      // 发出这次请求的 agent 任务ID（X-Agent-Task）
 	Sub       bool            `json:"sub,omitempty"`       // 请求来自子 agent：不进入父对话流、不参与续聊恢复
 }
@@ -63,11 +69,11 @@ type run struct {
 }
 
 type server struct {
-	upstream, agentDir, addr string
-	mu                       sync.Mutex
-	runs                     []*run
-	runsDir, agentBin        string     // 存档目录 .data/runs；agentBin 为空表示 -dev（go run .）
-	hubMu                    sync.Mutex // 保护 .data/hub.json 的读改写
+	agentDir, addr    string
+	mu                sync.Mutex
+	runs              []*run
+	runsDir, agentBin string     // 存档目录 .data/runs；agentBin 为空表示 -dev（go run .）
+	hubMu             sync.Mutex // 保护 .data/hub.json 的读改写
 }
 
 // Run 启动观测台：go run . observe [-addr …] [-dev]，须在项目根目录运行。
@@ -101,11 +107,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	if err := os.MkdirAll(runsDir, 0o700); err != nil {
 		return err
 	}
-	upstream := upstreamURL(dir)
-	if upstream == "" {
-		return errors.New("请在环境变量或 .env 中配置 LLM_API_URL")
-	}
-	s := &server{upstream: upstream, agentDir: dir, addr: *addr, runsDir: runsDir, agentBin: agentBin}
+	s := &server{agentDir: dir, addr: *addr, runsDir: runsDir, agentBin: agentBin}
 	s.loadRuns()
 	mux := http.NewServeMux()
 	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
@@ -119,6 +121,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
+	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
 	hub := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, sameOrigin(handler)) }
@@ -137,12 +140,28 @@ func Run(args []string, mcpHandler http.Handler) error {
 	if *dev {
 		mode = "go run .（每次读取最新源码）"
 	}
-	fmt.Printf("观测页面：http://%s\n远程 MCP：http://%s/mcp（内置 calculator，Streamable HTTP）\nAgent：项目根目录 · %s\n模型上游：%s\n", *addr, *addr, mode, upstream)
+	fmt.Printf("观测页面：http://%s\n远程 MCP：http://%s/mcp（内置 calculator，Streamable HTTP）\nAgent：项目根目录 · %s\n模型上游：由每个 agent 按 -provider 在请求头声明\n", *addr, *addr, mode)
 	return http.ListenAndServe(*addr, mux)
 }
 
 // agent 子进程：默认执行当前程序本身，与观测台同一份代码、不需要编译、在哪台机器运行就是哪台机器的格式；
 // -dev 时改用 go run .，读取最新源码。
+// Day 11：agent 浏览时把画面写到 .data/browser/<任务ID>/<调用ID>.jpg（screencast 帧不断覆盖，结束时是最终截图）。
+// 页面运行中反复来取这张图，就是实时画面；调用结束后它就是这一步的快照。
+var providerPattern = regexp.MustCompile(`^[a-z]{1,32}$`)
+
+var frameName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
+func (s *server) browserFrame(w http.ResponseWriter, req *http.Request) {
+	task, call := req.PathValue("task"), strings.TrimSuffix(req.PathValue("call"), ".jpg")
+	if !frameName.MatchString(task) || !frameName.MatchString(call) || strings.HasPrefix(task, ".") || strings.Contains(call, ".") {
+		http.NotFound(w, req)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeFile(w, req, filepath.Join(s.agentDir, ".data", "browser", task, call+".jpg"))
+}
+
 func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, s.agentBin, args...)
 	if s.agentBin == "" {
@@ -150,21 +169,6 @@ func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
 	}
 	cmd.Dir = s.agentDir
 	return cmd
-}
-
-// 真实上游地址：环境变量优先，其次是 agent 目录的 .env。
-func upstreamURL(agentDir string) string {
-	if value := strings.TrimSpace(os.Getenv("LLM_API_URL")); value != "" {
-		return value
-	}
-	data, _ := os.ReadFile(filepath.Join(agentDir, ".env"))
-	for _, line := range strings.Split(string(data), "\n") {
-		name, value, _ := strings.Cut(strings.TrimSpace(line), "=")
-		if strings.TrimSpace(name) == "LLM_API_URL" {
-			return strings.Trim(strings.TrimSpace(value), "\"'")
-		}
-	}
-	return ""
 }
 
 // 每次运行都启动一个独立的 agent 子进程（见 agentCommand），各次运行的状态与输出互不影响。
@@ -180,6 +184,8 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		Skills     bool   `json:"skills"`
 		MCP        bool   `json:"mcp"`
 		Subagents  bool   `json:"subagents"`
+		Browser    bool   `json:"browser"`
+		Provider   string `json:"provider"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -194,8 +200,13 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lab := input.ContextLab || input.RAGLab
-	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents)) {
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents || input.Browser)) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
+		return
+	}
+	// 供应商名由 agent 校验（路由表在 llm 包）；这里只挡住不像名字的输入。
+	if input.Provider != "" && !providerPattern.MatchString(input.Provider) {
+		http.Error(w, "provider 只能是小写字母", http.StatusBadRequest)
 		return
 	}
 	if ttl, err := time.ParseDuration(input.MemoryTTL); input.MemoryTTL != "" && (err != nil || ttl <= 0 || !input.Memory) {
@@ -226,6 +237,12 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if input.Subagents {
 		args = append(args, "-subagents")
 	}
+	if input.Browser {
+		args = append(args, "-browser")
+	}
+	if input.Provider != "" {
+		args = append(args, "-provider", input.Provider)
+	}
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
 		args = []string{"-context-lab", "-max-steps", "60", "-reasoning-effort", "minimal"}
@@ -238,7 +255,9 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if input.RAG || input.RAGLab || input.Memory {
 		args = append(args, "-embedding", input.Embedding)
 	}
-	id := time.Now().Format("20060102-150405.000")
+	// 对话 ID：随机 UUID（v4），不含时间，与观测台在哪个时区启动无关。
+	// 早期存档的 ID 是“20261006-213820.763”这样的本地时间，照常读回，不改名，旧链接仍能打开。
+	id := uuid.NewString()
 	file, err := os.OpenFile(filepath.Join(s.runsDir, id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -248,7 +267,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents})
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider})
 	s.launch(r, args, nil)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -286,17 +305,17 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// 续聊沿用这条对话开始时的记忆、skill 与 MCP 设置：最近一次 start/continue 事件为准。
-	memory, ttl, subagents := false, "", false
+	memory, ttl, subagents, browser, provider := false, "", false, false, ""
 	var skills []string
 	var servers []mcpServer
 	for _, e := range r.events {
 		if e.Kind == "start" || e.Kind == "continue" {
-			memory, ttl, skills, servers, subagents = e.Memory, e.MemoryTTL, e.Skills, e.MCP, e.Subagents
+			memory, ttl, skills, servers, subagents, browser, provider = e.Memory, e.MemoryTTL, e.Skills, e.MCP, e.Subagents, e.Browser, e.Provider
 		}
 	}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents})
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider})
 	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
@@ -311,6 +330,12 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	args = appendCapabilityArgs(args, skills, servers)
 	if subagents {
 		args = append(args, "-subagents")
+	}
+	if browser {
+		args = append(args, "-browser")
+	}
+	if provider != "" {
+		args = append(args, "-provider", provider)
 	}
 	s.launch(r, args, history)
 	json.NewEncoder(w).Encode(r.summary())
@@ -636,7 +661,22 @@ func firstUserMessage(body json.RawMessage) string {
 func (r *run) summary() map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return map[string]any{"id": r.ID, "query": r.Query, "done": r.Done, "can_continue": r.canContinue()}
+	summary := map[string]any{"id": r.ID, "query": r.Query, "done": r.Done, "can_continue": r.canContinue()}
+	// 时间给 Unix 毫秒时间戳，由页面按看的人所在的时区显示。
+	if len(r.events) > 0 {
+		summary["created_at"], summary["updated_at"] = r.events[0].Time.UnixMilli(), r.events[len(r.events)-1].Time.UnixMilli()
+	}
+	return summary
+}
+
+// 最后一次活动的时间，列表按它排序。对话 ID 是随机的 UUID（早期存档是本地时间字符串），不表示先后。
+func (r *run) updated() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.events) == 0 {
+		return time.Time{}
+	}
+	return r.events[len(r.events)-1].Time
 }
 
 func (r *run) copyLines(wg *sync.WaitGroup, kind string, pipe io.Reader) {
@@ -680,7 +720,18 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose, Task: task, Sub: sub})
 
 	start := time.Now()
-	upstream, err := http.NewRequestWithContext(req.Context(), http.MethodPost, s.upstream, bytes.NewReader(body))
+	// 模型路由在 agent 里：它在 X-Agent-Upstream 里声明这次请求的真实地址（方舟或 DeepSeek），代理照此转发。
+	// 只接受 https。浏览器里的网页设不了这个自定义头（跨域预检会被拒），能设它的只有本机进程，而本机进程本来就能直接访问外网。
+	target, err := url.Parse(req.Header.Get("X-Agent-Upstream"))
+	if err == nil && (target.Scheme != "https" || target.Host == "" || target.User != nil) {
+		err = errors.New("X-Agent-Upstream 需要是 https 地址")
+	}
+	if err != nil {
+		r.add(event{Kind: "response", Call: call, Status: http.StatusBadRequest, Text: err.Error(), Purpose: purpose, Task: task, Sub: sub})
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	upstream, err := http.NewRequestWithContext(req.Context(), http.MethodPost, target.String(), bytes.NewReader(body))
 	if err == nil {
 		upstream.Header.Set("Content-Type", req.Header.Get("Content-Type"))
 		upstream.Header.Set("Authorization", req.Header.Get("Authorization"))
@@ -719,7 +770,7 @@ func raw(data []byte) json.RawMessage {
 func (r *run) add(e event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e.Seq, e.Time = len(r.events)+1, time.Now()
+	e.Seq, e.Time = len(r.events)+1, time.Now().UTC() // 统一存 UTC：换时区启动观测台、或别人打开页面，时间都不会错
 	r.events = append(r.events, e)
 	if line, err := json.Marshal(e); err == nil {
 		r.file.Write(append(line, '\n'))
@@ -798,6 +849,8 @@ func (s *server) listRuns(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	runs := append([]*run(nil), s.runs...)
 	s.mu.Unlock()
+	// 从旧到新（页面再倒过来显示）：最近有活动的对话在最上面，续聊过的旧对话也会回到顶部。
+	slices.SortStableFunc(runs, func(a, b *run) int { return a.updated().Compare(b.updated()) })
 	list := []map[string]any{}
 	for _, r := range runs {
 		list = append(list, r.summary())

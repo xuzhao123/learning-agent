@@ -44,8 +44,8 @@
 | D9 | 检查点与恢复：中断后续跑、状态持久化 | 实现 checkpoint，kill 掉进程能接着跑 |
 | D10 | 任务调度：任务队列、并发控制、幂等设计 | 用队列跑 10 个 Agent 任务，保证幂等 |
 | D10+ | 子 agent：上下文隔离、任务说明、权限继承（2026-10-06 加入） | spawn_agent 复用 D10 的执行器，子任务带幂等键、可随父任务续跑 |
-| D11 | 浏览器自动化：Playwright 实战 | 写一个能自动查资料的浏览器工具 |
-| D12 | 代码执行沙箱：Docker 隔离、最小权限、资源限制 | 给 Agent 配一个隔离的代码执行环境 |
+| D11 | 浏览器自动化：Playwright 实战（实际用 Go 的 chromedp，同为 CDP） | 写一个能自动查资料的浏览器工具（含观测台实时画面） |
+| D12 | 代码执行沙箱：隔离的层次与取舍（seccomp/Landlock → bubblewrap/Seatbelt → 容器 → gVisor/微虚拟机）、最小权限、资源限制（2026-10-07 调整：沙箱不等于 Docker，见深度问题 Q11） | 参照 Codex / Claude Code 本机路线，用 bubblewrap + seccomp 给 Agent 的代码执行与浏览器加沙箱（文件、网络、资源）；容器作选做 |
 | D13 | 可观测性：tracing / metrics / logging | 给你的 Agent 加上端到端调用链追踪 |
 | D14 | 综合 + 复盘 | 把 W1-W2 的东西串成一个小系统；复盘笔记 |
 

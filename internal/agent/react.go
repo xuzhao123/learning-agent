@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"learning-agent/internal/browser"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/memory"
 	"learning-agent/internal/retrieval"
@@ -24,7 +25,7 @@ var (
 
 // 结果未知时可以直接再执行一次的工具：只读，或带幂等键（spawn_agent 按子任务ID续跑或取回存档）。
 // 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
-var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true}
+var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true}
 
 // 主线：请求模型 → 读取 tool_calls → 执行工具 → 保存结果 → 下一轮。
 // D9：每个边界都写检查点（见 checkpoint.go）；Resume 不为空时从检查点接着跑，不重复已完成的轮次。
@@ -413,6 +414,9 @@ func SystemPrompt() string {
 	}
 	if len(skills.Index) > 0 {
 		prompt += skills.Prompt()
+	}
+	if browser.Enabled {
+		prompt += browser.Rules
 	}
 	if SubagentArgs != nil {
 		prompt += subagentRules

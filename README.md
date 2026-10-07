@@ -1,8 +1,8 @@
-# 学习 agent：Day 1 → Day 10（Week 1–2）
+# 学习 agent：Day 1 → Day 11（Week 1–2）
 
 想先看动画讲解，打开 [课件入口](docs/slides/index.html)：每节课一份可翻页、按步骤播放的 HTML 课件。
 
-每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)、[Day 6 MCP client](docs/day-06/day-06-notes.md)、[Day 7 MCP server](docs/day-07/day-07-notes.md)、[Bonus Agent Skills](docs/bonus-skills/skills-notes.md)、[Day 8 取消超时与重试](docs/day-08/day-08-notes.md)、[Day 9 检查点与恢复](docs/day-09/day-09-notes.md)、[Day 10 任务调度与幂等](docs/day-10/day-10-notes.md)、[子 agent](docs/bonus-subagents/subagents-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)、[Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)、[Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md)、[Day 10](docs/day-10/day-10-lab.md)、[子 agent](docs/bonus-subagents/subagents-lab.md)。第一周的总结与架构图见 [Week 1 复盘](docs/week-01-review.md)。
+每天只读一篇笔记：[Day 1 工具调用与循环](docs/day-01/day-01-notes.md)、[Day 2 循环护栏](docs/day-02/day-02-notes.md)、[Day 3 上下文管理](docs/day-03/day-03-notes.md)、[Day 4 按需检索与引用](docs/day-04/day-04-notes.md)、[Day 5 长期记忆](docs/day-05/day-05-notes.md)、[Day 6 MCP client](docs/day-06/day-06-notes.md)、[Day 7 MCP server](docs/day-07/day-07-notes.md)、[Bonus Agent Skills](docs/bonus-skills/skills-notes.md)、[Day 8 取消超时与重试](docs/day-08/day-08-notes.md)、[Day 9 检查点与恢复](docs/day-09/day-09-notes.md)、[Day 10 任务调度与幂等](docs/day-10/day-10-notes.md)、[子 agent](docs/bonus-subagents/subagents-notes.md)、[Day 11 浏览器自动化](docs/day-11/day-11-notes.md)、[模型路由](docs/bonus-routing/routing-notes.md)。笔记只讲知识本身（原理、通用例子、权衡与自测）；本项目的代码阅读、动手步骤与实验记录在同目录的项目实践：[Day 1](docs/day-01/day-01-lab.md)、[Day 2](docs/day-02/day-02-lab.md)、[Day 3](docs/day-03/day-03-lab.md)、[Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md)、[Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)、[Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md)、[Day 10](docs/day-10/day-10-lab.md)、[子 agent](docs/bonus-subagents/subagents-lab.md)、[Day 11](docs/day-11/day-11-lab.md)、[模型路由](docs/bonus-routing/routing-lab.md)。第一周的总结与架构图见 [Week 1 复盘](docs/week-01-review.md)。
 
 用 Go 手写最小 ReAct loop，重点是看懂流程：
 
@@ -69,10 +69,12 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 | `-skills-list` | false | 只扫描 `skills/`，stdout 输出每个 skill 的元数据、正文与校验错误（JSON），不请求模型；须单独使用 |
 | `-timeout` | 0 | Day 8：整次运行的时限，如 `2m`；0 不限，仍可 Ctrl+C |
 | `-tool-timeout` | 30s | Day 8：单次工具尝试的时限；到时记为结果未知，只读工具才重试 |
-| `-task-id` | 按启动时间生成 | Day 9：检查点ID（字母、数字和 `._-`）；已存在时拒绝启动，提示改用 `-resume` |
+| `-task-id` | 随机 UUID | Day 9：检查点ID（字母、数字和 `._-`）；已存在时拒绝启动，提示改用 `-resume` |
 | `-resume` | 空 | Day 9：从该ID的检查点续跑，配置取自检查点；须单独使用；已完成的直接返回存档答案 |
 | `-subagents` | false | 增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程），每次运行最多4个 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
+| `-provider` | ark | 模型路由：`ark`（豆包，方舟）或 `deepseek`；子 agent 继承，续跑沿用 |
+| `-browser` | false | Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料；环境变量 `CHROME_PATH` 指定浏览器，系统不支持 Chrome 沙箱时设 `CHROME_NO_SANDBOX=1` |
 
 工具失败按200ms起步指数退避，耗尽后将错误回填；连续第三次相同动作拦下整批。超限或熔断会输出未完成与已执行步骤摘要。详见 [Day 2 学习笔记](docs/day-02/day-02-notes.md)。Day 8 起按错误类型重试：参数错误等确定性失败不重试；单次超时或执行中被取消记为结果未知，只读工具才重试；每项调用的结局（成功 / 失败 / 未执行 / 结果未知）都写进 tool 结果和摘要。
 
@@ -83,6 +85,7 @@ go run . -question '先查学习笔记中的循环职责，再计算职责数量
 ```
 llm ← tools、retrieval、skills
       tools ← mcp；retrieval ← memory
+      llm ← browser
       全部功能包 ← agent ← labs、queue
 observer 不引用任何内部包：它只通过命令行启动 agent；main.go 把 mcp.Handler() 交给它挂在 /mcp
 ```
@@ -91,15 +94,16 @@ observer 不引用任何内部包：它只通过命令行启动 agent；main.go 
 | --- | --- |
 | [main.go](main.go) | 唯一入口：解析参数、按开关组装工具、启动任务；`observe` 子命令转到观测台 |
 | [internal/llm](internal/llm/) | [llm.go](internal/llm/llm.go) 发送消息历史与 tools、请求计数与用量；[protocol.go](internal/llm/protocol.go) Message/ToolCall/Observation、本次运行的工具定义 `llm.Tools`、token 粗估、消息组校验、`.env` 配置 |
-| [internal/agent](internal/agent/) | [react.go](internal/agent/react.go) ReAct 循环、并行调度、按错误类型重试、单次超时、终止与 system prompt；[checkpoint.go](internal/agent/checkpoint.go) Day 9 检查点、原子写、flock、续跑；[child.go](internal/agent/child.go) 按任务ID幂等执行一个 agent 子进程（队列与子 agent 共用）；[subagent.go](internal/agent/subagent.go) spawn_agent；[dispatch.go](internal/agent/dispatch.go) 按工具名分发（检索、记忆、skill、MCP、内置）；[context_manager.go](internal/agent/context_manager.go) Transcript/View、usage、集中清理与摘要 |
+| [internal/agent](internal/agent/) | [react.go](internal/agent/react.go) ReAct 循环、并行调度、按错误类型重试、单次超时、终止与 system prompt；[checkpoint.go](internal/agent/checkpoint.go) Day 9 检查点、原子写、flock、续跑；[child.go](internal/agent/child.go) 按任务ID幂等执行一个 agent 子进程（队列与子 agent 共用）；[subagent.go](internal/agent/subagent.go) spawn_agent；[dispatch.go](internal/agent/dispatch.go) 按工具名分发（检索、记忆、skill、浏览器、MCP、内置）；[context_manager.go](internal/agent/context_manager.go) Transcript/View、usage、集中清理与摘要 |
 | [internal/tools](internal/tools/tools.go) | 内置工具 calculator、get_current_datetime、search_notes 与 Day 2/3 实验工具 |
 | [internal/retrieval](internal/retrieval/) | [retrieval.go](internal/retrieval/retrieval.go) search_docs、进程内索引、点积排序与低分过滤；[embedding.go](internal/retrieval/embedding.go) 本地纯Go推理 / 线上方舟embedding |
 | [internal/memory](internal/memory/) | [memory.go](internal/memory/memory.go) 依据层：原文与来源、文件锁事务、规则写入、过期淘汰、删除；[memory_retrieval.go](internal/memory/memory_retrieval.go) Contextual Retrieval：切块、背景、两路召回、RRF、重排 |
 | [internal/mcp](internal/mcp/mcp.go) | MCP client（stdio 与 Streamable HTTP）、手写 JSON-RPC、calculator MCP server（stdio / 独立端口 / 观测台 `/mcp`） |
 | [internal/skills](internal/skills/skills.go) | frontmatter 解析、启动扫描与校验、skill 索引、load_skill |
+| [internal/browser](internal/browser/browser.go) | Day 11：chromedp 启动无头 Chrome，web_search / open_page，每次调用一个标签页，等待内容、提取正文、内网地址拦截，screencast 画面写入 `.data/browser/` |
 | [internal/queue](internal/queue/queue.go) | Day 10 任务队列：任务文件、去重、固定数量 worker、任务级重试与汇总 |
 | [internal/labs](internal/labs/) | [context_lab.go](internal/labs/context_lab.go) Day 3 真实33轮召回与大工具输出；[rag_lab.go](internal/labs/rag_lab.go) Day 4 10题有无检索对比 |
-| [internal/observer](internal/observer/) | [server.go](internal/observer/server.go) 代理、存档、SSE、启动 agent 子进程；[hub.go](internal/observer/hub.go) Skills/MCP 中心；[index.html](internal/observer/index.html) 页面 |
+| [internal/observer](internal/observer/) | [server.go](internal/observer/server.go) 代理、存档、SSE、启动 agent 子进程、浏览器画面；[hub.go](internal/observer/hub.go) Skills/MCP 中心；[index.html](internal/observer/index.html) 页面 |
 
 各功能的启用状态是包级变量（如 `retrieval.Enabled`、`memory.Active`、`skills.Index`、`mcp.Conns`），由 `main.go` 按命令行参数设置；一个 agent 进程只跑一个任务，所以这样足够，观测台的每次对话也都是独立子进程。
 
@@ -136,7 +140,7 @@ go run . observe -dev     # 每次对话用 go run . 启动 agent，改完 agent
 
 左侧“Skills 中心”和“MCP 中心”类似 Codex 客户端的管理页。Skills 中心列出 `skills/` 下的 skill（数据来自 agent 的 `-skills-list`，与运行时同一套校验），可以查看正文、启停、删除，或填表新建一份 SKILL.md（写入后立即校验，不合规自动撤销）。MCP 中心添加 stdio server（名字 + 一行命令，相对项目根目录执行），可以启停、删除，“测试连接”调用 agent 的 `-mcp-list` 显示协商版本和工具列表。命令栏填 `http(s)://…` 地址即为远程 server。观测台自带一个远程 MCP server：`http://127.0.0.1:8090/mcp`，由观测台进程直接处理（工具是 calculator，与 `-mcp-serve` 同一个 server 定义），在 MCP 中心用“快速填入 → observer”添加即可在对话中使用。中心接口只接受本机 Host 且同源的请求，防止其他网页借浏览器添加命令。
 
-观测台把 agent 的 `LLM_API_URL` 指向本机代理，从模型协议本身还原过程，agent 代码不含观测台专用埋点。摘要作为独立模型调用展示；视图重建在上下文压力轨中标记，工具结果按调用ID跨请求关联。详见 [观测台笔记](docs/observer/observer-notes.md)。
+观测台把 agent 的 `LLM_API_URL` 指向本机代理，agent 在请求头 `X-Agent-Upstream` 里声明真实上游（方舟或 DeepSeek），代理照此转发；从模型协议本身还原过程，agent 代码不含观测台专用埋点。摘要作为独立模型调用展示；视图重建在上下文压力轨中标记，工具结果按调用ID跨请求关联。详见 [观测台笔记](docs/observer/observer-notes.md)。
 
 ## Day 4：带来源的知识库问答
 
@@ -243,13 +247,24 @@ go run . queue -workers 3 queue/tasks.jsonl -- -reasoning-effort low -max-steps 
 
 模型调用 `spawn_agent(task)` 时，启动一个只拿到 task 的子 agent 进程（复用队列的执行器），输出加 `│ call_id` 前缀转到当前终端，结论作为 tool 结果交回。子 agent 继承工具开关，不继承长期记忆与 `-subagents`；子任务ID = 父检查点ID + task 哈希，父任务续跑时已完成的子任务直接取回结论。详见 [子 agent 项目实践](docs/bonus-subagents/subagents-lab.md)。
 
+## Day 11：浏览器
+
+```sh
+# 需要本机有 Chrome/Chromium；不在 PATH 里时用 CHROME_PATH 指定
+./bin/learning-agent -browser -question '用浏览器查一下 chromedp 最新发布的版本号和发布日期，给出来源链接。'
+# 观测台：新对话勾选“浏览器”，右侧实时显示 agent 的浏览器画面
+go run . observe
+```
+
+每次 `web_search` / `open_page` 开一个新标签页，返回可见正文（最多3000字，可用 `find` 只取含关键词的段落），调用结束或超时就关闭。不允许打开本机和内网地址；不伪装 User-Agent，遇到验证码如实告诉模型。画面保存在 `.data/browser/<任务ID>/<调用ID>.jpg`。详见 [Day 11 项目实践](docs/day-11/day-11-lab.md)。
+
 ## 配置与学习
 
 默认使用 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`、`doubao-seed-2-1-pro-260628` 和 `reasoning_effort: high`；模型请求等待上限为5分钟。普通请求和摘要共享推理配置及工具定义；摘要额外使用tool_choice: none禁止调用工具。输出上限默认省略，只有显式配置时才发送；可通过reasoning-effort显式调整整次运行的推理强度。
 
-读取本地 `.env`，环境变量优先。支持 `ARK_API_KEY`（兼容 `LLM_API_KEY`）、`LLM_API_URL` 和 `LLM_MODEL`。密钥只放在本地私有配置，权限保持0600，`.gitignore` 已排除它。
+读取本地 `.env`，环境变量优先。方舟：`ARK_API_KEY`（兼容 `LLM_API_KEY`）、`LLM_API_URL`、`LLM_MODEL`；DeepSeek（`-provider deepseek`，默认 `https://api.deepseek.com/chat/completions`、`deepseek-flash`）：`DEEPSEEK_API_KEY`、`DEEPSEEK_API_URL`、`DEEPSEEK_MODEL`。向量检索只用方舟。密钥只放在本地私有配置，权限保持0600，`.gitignore` 已排除它。
 
-自行在 `.env` 填写 `ARK_API_KEY`。修改模型上游地址后，重启观测台以读取新地址。
+自行在 `.env` 填写 `ARK_API_KEY`，要用 DeepSeek 再填 `DEEPSEEK_API_KEY`。观测台新对话可在输入框左下角选模型，一段对话固定一个模型。详见 [模型路由项目实践](docs/bonus-routing/routing-lab.md)。
 
 代码保持直接的函数分工，不编写 test 文件或脚本模型。通过格式化、编译和真实运行观察结果：
 

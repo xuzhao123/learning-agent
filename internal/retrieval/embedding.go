@@ -75,7 +75,7 @@ func CloseEmbedders() {
 func newEmbedder(provider, cache string) (*Embedder, error) {
 	switch provider {
 	case "ark":
-		config, err := llm.LoadConfig()
+		config, err := llm.LoadConfig("ark") // 向量只有方舟提供，与聊天模型选哪家无关
 		if err != nil {
 			return nil, err
 		}

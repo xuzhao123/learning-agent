@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"learning-agent/internal/llm"
 )
 
@@ -50,7 +52,9 @@ var validID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 // ID 会拼进文件路径，只允许字母、数字和 ._-，不能含路径分隔符。
 func ValidID(id string) bool { return validID.MatchString(id) && id != "." && id != ".." }
 
-func NewCheckpointID() string { return time.Now().Format("20060102-150405.000") }
+// 不给 -task-id 时用随机 UUID（v4）：不含时间，不受时区影响，几个进程同时启动也不会撞号。
+// 子任务ID在它后面加 -sub- 和 task 哈希（见 subagent.go），仍是确定性的，续跑时能找回同一个子任务。
+func NewCheckpointID() string { return uuid.NewString() }
 
 func CheckpointPath(id string) string { return filepath.Join(checkpointDir, id+".json") }
 

@@ -16,10 +16,39 @@ var Tools []map[string]any
 // 本进程的任务ID（即检查点ID），由 main 设置；只在发往本机观测代理的请求头里使用。
 var TaskID string
 
-type Config struct{ APIURL, Model, APIKey, Effort string }
+// Upstream 是供应商的真实地址；APIURL 是这次实际请求的地址，经观测台时是本机代理。
+type Config struct{ Provider, APIURL, Upstream, Model, APIKey, Effort string }
 
-// 环境变量优先，其次是本地 .env，最后是地址与模型的默认值。
-func LoadConfig() (Config, error) {
+// 模型路由表：每家供应商的默认地址、模型与读取的变量名。都是 OpenAI 兼容的 chat/completions，
+// 请求体、tool_calls 与 usage 格式一致，所以只需要换地址、模型和密钥。
+// 方舟沿用最早的变量名 LLM_API_URL / LLM_MODEL，旧的 .env 不用改。
+type Provider struct {
+	Name, APIURL, Model, URLVar, ModelVar string
+	KeyVars                               []string
+}
+
+var Providers = []Provider{
+	{"ark", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", "doubao-seed-2-1-pro-260628", "LLM_API_URL", "LLM_MODEL", []string{"ARK_API_KEY", "LLM_API_KEY"}},
+	{"deepseek", "https://api.deepseek.com/chat/completions", "deepseek-flash", "DEEPSEEK_API_URL", "DEEPSEEK_MODEL", []string{"DEEPSEEK_API_KEY"}},
+}
+
+func FindProvider(name string) (Provider, bool) {
+	for _, p := range Providers {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Provider{}, false
+}
+
+// 环境变量优先，其次是本地 .env，最后是路由表里的默认值。
+// 观测台启动 agent 时在进程环境里设 LLM_API_URL（本机代理）和续聊的 LLM_MODEL：它们对任何供应商都生效；
+// .env 里的 LLM_API_URL / LLM_MODEL 只属于方舟，选 DeepSeek 时不会被误用。
+func LoadConfig(provider string) (Config, error) {
+	p, ok := FindProvider(provider)
+	if !ok {
+		return Config{}, fmt.Errorf("未知的模型供应商 %q，可选 ark、deepseek", provider)
+	}
 	values := map[string]string{}
 	file, err := os.Open(".env")
 	if err != nil && !os.IsNotExist(err) {
@@ -56,13 +85,23 @@ func LoadConfig() (Config, error) {
 		}
 		return fallback
 	}
-	config := Config{
-		APIURL: get("https://ark.cn-beijing.volces.com/api/v3/chat/completions", "LLM_API_URL"),
-		Model:  get("doubao-seed-2-1-pro-260628", "LLM_MODEL"),
-		APIKey: get("", "ARK_API_KEY", "LLM_API_KEY"),
+	config := Config{Provider: p.Name, Upstream: get(p.APIURL, p.URLVar), Model: get(p.Model, p.ModelVar), APIKey: get("", p.KeyVars...)}
+	config.APIURL = config.Upstream
+	if value := strings.TrimSpace(os.Getenv("LLM_API_URL")); value != "" {
+		config.APIURL = value
+		// 方舟的 URLVar 就是 LLM_API_URL：被观测台代理地址覆盖时，真实上游回到 .env 或默认值。
+		if p.URLVar == "LLM_API_URL" {
+			config.Upstream = values["LLM_API_URL"]
+			if config.Upstream == "" {
+				config.Upstream = p.APIURL
+			}
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("LLM_MODEL")); value != "" {
+		config.Model = value
 	}
 	if config.APIKey == "" {
-		return config, errors.New("请在 .env 或环境变量配置 ARK_API_KEY")
+		return config, fmt.Errorf("请在 .env 或环境变量配置 %s", p.KeyVars[0])
 	}
 	return config, nil
 }

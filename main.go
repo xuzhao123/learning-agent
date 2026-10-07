@@ -11,10 +11,12 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"learning-agent/internal/agent"
+	"learning-agent/internal/browser"
 	"learning-agent/internal/labs"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
@@ -48,6 +50,7 @@ func run() error {
 	maxSteps := flag.Int("max-steps", 10, "模型请求总次数，包含最终回答和上下文摘要")
 	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
 	flag.BoolVar(&tools.LabEnabled, "lab-tools", false, "启用 Day 2 故障实验工具")
+	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）或 deepseek；地址、模型与密钥见 README")
 	effort := flag.String("reasoning-effort", "high", "所有请求统一的推理强度：minimal、low、medium或high")
 	window := flag.Int("context-window", 12288, "上下文总窗口（学习实验值），输入容量扣除输出预算预留与推理余量")
 	output := flag.Int("max-output-tokens", 0, "可选输出上限（含推理）；0不向API传限制，输入预算仍预留4096")
@@ -82,8 +85,9 @@ func run() error {
 	skillsList := flag.Bool("skills-list", false, "只扫描skills/并以JSON输出每个skill的元数据、正文与错误，不请求模型；须单独使用")
 	timeout := flag.Duration("timeout", 0, "Day 8：整次运行的时限，如 2m；0 表示不限（仍可 Ctrl+C 取消）")
 	flag.DurationVar(&agent.ToolTimeout, "tool-timeout", agent.ToolTimeout, "Day 8：单次工具尝试的时限；超时记为结果未知")
-	taskID := flag.String("task-id", "", "Day 9：检查点ID（字母、数字和 ._-）；不给则按启动时间生成")
+	taskID := flag.String("task-id", "", "Day 9：检查点ID（字母、数字和 ._-）；不给则生成随机 UUID")
 	resume := flag.String("resume", "", "Day 9：从这个ID的检查点续跑；配置取自检查点，须单独使用")
+	flag.BoolVar(&browser.Enabled, "browser", false, "Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料（CHROME_PATH 可指定浏览器）")
 	subagents := flag.Bool("subagents", false, "增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程）")
 	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
 	flag.Parse()
@@ -188,8 +192,8 @@ func run() error {
 	if (len(mcpCommands) > 0 || skills.Enabled) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
 		return errors.New("mcp-server与skills用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
-	if (*taskID != "" || *subagents || *timeout != 0) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
-		return errors.New("task-id、subagents与timeout用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
+	if (*taskID != "" || *subagents || browser.Enabled || *timeout != 0) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
+		return errors.New("task-id、subagents、browser与timeout用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
 	if *timeout < 0 || agent.ToolTimeout <= 0 || agent.SubagentSteps < 1 || agent.SubagentSteps > 20 {
 		return errors.New("timeout不能为负，tool-timeout须大于0，subagent-steps范围为1到20")
@@ -215,7 +219,7 @@ func run() error {
 			return errors.New("memory-search需要非空问题")
 		}
 		// 没有密钥时 vector/bm25/hybrid 仍可在本地对比；背景生成与重排会按降级处理并写明原因。
-		if config, err := llm.LoadConfig(); err == nil {
+		if config, err := llm.LoadConfig(*provider); err == nil {
 			config.Effort = *effort
 			memory.Active.Client = &llm.Client{Config: config, Limit: *maxSteps}
 		} else {
@@ -296,6 +300,10 @@ func run() error {
 	if memory.Active != nil {
 		llm.Tools = append(llm.Tools, memory.ToolDefinitions...)
 	}
+	if browser.Enabled {
+		llm.Tools = append(llm.Tools, browser.Definitions...)
+		defer browser.Close()
+	}
 	if !*contextLab && !*ragLab && strings.TrimSpace(*question) == "" {
 		fmt.Print("请输入任务： ")
 		*question, _ = bufio.NewReader(os.Stdin).ReadString('\n')
@@ -304,11 +312,12 @@ func run() error {
 	if !*contextLab && !*ragLab && *question == "" {
 		return errors.New("问题不能为空")
 	}
-	config, err := llm.LoadConfig()
+	config, err := llm.LoadConfig(*provider)
 	if err != nil {
 		return err
 	}
 	config.Effort = *effort
+	fmt.Printf("Model: provider=%s model=%s upstream=%s\n", config.Provider, config.Model, config.Upstream)
 	if *contextLab {
 		return labs.RunContext(ctx, config, options, *maxSteps)
 	}
@@ -338,7 +347,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {
@@ -373,6 +382,9 @@ func run() error {
 		return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
 	}
 	llm.TaskID = agent.CheckpointID
+	if browser.Enabled {
+		browser.FrameDir = filepath.Join(".data", "browser", agent.CheckpointID)
+	}
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"learning-agent/internal/browser"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
 	"learning-agent/internal/memory"
@@ -15,7 +16,7 @@ import (
 	"learning-agent/internal/tools"
 )
 
-// 按工具名分发：检索、记忆、skill 与 MCP 在各自的包里；内置工具和 Day 2/3 实验工具交给 tools.Run。
+// 按工具名分发：检索、记忆、skill、浏览器与 MCP 在各自的包里；内置工具和 Day 2/3 实验工具交给 tools.Run。
 func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 	// Go 的 panic 也在单次工具执行边界转为 error，交给重试与 Observation 处理。
 	defer func() {
@@ -74,6 +75,8 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 			return nil, llm.Permanent(errors.New("name 需要是字符串"))
 		}
 		return skills.Load(strings.TrimSpace(args.Name))
+	case "web_search", "open_page":
+		return browser.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
 	case "spawn_agent":
 		if SubagentArgs == nil {
 			return nil, llm.Permanent(errors.New("请使用 -subagents 开启子 agent"))

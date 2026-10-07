@@ -203,3 +203,22 @@
 - **子任务ID的选择也有讲究**：最初用模型给的调用ID，kill -9 后重放没问题；但 Ctrl+C 后模型会发起新的调用、调用ID变化，子任务就从头跑。改成“父任务ID + task 内容哈希”后，同样的 task 能续上原来的子任务。
 
 **相关代码**：[child.go](../internal/agent/child.go) 的 `RunChild`；[queue.go](../internal/queue/queue.go) 的 `runTask`；[subagent.go](../internal/agent/subagent.go) 的 `spawnAgent`。笔记见 [Day 10](day-10/day-10-notes.md) 与 [子 agent](bonus-subagents/subagents-notes.md)。
+
+## Q11 开一个沙箱就是开一个 Docker 吗？Codex、Claude Code 好像不是这么做的
+
+*2026-10-07 · Day 11 浏览器 / Day 12 沙箱之前*
+
+**问题**：计划里 D12 写的是“Docker 隔离”，讲浏览器时也说“放进容器”。但 Codex、Claude Code 在本机执行命令时，好像并不开 Docker？
+
+**值得琢磨的地方**：“沙箱”是目标（限制一段代码能碰到什么），容器只是实现手段之一。隔离强度、启动开销、要不要额外安装，是一组连续的取舍，不同产品在不同场景选的点不一样。
+
+**结论要点**
+- **从弱到强的几层**：进程级（seccomp 限系统调用、Landlock 限文件访问）→ OS 沙箱工具（Linux 的 bubblewrap 用 namespace 给进程一个受限视图；macOS 的 Seatbelt / `sandbox-exec`）→ 容器（Docker、Podman：独立的镜像、网络、cgroups 资源上限）→ 用户态内核（gVisor）→ 微虚拟机（Firecracker、Kata）。越往后隔离越强，启动越慢、依赖越重。
+- **Codex CLI（本机）**：每条命令放进平台自带的沙箱：macOS 用 Seatbelt；Linux 用 bubblewrap 加 seccomp（bwrap 不可用时退回进程内的 Landlock）；按策略只读 / 只可写工作区 / 不隔离；受限网络模式下 seccomp 禁止除 Unix socket 以外的套接字。
+- **Claude Code（本机）**：Bash 沙箱同样用 macOS Seatbelt、Linux bubblewrap，网络流量经代理只放行允许的域名；`@anthropic-ai/sandbox-runtime` 可以把整个会话（含工具、hook、MCP server）包进同样的隔离。
+- **为什么本机不用 Docker**：要在开发者自己的项目目录里工作，需要直接读写真实文件、用本机的工具链；每条命令起一个容器太慢，也不能假设用户装了 Docker。OS 沙箱几十毫秒、零安装（macOS）或一个小包（Linux）。
+- **云端产品才普遍用容器或虚拟机**：任务跑在供应商的机器上，代码不可信、多个用户共用硬件，需要更强的隔离和可整体销毁的环境，所以用容器、gVisor 或微虚拟机。
+- **和本项目的关系**：bubblewrap 和 Chrome 的沙箱一样依赖非特权 user namespace。这台机器上 `kernel.apparmor_restrict_unprivileged_userns = 1`，Ubuntu 只给 `/opt/google/chrome/chrome`、`/usr/lib/chromium/…` 和 `bwrap` 预置了放行的 AppArmor profile。我们用的 Playwright headless shell 在 `~/.cache` 下，不在名单里，所以 Chrome 沙箱起不来。正式安装 Chrome/Chromium 很可能就不再需要 `CHROME_NO_SANDBOX=1`。
+- **对 D12 的启示**：沙箱不等于 Docker。D12 应先讲隔离的层次与取舍，再按场景选：本机执行可用 bubblewrap + seccomp（与 Codex、Claude Code 同一路线），需要整体销毁、资源上限和网络策略时再用容器。
+
+**参考**：[Claude Code Sandboxing](https://code.claude.com/docs/en/sandboxing)；[Codex CLI Sandbox Internals](https://codex.danielvaughan.com/2026/05/03/codex-cli-sandbox-internals-seatbelt-bubblewrap-landlock-windows-dacl/)（第三方源码解读）。

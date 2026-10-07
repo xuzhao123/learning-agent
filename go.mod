@@ -3,6 +3,9 @@ module learning-agent
 go 1.25.5
 
 require (
+	github.com/chromedp/cdproto v0.157.8
+	github.com/chromedp/chromedp v0.20.1
+	github.com/google/uuid v1.6.0
 	github.com/knights-analytics/hugot v0.7.0
 	github.com/mark3labs/mcp-go v1.1.1
 )
@@ -11,6 +14,7 @@ require (
 	github.com/daulet/tokenizers v1.26.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
+	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gomlx/exceptions v0.0.3 // indirect
@@ -19,7 +23,6 @@ require (
 	github.com/gomlx/gomlx v0.27.2 // indirect
 	github.com/gomlx/onnx-gomlx v0.4.2-0.20260327164137-4e2832549fc1 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/knights-analytics/ortgenai v0.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect

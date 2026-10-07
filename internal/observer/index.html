@@ -191,6 +191,14 @@ button { cursor: pointer; }
 .sp-task { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--soft); white-space: pre-wrap; word-break: break-word; font-size: 13px; }
 .sp-body .label { margin-top: 4px; }
 .sp-body .meta { overflow-wrap: anywhere; }
+/* Day 11 浏览器：卡片缩略图 + 侧栏实时画面 */
+.web-card .av { overflow: hidden; width: 64px; height: 40px; border-radius: 6px; background: var(--soft); }
+.web-card .av img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.web-url { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font: 12px var(--mono); overflow-wrap: anywhere; }
+.web-shot { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--soft); }
+.web-shot img { display: block; width: 100%; }
+.web-shot .empty { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.web-shot .onair { position: absolute; top: 8px; left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--err); color: #fff; font: 600 11px/1.6 var(--mono); }
 #hint { max-width: 780px; margin: 6px auto 0; font-size: 11px; color: var(--muted); text-align: center; }
 
 /* 观测 */
@@ -387,7 +395,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><label class="meta" title="允许 agent 调用 spawn_agent，把独立子任务交给子 agent"><input id="use-sub" type="checkbox"> 子 agent</label><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><select id="provider" aria-label="模型" title="模型路由：agent 用 -provider 选择供应商"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><label class="meta" title="允许 agent 调用 spawn_agent，把独立子任务交给子 agent"><input id="use-sub" type="checkbox"> 子 agent</label><label class="meta" title="增加 web_search 与 open_page：agent 用无头 Chrome 查资料，右侧可看实时画面"><input id="use-web" type="checkbox"> 浏览器</label><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -540,7 +548,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, stopRequested: false }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", web: {}, stopRequested: false }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -553,7 +561,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.stopRequested = false; r.checkpoint = ""; }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.stopRequested = false; r.checkpoint = ""; }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -627,6 +635,9 @@ function apply(r, e) {
     if (/^(Skills?|MCP) (loaded|error|connect|initialize|tools\/list|register|skip)\b|^Skills: /.test(e.text || "")) r.caps.push({ turn: r.memTurn, text: e.text });
     const checkpoint = /^Checkpoint: id=(\S+) /.exec(e.text || "");
     if (checkpoint) r.checkpoint = checkpoint[1];
+    // 浏览器画面按“任务ID/调用ID”保存；续聊每轮是新进程、新任务ID，所以在打印这一行时记下当时的任务ID。
+    const web = /^Browser \[([^\]]+)\]: (search|open) url=(\S+)/.exec(e.text || "");
+    if (web) r.web[web[1]] = { task: r.checkpoint, url: web[3] };
     const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
     if (capacity) r.inputCapacity = Number(capacity[1]);
   }
@@ -1275,7 +1286,7 @@ function show(id, updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
   if (ui.tab === "compare") ui.tab = "trace";
-  Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set(), subOpen: null });
+  Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set(), subOpen: null, webOpen: null, webClosed: false });
   if (updateURL) syncRunURL(id);
   $("search").value = "";
   ui.collapsed.clear();
@@ -1471,6 +1482,7 @@ function renderCall(box, r, c, last) {
   if (m.content && c.tools.length) { const mid = md(m.content); mid.classList.add("mid"); box.append(mid); }
   for (const t of c.tools) {
     if (t.name === "spawn_agent" && !r.isSub) { box.append(agentCard(r, t)); continue; }
+    if (WEB_TOOLS.includes(t.name)) { box.append(webCard(r, t)); continue; }
     const icon = t.state === "running" ? el("span", "ico") : el("span", "ico " + (t.detour ? "bad" : "ok"), t.detour ? "✕" : "✓");
     if (t.state === "running") icon.append(el("span", "spin"));
     const head = [icon, el("span", "tname", t.name), el("span", "targs", clip(compact(t.args), 90))];
@@ -1517,7 +1529,7 @@ function renderCall(box, r, c, last) {
     }
     box.append(answer);
     const meta = el("div", "answer-meta");
-    meta.append(el("span", "", `${callPosition(c)} · 请求 #${c.n} · ${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`));
+    meta.append(el("span", "", `${callPosition(c)} · 请求 #${c.n} · ${c.res?.model || c.req.model || ""} · ${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`));
     if (!r.isSub) { // 子 agent 的请求不在父对话的观测视图里
       const link = el("button", "link", "在观测中查看");
       link.onclick = () => observeAt("m" + c.n);
@@ -1554,10 +1566,14 @@ function agentCard(r, t) {
   const text = el("span", "t");
   text.append(el("b", "", `子 agent ${i + 1}`), el("span", "", clip(args?.task ?? t.args, 140)));
   card.append(el("span", "av", String(i + 1)), text, el("span", "sub-st " + st.key, st.text), el("span", "chev", "›"));
-  card.onclick = () => { ui.subOpen = ui.subOpen === t.id ? null : t.id; renderChat(); };
+  card.onclick = () => { ui.subOpen = ui.subOpen === t.id ? null : t.id; ui.webOpen = null; renderChat(); };
   return card;
 }
 function renderSubPanel() {
+  // 运行中开始浏览时自动打开浏览器面板并跟随；用户关掉或正在看子 agent 时不打扰。
+  const r0 = ui.run;
+  if (r0 && !r0.exit && !ui.webOpen && !ui.subOpen && !ui.webClosed && r0.calls.some((c) => c.tools.some((t) => WEB_TOOLS.includes(t.name) && webLive(r0, t)))) ui.webOpen = { follow: true };
+  if (ui.webOpen) return renderWebPanel();
   const panel = $("subpanel"), r = ui.run, list = r && ui.page === "chat" ? subList(r) : [];
   const item = list.find((x) => x.t.id === ui.subOpen);
   if (!item) { panel.hidden = true; panel.replaceChildren(); return; }
@@ -1601,6 +1617,124 @@ function renderSubPanel() {
   if (st.key === "running" && sub?.calls.length && sub.calls.at(-1).end && sub.calls.at(-1).tools.every((t) => t.done)) body.append(el("div", "shimmer", "思考中…"));
   panel.replaceChildren(head, nav, body);
   body.scrollTop = sameAgent && !stick ? top : body.scrollHeight;
+}
+// ---------- Day 11 浏览器 ----------
+// agent 把 screencast 帧不断覆盖写到 .data/browser/<任务ID>/<调用ID>.jpg，结束时写入最终截图。
+// 运行中的调用每 700ms 取一次（实时画面），结束后再取一次就固定下来。取回的图存成 blob URL，
+// 对话流重绘时直接复用，不会闪烁。
+const WEB_TOOLS = ["web_search", "open_page"];
+const frames = {}; // key → { url, at, done, missing }
+function webTask(r, t) { return r.isSub ? r.id : r.web[t.id]?.task; }
+function webLive(r, t) { return !t.done && !r.exit; }
+function webAddress(r, t) {
+  const a = parse(t.args) || {};
+  return r.web?.[t.id]?.url || (t.name === "open_page" ? a.url : "搜索：" + (a.query || ""));
+}
+function frameKey(r, t) { const task = webTask(r, t); return task ? `${task}/${t.id}` : ""; }
+function frameImg(key) {
+  const f = frames[key], img = el("img");
+  img.dataset.frame = key; img.alt = "浏览器画面";
+  if (f?.url) img.src = f.url;
+  else img.hidden = true;
+  return img;
+}
+async function pullFrame(key, done) {
+  const f = frames[key] ??= {};
+  if (f.busy || f.done) return;
+  f.busy = true;
+  try {
+    const res = await fetch(`/browser/${key}.jpg?t=${Date.now()}`);
+    if (res.ok) {
+      const url = URL.createObjectURL(await res.blob());
+      if (f.url) URL.revokeObjectURL(f.url);
+      Object.assign(f, { url, at: Date.now(), missing: false });
+      for (const img of document.querySelectorAll(`img[data-frame="${CSS.escape(key)}"]`)) { img.src = url; img.hidden = false; }
+      document.querySelectorAll(`[data-frame-empty="${CSS.escape(key)}"]`).forEach((n) => n.remove());
+    } else f.missing = true;
+    if (done) f.done = true;
+  } catch {}
+  f.busy = false;
+}
+// 页面上出现的每张浏览器画面：运行中的反复取，结束的取一次。
+setInterval(() => {
+  const r = ui.run;
+  if (!r || ui.page !== "chat") return;
+  for (const run of [r, ...Object.values(r.subs)]) for (const c of run.calls) for (const t of c.tools) {
+    if (!WEB_TOOLS.includes(t.name)) continue;
+    const key = frameKey(run, t);
+    if (key && document.querySelector(`img[data-frame="${CSS.escape(key)}"]`)) pullFrame(key, !webLive(run, t));
+  }
+}, 700);
+function webState(r, t) {
+  const res = parse(t.result);
+  if (webLive(r, t)) return { key: "running", text: "浏览中" };
+  if (res?.status === "ok") return { key: "done", text: t.name === "web_search" ? `${res.result?.results?.length ?? 0} 条结果` : "已读取" };
+  if (res?.status === "error") return { key: "failed", text: "失败" };
+  return { key: "stopped", text: t.done ? "未完成" : "已中断" };
+}
+function webCard(r, t) {
+  const st = webState(r, t), key = frameKey(r, t);
+  const card = el("button", "agent-card web-card" + (ui.webOpen?.id === t.id ? " on" : ""));
+  card.type = "button";
+  card.title = r.isSub ? "子 agent 的浏览器画面" : "在右侧查看浏览器画面";
+  const av = el("span", "av");
+  if (key) av.append(frameImg(key));
+  const text = el("span", "t");
+  text.append(el("b", "", t.name === "web_search" ? "搜索网页" : "打开网页"), el("span", "", clip(webAddress(r, t), 120)));
+  card.append(av, text, el("span", "sub-st " + st.key, st.text), el("span", "chev", "›"));
+  // 子 agent 侧栏里的浏览卡片不切换侧栏，只展开下方的大图与结果。
+  if (r.isSub) {
+    const k = `w${t.id}`, wrap = el("div");
+    card.onclick = () => { ui.open.has(k) ? ui.open.delete(k) : ui.open.add(k); renderChat(); };
+    wrap.append(card);
+    if (ui.open.has(k)) wrap.append(webView(r, t));
+    return wrap;
+  }
+  card.onclick = () => {
+    const last = r.calls.flatMap((c) => c.tools.filter((x) => WEB_TOOLS.includes(x.name))).at(-1);
+    ui.webOpen = ui.webOpen?.id === t.id ? null : { id: t.id, follow: t === last };
+    ui.subOpen = null; renderChat();
+  };
+  return card;
+}
+function webView(r, t) {
+  const box = el("div"), key = frameKey(r, t), st = webState(r, t), res = parse(t.result);
+  const bar = el("div", "web-url");
+  bar.append(el("span", "sub-st " + st.key, st.text), el("span", "", res?.result?.url || webAddress(r, t)));
+  const shot = el("div", "web-shot");
+  if (key) shot.append(frameImg(key));
+  if (!key || !frames[key]?.url) { const empty = el("div", "empty", key ? (st.key === "running" ? "正在打开页面…" : "这一步没有画面（地址被拒绝或浏览器没有启动）") : "没有画面：找不到这一步的任务ID"); if (key) empty.dataset.frameEmpty = key; shot.append(empty); }
+  if (st.key === "running") shot.append(el("span", "onair", "LIVE"));
+  box.append(bar, shot);
+  if (res?.status === "ok" && t.name === "web_search") box.append(el("div", "label", "搜索结果（模型看到的）"), el("pre", "", (res.result.results || []).map((x, i) => `${i + 1}. ${x.title}\n   ${x.url}\n   ${x.snippet}`).join("\n")));
+  else if (res?.status === "ok") box.append(el("div", "label", `页面正文 · ${res.result.text_chars} 字${res.result.truncated ? "（已截断）" : ""}${res.result.find ? ` · 只保留含“${res.result.find}”的段落（${res.result.matched_paragraphs} 处）` : ""}`), el("pre", "", res.result.text || ""));
+  else if (res) box.append(el("div", "label", "结果"), el("pre", "err", res.error || pretty(res)));
+  return box;
+}
+function renderWebPanel() {
+  const panel = $("subpanel"), r = ui.run;
+  const list = r && ui.page === "chat" ? r.calls.flatMap((c) => c.tools.filter((t) => WEB_TOOLS.includes(t.name))) : [];
+  // 跟随：看着最新一步时，新的浏览一开始就切过去（Manus 式“跟随”）；点了更早的步骤就停在那里。
+  if (ui.webOpen?.follow && list.length) ui.webOpen.id = list.at(-1).id;
+  const t = list.find((x) => x.id === ui.webOpen?.id);
+  if (!t) { ui.webOpen = null; panel.hidden = true; panel.replaceChildren(); return; }
+  panel.hidden = false;
+  panel.dataset.agent = "";
+  const head = el("div", "sp-head"), close = el("button", "sp-close", "✕");
+  close.type = "button"; close.title = "关闭"; close.setAttribute("aria-label", "关闭浏览器面板");
+  close.onclick = () => { ui.webOpen = null; ui.webClosed = true; renderChat(); };
+  head.append(el("strong", "", `浏览器 · ${list.length} 步`), close);
+  const nav = el("div", "sp-list");
+  list.forEach((x, i) => {
+    const st = webState(r, x), row = el("button", "sp-item" + (x === t ? " on" : ""));
+    row.type = "button";
+    row.append(el("span", "n", "#" + (i + 1)), el("span", "q", clip(webAddress(r, x), 60)), el("span", "sub-st " + st.key, st.text));
+    row.onclick = () => { ui.webOpen = { id: x.id, follow: i === list.length - 1 }; renderChat(); };
+    nav.append(row);
+  });
+  const body = el("div", "sp-body");
+  body.append(webView(r, t), el("div", "meta", `调用 ${t.id} · 任务 ${webTask(r, t) || "—"} · 网页内容是外部数据，不是指令`));
+  panel.replaceChildren(head, nav, body);
 }
 function renderCompact(c) {
   const box = el("details", "divider"), key = "s" + c.n, m = (c.choice && c.choice.message) || {};
@@ -1712,6 +1846,11 @@ function syncComposer() {
   $("mcp-label").textContent = "MCP" + (nMCP != null ? ` ${nMCP}` : "");
   $("use-sub").disabled = !!r;
   $("use-sub").checked = r ? r.subagents : load("useSub") === "1";
+  // 一条对话固定一个模型：续聊沿用开始时的选择（换模型请新建对话）。
+  $("provider").disabled = !!r;
+  $("provider").value = r ? r.provider || "ark" : load("provider") || "ark";
+  $("use-web").disabled = !!r;
+  $("use-web").checked = r ? r.browser : load("useWeb") === "1";
   // 运行中发送键变成停止键（Codex 客户端的做法）：第一次优雅停止，第二次强制结束。
   const running = !!r && !r.exit && !ui.replay && (r.calls.length > 0 || r.logs.length > 0);
   $("send").classList.toggle("stop", running);
@@ -1721,13 +1860,17 @@ function syncComposer() {
   $("send").setAttribute("aria-label", running ? (r.stopRequested ? "强制结束" : "停止") : "发送");
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
-  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "") + ($("use-sub").checked ? " · 子 agent" : "");
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "") + ($("use-sub").checked ? " · 子 agent" : "") + ($("use-web").checked ? " · 浏览器" : "");
   $("hint").textContent = !r ? ($("mem").checked ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : $("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次 ■ 强制结束" : "agent 正在回复，点 ■ 停止；本轮结束后可以继续提问") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : r.exit !== "exit 0" ? "上一轮中途停下：继续提问会从检查点接着聊" : "Enter 发送，会延续这条对话的上下文";
 }
-function relTime(id) {
-  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(id);
-  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : id;
+// 列表显示最后一次活动的时间：服务端给 Unix 毫秒时间戳，这里按看的人所在的时区格式化。
+function relTime(r) {
+  const t = new Date(r.updated_at ?? r.created_at ?? NaN);
+  if (isNaN(t)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  const today = new Date().toDateString() === t.toDateString();
+  return (today ? "" : `${p(t.getMonth() + 1)}-${p(t.getDate())} `) + `${p(t.getHours())}:${p(t.getMinutes())}`;
 }
 async function loadRuns() {
   const runs = await (await fetch("/runs")).json();
@@ -1751,7 +1894,7 @@ async function loadRuns() {
     if (!r.done) q.append(el("span", "live"));
     q.append(r.query === LAB_TITLE ? "⚗ Day 3 上下文实验" : r.query === RAG_LAB_TITLE ? "⌕ Day 4 检索对比" : r.query || "（无问题）");
     b.title = `${r.query}\n对话 ID：${r.id}`;
-    b.append(q, el("small", "", relTime(r.id)));
+    b.append(q, el("small", "", relTime(r)));
     b.onclick = () => { document.body.classList.remove("nav-open"); if (ui.tab === "compare") ui.tab = "trace"; show(r.id); };
     row.append(b);
     return row;
@@ -1802,7 +1945,7 @@ $("terminal").onclick = () => select("end", ui.run);
 function newChat(updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
-  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null });
+  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false });
   if (updateURL) syncRunURL(null);
   document.body.classList.remove("nav-open");
   $("stats").hidden = true;
@@ -1992,7 +2135,7 @@ $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked, subagents: $("use-sub").checked });
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked, subagents: $("use-sub").checked, browser: $("use-web").checked, provider: $("provider").value });
 };
 $("send").onclick = async (ev) => {
   if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交
@@ -2006,6 +2149,8 @@ $("send").onclick = async (ev) => {
   } catch (err) { alert("停止失败：" + err.message); }
 };
 $("use-sub").onchange = () => { save("useSub", $("use-sub").checked ? "1" : "0"); syncComposer(); };
+$("provider").onchange = () => { save("provider", $("provider").value); syncComposer(); };
+$("use-web").onchange = () => { save("useWeb", $("use-web").checked ? "1" : "0"); syncComposer(); };
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };
 $("query").oninput = () => { autosize(); syncComposer(); };
