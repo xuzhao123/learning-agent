@@ -33,7 +33,8 @@
 - B0 结构化协议：agent 以 `-app-server` 运行时 stdout 只走 JSON-RPC（一行一条），日志改走 stderr；观测台和 RunChild 是界面。界面需要的信息只读协议通知，不再解析终端文本；B0 之前的存档经页面的兼容层还原。审批请求（network/requestApproval）只能由界面上的人回答；没有界面时如实回答 unavailable。检查点不保存 `-app-server`。
 - 续聊每轮用新的检查点ID，以 `continues` 串成续接链，旧检查点不覆盖；`spawn_agent(task_id)` 只接受续接链上派出的子任务。浏览器与沙箱代理的出口判断共用 `internal/netguard`。
 - Day 15 指标的结局、耗时与成本以检查点为准，trace 只用于工具层归因；`go run . metrics` 只读 `.data/`，不请求模型。完成率不等于答对率，答对率要等 D16 的评测集与打分。
-- 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP），`go run . queue` 是任务队列，`go run . metrics` 统计指标。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
+- Day 16–17 评测集放 `eval/cases.jsonl`（提交，属于任务输入）：固定题目、参考答案与打分器，不写死模型回答或工具顺序；运行记录、人工归因备注与回放放 `.data/eval/`，不提交。打分先用确定性检查，开放题由与被测模型不同的供应商（默认 DeepSeek）三票评审；每个试次是一个新任务，经 `agent.RunChild` 执行，过程取自 B0 协议事件，结局与用量以检查点为准。留出题调试时不跑。回放验证从检查点分叉（`agent.ForkCheckpoint`），不改原检查点。观测台的“D16 评测”页面与 `go run . eval` 读写同一份记录，每个试次在观测台里是一条可打开的对话。对话的“归因”按钮：诊断读观测台重建的完整轨迹与当时的工具列表（不许编造轨迹外的事实），写评分标准并给出初判；失败时从那次决定的请求快照分叉（`agent.ForkSnapshot`），以“纠正 3 次 + 安慰剂 3 次”回放验证，结论以回放为准。
+- 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP），`go run . queue` 是任务队列，`go run . metrics` 统计指标，`go run . eval` 跑评测与归因。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。
 - 保留当前学习任务必需的参数解析、并行工具调用、消息历史、错误反馈和终止条件。
 - 修改实现时同步修改 docs，让学习笔记与当前代码一致。

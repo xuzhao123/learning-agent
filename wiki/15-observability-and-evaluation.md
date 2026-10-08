@@ -241,6 +241,45 @@ ctx, span := tracer.Start(ctx, "invoke_agent worker")
 
 只从 trace 统计成功率会产生幸存者偏差：崩溃的任务没有根 span，既不进分子也不进分母。所以结局以持久状态为准，trace 只做归因，并在报告里注明工具层指标可能偏低（[Q19](../docs/deep-questions.md#q19)）。“完成”只说明给出了最终回答；“答对”需要评测集和打分器，二者不能混报。原理见 [Day 15 笔记](../docs/day-15/day-15-notes.md)。
 
+### 评测集、打分器与归因闭环
+
+一次评测由题目（task）、尝试（trial）、打分器（grader）、轨迹（transcript）、结果（outcome）组成。题目文件固定的是**输入、参考答案和判定标准**，不是模型的回答或工具顺序。最小的数据结构：
+
+```go
+type Case struct {
+	ID, Question, Reference string
+	Holdout                 bool     // 调试时不跑，只在最后报告
+	Ablation                string   // 再跑一组去掉这个参数的对照，如 -rag
+	Graders                 []Grader // 至少一项看结果、一项看过程
+}
+type Trial struct {
+	Case, TaskID, Outcome, Answer string
+	Tools                         []ToolUse // 来自事件流，不受上下文压缩影响
+	Checks                        []Check
+	Pass                          bool      // 全部检查通过且正常完成
+}
+```
+
+打分按成本分层：数值、包含、正则、工具调用次数、结局这些确定性检查先做；开放题再交给与被测模型**不同供应商**的评审模型，每项投 3 票、两票一致才算，允许“不确定”。过程只查关键约束（“有副作用的操作最多一次”“不该调用工具”），不查顺序。
+
+统计时同一道题的 k 次尝试不独立，标准误要按题聚类：先在题内平均得到 sᵢ，再取 `SE = sqrt(Σ(sᵢ−s̄)²/(n−1)/n)`。比较两个版本时逐题配对，求 dᵢ = sᵢ(新) − sᵢ(旧) 的均值与标准误；回归报警看“基线 k 次全对、这次没全对”的题，不看总分升降。消融的分差不计“对照组不可能通过”的检查，否则 Δ 虚高。
+
+归因的闭环：
+
+```text
+失败尝试 → 卡片（第一个异常信号、工具序列、同题其他尝试）
+        → 开放编码（只记第一个上游错误）→ 轴心编码（归类计数）
+        → 反事实回放：从检查点保留前 k 轮、插入一处改动、跑 n 次，看结局是否翻转（配一个安慰剂对照）
+        → 修复 → 同一批题逐题配对回归 → 失败样本沉淀为回归题
+```
+
+故障窗口与取舍：
+
+- 评审只看到你给它的证据：漏给“执行器重试了 3 次”，正确答案也会被判成编造。打分器错误要和 agent 错误分开计数。
+- 回放必须原样保留前缀、只改一处；从头重跑会把前面的随机性混进来。回放翻转只说明“这一步是决定性的”，插入的那句纠正不是修复本身。
+- 自动定位出错步骤目前不可靠（公开评测中找对步骤约 14%），程序只给线索，根因由人判断。
+- 调试时看过的题会被针对性优化，留出题的分数才代表泛化；题少时区间很宽（17 题约 ±13 个百分点）。
+
 ### 对照已有实现
 
 [observer.proxy、add、streamEvents](../internal/observer/server.go)记录请求、用途、任务与事件；[embedding请求](../internal/retrieval/embedding.go)另走向量接口，[检索实验](../internal/labs/rag_lab.go)提供现有固定对比。
@@ -249,7 +288,9 @@ Day 13 起，[internal/telemetry](../internal/telemetry/telemetry.go) 用 OpenTe
 
 Day 15 起，`go run . metrics`（[internal/metrics](../internal/metrics/metrics.go)）按上一节的分工统计完成率、异常结局与可恢复性、端到端延迟、成本和工具可靠性；检查点补记开始时间、累计用量与 trace_id。B0 起观测台读取 agent 的结构化协议通知，不再解析终端文本（[B0 实践](../docs/bonus-protocol/protocol-lab.md)）。
 
-仍然没有：采样、Metrics SDK 与告警、带 trace_id 的结构化日志（重试等事件目前挂在 span 上）、答对率与打分器、pass^k、留出集或统计区间自动评分。页面中的 LLM token 总量不能直接当作包含全部向量/资源的费用账单。上文的事件类型、公式与区间是技术学习内容，不表示都已自动算出。
+Day 16–17 起，`go run . eval` 与观测台的“D16 评测”页面（[internal/eval](../internal/eval/)）按上一节实现了评测集、确定性打分器与 DeepSeek 三票评审、pass@1（按题聚类的标准误）与 pass^k、消融 Δ、基线逐题对比、归因卡片、人工开放编码与从检查点分叉的回放验证（[ForkCheckpoint](../internal/agent/checkpoint.go)）；实验与失败分析报告见 [Day 16 实践](../docs/day-16/day-16-lab.md)、[Day 17 实践](../docs/day-17/day-17-lab.md)。
+
+仍然没有：采样、Metrics SDK 与告警、带 trace_id 的结构化日志（重试等事件目前挂在 span 上）、评审模型与人工判断的系统性一致率校准、CI 自动回归。页面中的 LLM token 总量不能直接当作包含全部向量/资源的费用账单。上文的事件类型、公式与区间是技术学习内容，不表示都已自动算出。
 
 ### 进阶推演
 
@@ -274,11 +315,16 @@ Day 15 起，`go run . metrics`（[internal/metrics](../internal/metrics/metrics
 3. 新策略少了两次主模型调用，一定更便宜吗？  
    不一定。要加上辅助请求、子任务、向量检索和其他外部成本。
 
+4. 回放时插入一句纠正后 3 次都成功了，为什么还要配一个“只插入‘继续。’”的对照？  
+   排除“任何打断都能让模型换条路”的可能；对照不翻转，才说明是纠正的内容起了作用。
+
 ## 延伸阅读
 
 - [观测台说明](../docs/observer/observer-notes.md)
 - [Day 13 可观测性笔记](../docs/day-13/day-13-notes.md)、[Day 13 实践](../docs/day-13/day-13-lab.md)
 - [Day 15 评测指标笔记](../docs/day-15/day-15-notes.md)、[Day 15 实践](../docs/day-15/day-15-lab.md)
+- [Day 16 评测集笔记](../docs/day-16/day-16-notes.md)、[Day 16 实践](../docs/day-16/day-16-lab.md)
+- [Day 17 失败归因笔记](../docs/day-17/day-17-notes.md)、[Day 17 实践](../docs/day-17/day-17-lab.md)
 - [Day 4 分层评估](../docs/day-04/day-04-notes.md)
 - [Day 4 对比实践](../docs/day-04/day-04-lab.md)
 

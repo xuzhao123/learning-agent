@@ -354,6 +354,11 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 
 var errUnknown = errors.New("结果未知")
 
+// D17 归因：只说“结果未知”时，模型会自己编一个 task_id 去轮询无关的状态工具，或者把有副作用的操作再做一遍。
+// 回放验证（保留第 1 轮、插入这段说明）让 3 次全部翻转为如实报告；只插一句“继续。”的对照组 0 次翻转。
+// 所以把下一步该怎么做写进结果本身：超时的调用没有返回任何标识，可查的前提不存在。
+const unknownNext = "。这项操作可能有副作用，执行器不会自动重做；这次调用也没有返回任何可用于查询的标识（如 task_id），不要自己构造标识去查询状态。不要重试，直接告诉用户结果未知，由用户决定是否重做"
+
 const interruptedUnknown = "上一个进程在执行这项调用时中断，结果未知：可能已经执行过。需要时先核对，再决定是否重做"
 
 // 一个逻辑调用最多尝试 1+k 次。按错误类型决定是否重试：
@@ -385,6 +390,7 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 			reason = "permanent"
 		case result.Status == "unknown" && !repeatable[call.Function.Name]:
 			reason = "unknown_not_repeatable"
+			result.Error += unknownNext
 		}
 		if reason != "" {
 			fmt.Printf("No retry [%s]: reason=%s attempts=%d error=%s\n", call.ID, reason, result.Attempts, result.Error)

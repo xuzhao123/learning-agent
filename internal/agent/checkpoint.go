@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ type Checkpoint struct {
 	Output     int       `json:"output_tokens"`
 	Cached     int       `json:"cached_tokens"`
 	Traces     []string  `json:"traces,omitempty"` // 每次运行（首次与各次续跑）的 trace_id
+	Fork       *Fork     `json:"fork,omitempty"`   // D17 回放验证：从哪个检查点的第几轮分叉、注入了什么
 	Summary    []string  `json:"summary"`
 	LastAction string    `json:"last_action"`
 	Repeated   int       `json:"repeated"`
@@ -161,4 +163,91 @@ func Lineage(id string) []string {
 		chain = append(chain, cp.Continues)
 	}
 	return chain
+}
+
+// Fork 记录回放验证的来源。
+type Fork struct {
+	From   string `json:"from"`
+	Rounds int    `json:"rounds"` // 保留了来源的前几轮（模型决定 + 工具结果）
+	Note   string `json:"note"`   // 在保留的轮次之后插入的一条纠正（以用户消息出现）
+}
+
+// ForkCheckpoint 是 D17 的回放验证：保留来源检查点的前 rounds 轮，在其后插入一条纠正，存成一个新的检查点（状态 running）。
+// 之后用 RunChild 启动它，就是从第 rounds+1 轮接着跑：前面的步骤原样保留，只有这一处不同；
+// 结局翻转了，才说明怀疑的那一步是决定性的。新检查点有自己的ID，来源不变。
+func ForkCheckpoint(src *Checkpoint, id string, rounds int, note string) (*Checkpoint, error) {
+	if !ValidID(id) || id == src.ID {
+		return nil, fmt.Errorf("回放的任务ID %q 无效", id)
+	}
+	if strings.TrimSpace(note) == "" {
+		return nil, errors.New("回放需要一条纠正提示")
+	}
+	if src.Continues != "" {
+		return nil, errors.New("只支持单轮任务的检查点（续聊的上下文含有之前各轮）")
+	}
+	// 按轮截断要求 View 里还是逐条原文；压缩过的上下文已经把前面的轮次换成了摘要。
+	keep, seen := 0, 0
+	for i, m := range src.Messages {
+		if m.Role == "user" && strings.HasPrefix(m.Content, llm.SummaryPrefix) {
+			return nil, errors.New("这个检查点的上下文压缩过，无法按轮截断")
+		}
+		// 下一个模型决定（第 rounds+1 轮的工具调用，或最终回答）就是要被替换掉的那一步，从这里截断。
+		if m.Role == "assistant" {
+			if seen == rounds {
+				break
+			}
+			if len(m.ToolCalls) > 0 {
+				seen++
+			}
+		}
+		keep = i + 1
+	}
+	messages := slices.Clone(src.Messages[:keep])
+	// 第 rounds 轮的工具结果要完整：熔断拦下的那一批只有模型决定、没有结果，不能保留。
+	if seen < rounds || messages[len(messages)-1].Role == "assistant" {
+		return nil, fmt.Errorf("检查点没有 %d 轮完整的工具调用，不能保留这么多轮", rounds)
+	}
+	return ForkSnapshot(src, id, messages, rounds, rounds, note)
+}
+
+// ForkSnapshot 从一份完整的上下文快照分叉：messages 是第 step+1 次模型决定当时看到的输入（观测台代理记录的那次请求），
+// calls 是在它之前已经用掉的模型请求（含压缩），续跑的预算因此和原运行在那一刻相同。
+// 检查点里只有最后的 View，压缩过就无法按轮截断；请求快照没有这个问题，而且就是模型当时看到的原文。
+func ForkSnapshot(src *Checkpoint, id string, messages []llm.Message, step, calls int, note string) (*Checkpoint, error) {
+	if !ValidID(id) || id == src.ID {
+		return nil, fmt.Errorf("回放的任务ID %q 无效", id)
+	}
+	if strings.TrimSpace(note) == "" {
+		return nil, errors.New("回放需要一条纠正提示")
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Role == "assistant" {
+		return nil, errors.New("快照必须停在模型决定之前")
+	}
+	if _, err := llm.Groups(messages); err != nil {
+		return nil, fmt.Errorf("截断后的消息无效：%w", err)
+	}
+	rounds := step
+	messages = append(slices.Clone(messages), llm.Message{Role: "user", Content: note})
+	cp := &Checkpoint{ID: id, Args: src.Args, Question: src.Question, Status: "running", Step: step, Calls: calls, Messages: messages,
+		StartedAt: time.Now().UTC(), Fork: &Fork{From: src.ID, Rounds: rounds, Note: note}}
+	// 重复动作计数按保留的调用重新算一遍，和原来的运行在这一点上一致。
+	for _, m := range messages {
+		for _, call := range m.ToolCalls {
+			if key := actionKey(call); key == cp.LastAction {
+				cp.Repeated++
+			} else {
+				cp.LastAction, cp.Repeated = key, 1
+			}
+		}
+	}
+	for _, line := range src.Summary {
+		var n int
+		if _, err := fmt.Sscanf(line, "- 第%d轮", &n); err == nil && n <= rounds {
+			cp.Summary = append(cp.Summary, line)
+		}
+	}
+	if _, err := os.Stat(CheckpointPath(id)); err == nil {
+		return nil, fmt.Errorf("任务ID %s 已有检查点", id)
+	}
+	return cp, cp.write()
 }

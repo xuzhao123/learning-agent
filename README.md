@@ -71,6 +71,8 @@ go build -o bin/learning-agent .
 | Day 13 | 可观测性：调用链追踪 | [笔记](docs/day-13/day-13-notes.md) | [实践](docs/day-13/day-13-lab.md) | — |
 | Day 14 | 第二周综合与复盘 | [复盘](docs/week-02-review.md) | [实践](docs/day-14/day-14-lab.md) | — |
 | Day 15 | 评测指标：成功、可靠、延迟、成本 | [笔记](docs/day-15/day-15-notes.md) | [实践](docs/day-15/day-15-lab.md) | — |
+| Day 16 | 可复现评测集与回归 | [笔记](docs/day-16/day-16-notes.md) | [实践](docs/day-16/day-16-lab.md) | — |
+| Day 17 | 失败归因与回放验证 | [笔记](docs/day-17/day-17-notes.md) | [实践](docs/day-17/day-17-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -90,7 +92,7 @@ go build -o bin/learning-agent .
 
 | 阅读顺序 | 文件或模块 | 关注点 |
 | --- | --- | --- |
-| 入口 | [main.go](main.go) | 参数、工具开关、agent / observe / queue 的入口 |
+| 入口 | [main.go](main.go) | 参数、工具开关、agent / observe / queue / metrics / eval 的入口 |
 | 模型协议 | [internal/llm](internal/llm/) | messages、tools、tool_calls、请求预算与用量 |
 | 执行循环 | [internal/agent/react.go](internal/agent/react.go)、[工具分发](internal/agent/dispatch.go) | 结果回填、并发、分类重试与终止 |
 | 上下文与恢复 | [上下文管理](internal/agent/context_manager.go)、[检查点](internal/agent/checkpoint.go) | Transcript/View、压缩、写前日志、续跑 |
@@ -99,6 +101,7 @@ go build -o bin/learning-agent .
 | 多任务执行 | [queue](internal/queue/)、[子进程](internal/agent/child.go)、[子 agent](internal/agent/subagent.go) | worker、任务 ID、独立上下文与权限继承 |
 | 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/)、[netguard](internal/netguard/) | 页面读取、进程隔离、网络与资源边界、出口地址判断 |
 | 观测与实验 | [observer](internal/observer/)、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
+| 评测与归因 | [eval](internal/eval/)、[评测集](eval/cases.jsonl)、[观测台评测页](internal/observer/eval.go) | 题目与打分器、多次尝试与 pass^k、评审模型、消融与基线对比、归因卡片与回放验证 |
 
 一个 agent 进程运行一个任务，功能开关由入口设置。观测台、任务队列和子 agent 用独立子进程执行任务；检索等工具直接在该 agent 进程内调用。具体运行边界见 [PROJECT.md](PROJECT.md)。
 
@@ -170,4 +173,4 @@ go build -o bin/learning-agent .
 
 </details>
 
-观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。
+观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“D16 评测 · D17 归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。

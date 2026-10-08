@@ -27,9 +27,9 @@ import (
 // 每个任务一个子进程：功能开关是包级变量、一个进程只跑一个任务；子进程崩溃也拖不垮调度方。
 // 返回的错误按能否再试分类：llm.IsPermanent 为真时再跑也一样，否则可以稍后续跑。
 //
-// B0：子进程以 -app-server 启动，父进程就是它的界面：子进程的通知包一层 subagent/message 转给上级界面（callID 为空时，
-// 比如队列，不转发）；子进程的请求（联网审批）转给上级界面，没有上级界面时如实回答“没人能批准”。给人看的日志写到 out。
-func RunChild(ctx context.Context, id, question string, args []string, out io.Writer, callID string) (cp *Checkpoint, replayed bool, err error) {
+// B0：子进程以 -app-server 启动，父进程就是它的界面：子进程的通知交给 child.Notify（子 agent 包一层转给上级界面，
+// 评测收下来打分，队列不要）；子进程的请求（联网审批）转给上级界面，没有上级界面时如实回答“没人能批准”。
+func RunChild(ctx context.Context, id, question string, args []string, child ChildIO) (cp *Checkpoint, replayed bool, err error) {
 	cp, err = LoadCheckpoint(id)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -68,20 +68,20 @@ func RunChild(ctx context.Context, id, question string, args []string, out io.Wr
 	}
 	defer fromChild.Close()
 	defer toChild.Close()
-	cmd.Stdout, cmd.Stdin, cmd.Stderr = childOut, childIn, out
+	cmd.Stdout, cmd.Stdin, cmd.Stderr = childOut, childIn, child.Out
 	var conn *protocol.Conn
 	conn = protocol.NewConn(fromChild, toChild, func(m protocol.Message) {
 		if m.IsRequest() {
 			go relayRequest(ctx, conn, id, m)
 			return
 		}
-		if callID != "" {
-			protocol.Notify("subagent/message", map[string]any{"call_id": callID, "task_id": id, "message": m})
+		if child.Notify != nil {
+			child.Notify(m)
 		}
 	})
 	// D13：TRACEPARENT 指向调用方当前的 span（spawn_agent 的 execute_tool，或队列的 queue_task），
 	// 子进程的 invoke_agent 就挂在它下面。同名变量以后面的为准，覆盖从父进程继承来的那个。
-	cmd.Env = append(os.Environ(), telemetry.Env(ctx)...)
+	cmd.Env = append(append(os.Environ(), child.Env...), telemetry.Env(ctx)...)
 	// 子进程放进自己的进程组：终端的 Ctrl+C 只发给调度方，再由调度方通过 ctx 把取消传下去，每个子进程只收到一次。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// 取消时先发 SIGINT，让子进程回填工具结果、写好检查点再退出；10 秒还没退出才强制结束。
@@ -116,6 +116,13 @@ func RunChild(ctx context.Context, id, question string, args []string, out io.Wr
 		err = llm.Permanent(err)
 	}
 	return cp, false, err
+}
+
+// ChildIO 是调用方给子进程接的“界面”。
+type ChildIO struct {
+	Out    io.Writer              // 子进程 stderr：给人看的日志
+	Notify func(protocol.Message) // 子进程发来的通知；nil 表示不要
+	Env    []string               // 额外的环境变量，如观测台的代理地址（D16 评测在观测台里运行时）
 }
 
 func firstLine(s string) string {

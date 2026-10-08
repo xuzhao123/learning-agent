@@ -19,6 +19,7 @@ import (
 
 	"learning-agent/internal/agent"
 	"learning-agent/internal/browser"
+	"learning-agent/internal/eval"
 	"learning-agent/internal/labs"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
@@ -36,7 +37,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；其余用法都是 agent 本身。
+// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；go run . eval 跑 D16 评测与 D17 归因；其余用法都是 agent 本身。
 func main() {
 	run := run
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
@@ -52,6 +53,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
 		service = "observer"
+	}
+	// D16：评测集与回归；D17：归因卡片与回放验证。
+	if len(os.Args) > 1 && os.Args[1] == "eval" {
+		run, service = func() error { return eval.Run(os.Args[2:]) }, "eval"
 	}
 	// D15：只读检查点和 trace，统计 5 个核心指标；不请求模型，也不创建 span。
 	if len(os.Args) > 1 && os.Args[1] == "metrics" {

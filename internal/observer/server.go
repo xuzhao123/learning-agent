@@ -66,10 +66,12 @@ type event struct {
 	Method    string          `json:"method,omitempty"`    // B0：notify / approval 事件的协议方法名，参数在 Body
 	RPC       int64           `json:"rpc,omitempty"`       // B0：agent 发来的请求ID（approval），回复时带回
 	Protocol  bool            `json:"protocol,omitempty"`  // B0：start/continue 上标记这一轮经协议运行；之前的存档没有，页面据此启用旧存档兼容
+	Eval      string          `json:"eval,omitempty"`      // D16：由评测发起的试次（评测ID · 用例 #序号），对话列表里不显示
 }
 
 type run struct {
 	ID, Query string
+	Eval      string // D16：评测发起的试次，见 event.Eval
 	Done      bool
 
 	mu       sync.Mutex
@@ -91,6 +93,7 @@ type server struct {
 	runs              []*run
 	runsDir, agentBin string     // 存档目录 .data/runs；agentBin 为空表示 -dev（go run .）
 	hubMu             sync.Mutex // 保护 .data/hub.json 的读改写
+	evals             evals      // D16/D17 评测记录（见 eval.go）
 }
 
 // Run 启动观测台：go run . observe [-addr …] [-dev]，须在项目根目录运行。
@@ -124,7 +127,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	if err := os.MkdirAll(runsDir, 0o700); err != nil {
 		return err
 	}
-	s := &server{agentDir: dir, addr: *addr, runsDir: runsDir, agentBin: agentBin}
+	s := &server{agentDir: dir, addr: *addr, runsDir: runsDir, agentBin: agentBin, evals: evals{jobs: map[string]*evalJob{}}}
 	s.loadRuns()
 	mux := http.NewServeMux()
 	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
@@ -142,6 +145,12 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
 	mux.HandleFunc("GET /traces/{id}", s.traceSpans)
 	mux.HandleFunc("GET /trace-metrics", s.traceMetrics)
+	mux.HandleFunc("GET /evals", s.listEvals)
+	mux.HandleFunc("GET /evals/cases", s.evalCases)
+	mux.HandleFunc("GET /evals/{id}", s.getEval)
+	mux.Handle("POST /evals", sameOrigin(http.HandlerFunc(s.startEval)))
+	mux.Handle("POST /evals/{id}/{action}", sameOrigin(http.HandlerFunc(s.evalAction)))
+	mux.Handle("POST /runs/{id}/attribute", sameOrigin(http.HandlerFunc(s.attributeRun)))
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
 	hub := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, sameOrigin(handler)) }
@@ -723,7 +732,7 @@ func (s *server) loadRuns() {
 			r.events = append(r.events, e)
 			r.calls = max(r.calls, e.Call)
 			if e.Kind == "start" {
-				r.Query = e.Text
+				r.Query, r.Eval = e.Text, e.Eval
 			}
 			if e.Kind == "request" && r.Query == "" {
 				r.Query = firstUserMessage(e.Body)
@@ -750,7 +759,7 @@ func firstUserMessage(body json.RawMessage) string {
 func (r *run) summary() map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	summary := map[string]any{"id": r.ID, "query": r.Query, "done": r.Done, "can_continue": r.canContinue()}
+	summary := map[string]any{"id": r.ID, "query": r.Query, "done": r.Done, "can_continue": r.canContinue(), "eval": r.Eval}
 	// 时间给 Unix 毫秒时间戳，由页面按看的人所在的时区显示。
 	if len(r.events) > 0 {
 		summary["created_at"], summary["updated_at"] = r.events[0].Time.UnixMilli(), r.events[len(r.events)-1].Time.UnixMilli()

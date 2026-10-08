@@ -85,7 +85,10 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 	span.SetAttributes(attribute.String("agent.subagent.task_id", id))
 	protocol.Notify("subagent/started", map[string]string{"call_id": call.ID, "task_id": id, "task": task})
 	out := &prefixWriter{prefix: "  │ " + call.ID + " ", callID: call.ID, taskID: id}
-	cp, replayed, err := RunChild(ctx, id, task, append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps)), out, call.ID)
+	relay := func(m protocol.Message) {
+		protocol.Notify("subagent/message", map[string]any{"call_id": call.ID, "task_id": id, "message": m})
+	}
+	cp, replayed, err := RunChild(ctx, id, task, append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps)), ChildIO{Out: out, Notify: relay})
 	out.flush()
 	if err != nil {
 		fmt.Printf("Subagent stop [%s]: %s\n", call.ID, err)

@@ -81,13 +81,14 @@ func Run(args []string) error {
 	flags := flag.NewFlagSet("metrics", flag.ContinueOnError)
 	since := flags.Duration("since", 7*24*time.Hour, "统计最近这段时间内结束（最后写检查点）的任务")
 	asJSON := flags.Bool("json", false, "输出 JSON")
+	prefix := flags.String("prefix", "", "只统计任务ID以它开头的任务，如 D16 一次评测的 eval-<评测ID>-")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || *since <= 0 {
-		return errors.New("用法：go run . metrics [-since 168h] [-json]")
+		return errors.New("用法：go run . metrics [-since 168h] [-prefix ID前缀] [-json]")
 	}
-	r, err := Compute(*since)
+	r, err := Compute(*since, *prefix)
 	if err != nil {
 		return err
 	}
@@ -101,8 +102,11 @@ func Run(args []string) error {
 	return nil
 }
 
-func Compute(since time.Duration) (*Report, error) {
-	paths, err := filepath.Glob(filepath.Join(".data", "checkpoints", "*.json"))
+func Compute(since time.Duration, prefix string) (*Report, error) {
+	if prefix != "" && !agent.ValidID(prefix) {
+		return nil, errors.New("prefix 只能包含字母、数字和 ._-")
+	}
+	paths, err := filepath.Glob(filepath.Join(".data", "checkpoints", prefix+"*.json"))
 	if err != nil {
 		return nil, err
 	}

@@ -37,12 +37,12 @@ type Task struct {
 	Args     []string `json:"args"`     // 这个任务额外的 agent 参数，如 ["-lab-tools"]
 }
 
-type outcome struct {
-	status   string // done、replayed（之前已完成，本次没执行）、failed、interrupted
-	calls    int
-	elapsed  time.Duration
-	attempts int
-	detail   string
+type Outcome struct {
+	Status   string // done、replayed（之前已完成，本次没执行）、failed、interrupted
+	Calls    int
+	Elapsed  time.Duration
+	Attempts int
+	Detail   string
 }
 
 func Run(arguments []string) error {
@@ -72,7 +72,7 @@ func Run(arguments []string) error {
 	defer span.End()
 	fmt.Printf("Queue: tasks=%d workers=%d attempts=%d common_args=%q logs=%s\n", len(tasks), *workers, *attempts, extra, filepath.Join(".data", "checkpoints", "<id>.log"))
 	started := time.Now()
-	results := make([]outcome, len(tasks))
+	results := make([]Outcome, len(tasks))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	// 有界并发：worker 数就是同时在跑的子进程数（也就是同时在请求模型的任务数）的上限。
@@ -138,49 +138,54 @@ func load(path string) ([]Task, error) {
 	return tasks, scanner.Err()
 }
 
-func runTask(ctx context.Context, t Task, extra []string, attempts int) (result outcome) {
-	ctx, span := telemetry.Begin(ctx, "queue_task "+t.ID, trace.SpanKindInternal, attribute.String("queue.task.id", t.ID))
-	defer func() {
-		span.SetAttributes(attribute.String("queue.task.status", result.status), attribute.Int("queue.task.attempts", result.attempts), attribute.Int("agent.model_calls", result.calls))
-		var err error
-		if result.status != "done" && result.status != "replayed" {
-			err = errors.New(result.detail)
-		}
-		telemetry.End(span, err, result.status)
-	}()
+func runTask(ctx context.Context, t Task, extra []string, attempts int) Outcome {
 	// 10 个任务的过程输出混在终端里没法读：每个任务写自己的日志，终端只打印状态变化。
 	_ = os.MkdirAll(filepath.Join(".data", "checkpoints"), 0o700)
 	log, err := os.OpenFile(filepath.Join(".data", "checkpoints", t.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return outcome{status: "failed", detail: err.Error()}
+		return Outcome{Status: "failed", Detail: err.Error()}
 	}
 	defer log.Close()
+	return RunTask(ctx, t, extra, attempts, agent.ChildIO{Out: log})
+}
+
+// RunTask 执行一个任务：暂时性失败退避后续跑，最多启动 attempts 次子进程。队列与 D16 评测共用。
+func RunTask(ctx context.Context, t Task, extra []string, attempts int, child agent.ChildIO) (result Outcome) {
+	ctx, span := telemetry.Begin(ctx, "queue_task "+t.ID, trace.SpanKindInternal, attribute.String("queue.task.id", t.ID))
+	defer func() {
+		span.SetAttributes(attribute.String("queue.task.status", result.Status), attribute.Int("queue.task.attempts", result.Attempts), attribute.Int("agent.model_calls", result.Calls))
+		var err error
+		if result.Status != "done" && result.Status != "replayed" {
+			err = errors.New(result.Detail)
+		}
+		telemetry.End(span, err, result.Status)
+	}()
 	start := time.Now()
 	args := append(append([]string(nil), t.Args...), extra...)
 	for attempt := 1; attempt <= attempts; attempt++ {
-		result.attempts = attempt
+		result.Attempts = attempt
 		fmt.Printf("Queue start: id=%s attempt=%d/%d\n", t.ID, attempt, attempts)
-		fmt.Fprintf(log, "\n===== %s attempt %d =====\n", time.Now().Format(time.RFC3339), attempt)
-		cp, replayed, err := agent.RunChild(ctx, t.ID, t.Question, args, log, "")
-		result.elapsed = time.Since(start)
+		fmt.Fprintf(child.Out, "\n===== %s attempt %d =====\n", time.Now().Format(time.RFC3339), attempt)
+		cp, replayed, err := agent.RunChild(ctx, t.ID, t.Question, args, child)
+		result.Elapsed = time.Since(start)
 		if cp != nil {
-			result.calls = cp.Calls
+			result.Calls = cp.Calls
 		}
 		switch {
 		case replayed:
-			result.status, result.detail = "replayed", clip(cp.Answer)
+			result.Status, result.Detail = "replayed", clip(cp.Answer)
 			fmt.Printf("Queue skip: id=%s 已完成，直接取存档答案（不重复执行）\n", t.ID)
 			return result
 		case err == nil:
-			result.status, result.detail = "done", clip(cp.Answer)
-			fmt.Printf("Queue done: id=%s model_calls=%d elapsed=%s\n", t.ID, cp.Calls, result.elapsed.Round(100*time.Millisecond))
+			result.Status, result.Detail = "done", clip(cp.Answer)
+			fmt.Printf("Queue done: id=%s model_calls=%d elapsed=%s\n", t.ID, cp.Calls, result.Elapsed.Round(100*time.Millisecond))
 			return result
 		case ctx.Err() != nil:
-			result.status, result.detail = "interrupted", "队列被中断；重新运行队列会从检查点续跑"
+			result.Status, result.Detail = "interrupted", "队列被中断；重新运行队列会从检查点续跑"
 			fmt.Printf("Queue interrupted: id=%s\n", t.ID)
 			return result
 		case llm.IsPermanent(err) || attempt == attempts:
-			result.status, result.detail = "failed", err.Error()
+			result.Status, result.Detail = "failed", err.Error()
 			fmt.Printf("Queue failed: id=%s error=%s\n", t.ID, err)
 			return result
 		}
@@ -196,18 +201,18 @@ func runTask(ctx context.Context, t Task, extra []string, attempts int) (result 
 	return result
 }
 
-func report(tasks []Task, results []outcome, elapsed time.Duration) error {
+func report(tasks []Task, results []Outcome, elapsed time.Duration) error {
 	counts := map[string]int{}
 	calls := 0
 	fmt.Printf("\nQueue summary: elapsed=%s\n", elapsed.Round(100*time.Millisecond))
 	for i, t := range tasks {
 		r := results[i]
-		if r.status == "" {
-			r.status, r.detail = "not_started", "队列被中断前没有派发；重新运行队列即可"
+		if r.Status == "" {
+			r.Status, r.Detail = "not_started", "队列被中断前没有派发；重新运行队列即可"
 		}
-		counts[r.status]++
-		calls += r.calls
-		fmt.Printf("- %-10s %-11s attempts=%d model_calls=%-2d %s\n", t.ID, r.status, r.attempts, r.calls, r.detail)
+		counts[r.Status]++
+		calls += r.Calls
+		fmt.Printf("- %-10s %-11s attempts=%d model_calls=%-2d %s\n", t.ID, r.Status, r.Attempts, r.Calls, r.Detail)
 	}
 	fmt.Printf("Queue totals: done=%d replayed=%d failed=%d interrupted=%d not_started=%d model_calls=%d\n",
 		counts["done"], counts["replayed"], counts["failed"], counts["interrupted"], counts["not_started"], calls)

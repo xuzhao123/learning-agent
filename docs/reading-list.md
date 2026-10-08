@@ -118,6 +118,14 @@
 
 先读 [学习笔记](day-15/day-15-notes.md)，重点是完成与答对的区别、pass@k 与 pass^k、分母的取法、每次成功的成本，以及为什么指标的数据不能只取自 trace。完整资料见 [参考](day-15/day-15-notes.md#参考)。
 
+## Day 16 · 可复现评测集与回归
+
+先读 [学习笔记](day-16/day-16-notes.md)，重点是好题目的条件（参考答案、反例）、打分器按成本分层、评审模型的偏差与三票表决、按题聚类的标准误与逐题配对、留出集与消融。原始资料首推 Anthropic《Demystifying evals for AI agents》与 Claude Code 插件评测文档。完整资料见 [参考](day-16/day-16-notes.md#参考)。
+
+## Day 17 · 失败归因
+
+先读 [学习笔记](day-17/day-17-notes.md)，重点是第一个上游错误、开放编码与轴心编码、自动归因为什么还不可靠（Who&When），以及反事实回放怎样把根因假设变成证据。完整资料见 [参考](day-17/day-17-notes.md#参考)。
+
 ## 扩展 · 结构化协议（B0）
 
 先读 [学习笔记](bonus-protocol/protocol-notes.md)，重点是 JSON-RPC 的请求、响应与通知，Thread / Turn / Item 会话模型，服务端主动发起的审批请求，以及为什么不用 MCP 承载。完整资料见 [参考](bonus-protocol/protocol-notes.md#参考)。
