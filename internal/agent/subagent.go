@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -58,10 +59,11 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 	id := CheckpointID + "-sub-" + hex.EncodeToString(sum[:6])
 	if args.TaskID != "" {
 		// 模型显式引用已有的子任务：是不是“同一个任务”由它声明，程序只做精确匹配，任务原文取自检查点。
-		// 只接受本任务派出的子任务，不能借此读取别的任务的存档。
+		// 只接受本对话续接链上（本轮或之前各轮）派出的子任务，不能借此读取别的任务的存档。
 		id = strings.TrimSpace(args.TaskID)
-		if !strings.HasPrefix(id, CheckpointID+"-sub-") || !ValidID(id) {
-			return nil, llm.Permanent(fmt.Errorf("task_id %s 不是本任务派出的子任务", id))
+		owned := slices.ContainsFunc(Lineage(CheckpointID), func(parent string) bool { return strings.HasPrefix(id, parent+"-sub-") })
+		if !owned || !ValidID(id) {
+			return nil, llm.Permanent(fmt.Errorf("task_id %s 不是本对话派出的子任务", id))
 		}
 		cp, err := LoadCheckpoint(id)
 		if err != nil {
@@ -81,23 +83,37 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 	// D13：子任务ID记在 spawn_agent 的 execute_tool span 上；子进程的 invoke_agent 是它的子 span。
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.String("agent.subagent.task_id", id))
-	out := &prefixWriter{prefix: "  │ " + call.ID + " "}
-	cp, replayed, err := RunChild(ctx, id, task, append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps)), out)
+	protocol.Notify("subagent/started", map[string]string{"call_id": call.ID, "task_id": id, "task": task})
+	out := &prefixWriter{prefix: "  │ " + call.ID + " ", callID: call.ID, taskID: id}
+	cp, replayed, err := RunChild(ctx, id, task, append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps)), out, call.ID)
 	out.flush()
 	if err != nil {
 		fmt.Printf("Subagent stop [%s]: %s\n", call.ID, err)
+		// 被取消、超时、进程中途退出的子任务可以续跑（stopped）；预算耗尽、熔断等再跑也一样（failed）。
+		state := "failed"
+		if cp != nil && Resumable(cp) {
+			state = "stopped"
+		}
+		protocol.Notify("subagent/completed", map[string]any{"call_id": call.ID, "task_id": id, "state": state, "error": err.Error()})
 		// 错误里写明 task_id：模型之后可以用它续跑这个子任务。%w 保留“能否再试”的分类。
 		return nil, fmt.Errorf("task_id=%s：%w", id, err)
 	}
 	fmt.Printf("Subagent done [%s]: model_calls=%d replayed=%t\n", call.ID, cp.Calls, replayed)
+	protocol.Notify("subagent/completed", map[string]any{"call_id": call.ID, "task_id": id, "state": "done", "model_calls": cp.Calls, "replayed": replayed})
 	span.SetAttributes(attribute.Bool("agent.subagent.replayed", replayed))
 	return map[string]any{"task_id": id, "answer": cp.Answer, "model_calls": cp.Calls, "replayed": replayed}, nil
 }
 
 // 子进程的输出逐行加前缀转到终端，几个子 agent 并行时也分得清是谁在说话。
+// 有界面时每一行也发一条 subagent/log，界面直接按调用ID归到子 agent 的面板，不再解析前缀。
 type prefixWriter struct {
-	prefix string
-	buf    []byte
+	prefix, callID, taskID string
+	buf                    []byte
+}
+
+func (w *prefixWriter) line(text []byte) {
+	fmt.Fprintf(os.Stdout, "%s%s\n", w.prefix, text)
+	protocol.Notify("subagent/log", map[string]string{"call_id": w.callID, "task_id": w.taskID, "text": string(text)})
 }
 
 func (w *prefixWriter) Write(p []byte) (int, error) {
@@ -107,14 +123,14 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		fmt.Fprintf(os.Stdout, "%s%s\n", w.prefix, w.buf[:i])
+		w.line(w.buf[:i])
 		w.buf = w.buf[i+1:]
 	}
 }
 
 func (w *prefixWriter) flush() {
 	if len(w.buf) > 0 {
-		fmt.Fprintf(os.Stdout, "%s%s\n", w.prefix, w.buf)
+		w.line(w.buf)
 		w.buf = nil
 	}
 }

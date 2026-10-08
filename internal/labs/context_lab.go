@@ -10,6 +10,7 @@ import (
 
 	"learning-agent/internal/agent"
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/tools"
 )
 
@@ -53,6 +54,8 @@ func RunContext(ctx context.Context, config llm.Config, options agent.ContextOpt
 		conversation.RecordReply(reply)
 	}
 	fmt.Printf("Recall complete: compacts=%d transcript=%d view=%d\n", conversation.CompactCount, len(conversation.Transcript), len(conversation.View))
+	// B0：33 轮学习对话到此结束，后面是独立的大工具场景；观测台续聊时只接在这之前。
+	protocol.Notify("lab/phase", map[string]string{"name": "recall_complete"})
 
 	// 第二个场景实际读取本地笔记，形成真实大输出；它不参与前面的账号召回实验。
 	tools.ContextLabEnabled = true

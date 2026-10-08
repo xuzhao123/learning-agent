@@ -2,7 +2,7 @@
 
 ## 目标与阅读入口
 
-以 Manus「Agent 全栈工程师」岗位要求为长期目标，用 Go 逐步实现并理解 Agent。课程安排见 [学习计划](plan.md)，能力覆盖见 [JOB_REQUIREMENTS.md](JOB_REQUIREMENTS.md)。
+以 Manus「Agent 全栈工程师」岗位要求为长期目标，用 Go 逐步实现并理解 Agent。课程安排见 [学习计划](plan.md)，生产化改造见 [进阶计划](plan-advanced.md)，能力覆盖见 [JOB_REQUIREMENTS.md](JOB_REQUIREMENTS.md)。
 
 启动、配置、学习目录和源码导航统一见 [README.md](README.md)。协作规则统一见 [AGENTS.md](AGENTS.md)。本文件只记录当前进度、理解情况与仍未解决的问题。
 
@@ -10,7 +10,7 @@
 
 一个 Go 模块、一个入口：`go run .` 运行 agent，`go run . observe` 运行观测台，`go run . queue` 运行队列。一个 agent 进程执行一个任务；检索与记忆在任务进程内调用，观测台、队列和子 agent 通过子进程执行任务。
 
-已覆盖 Day 1–14 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱与 OpenTelemetry 调用链。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。
+已覆盖 Day 1–15 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱、OpenTelemetry 调用链与 D15 指标采集；agent 与界面之间改为结构化协议（B0，仿 Codex app-server）。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。
 
 ## 课程进度
 
@@ -31,7 +31,9 @@
 | Day 11：浏览器 | 只读浏览与实时画面、停止续聊已有记录；去掉 UA 伪装后的方舟复测（Day 14）：open_page 正常，web_search 不可用 | 待反馈 | [Day 11 实践](docs/day-11/day-11-lab.md) |
 | Day 12：Bash 沙箱 | bubblewrap、Go BPF、cgroup、白名单代理与用户审批已有实现及实践记录；组合风险仍见下表 | 待反馈 | [Day 12 实践](docs/day-12/day-12-lab.md) |
 | Day 13：可观测性 | OpenTelemetry Go SDK 打点，GenAI 语义约定；观测台、agent、子 agent、队列、MCP server 跨进程成树；本地文件与可选 OTLP 导出；观测台“调用链”与由 span 汇总的指标。CLI、观测台（子 agent + MCP）、队列、kill -9 续跑与 Jaeger 导出已用真实方舟运行 | 待反馈 | [Day 13 实践](docs/day-13/day-13-lab.md) |
-| Day 14：综合与复盘 | 真实方舟综合演练：子 agent + 浏览器 + Bash 沙箱，中途停止后续聊完成，答案经网页核实；调用链两轮共 48 个 span。顺带完成 D11 复测：open_page 正常，web_search 被必应页面跳转阻断。发现并修复两处：续聊后子任务重跑（续聊沿用被打断的检查点 ID，spawn_agent 支持 task_id 引用），web_search 跳转错误不再白白重试；均已用真实模型复验。第二周复盘已完成 | 待反馈 | [Day 14 实践](docs/day-14/day-14-lab.md)、[复盘](docs/week-02-review.md) |
+| Day 14：综合与复盘 | 真实方舟综合演练：子 agent + 浏览器 + Bash 沙箱，中途停止后续聊完成，答案经网页核实；调用链两轮共 48 个 span。顺带完成 D11 复测：open_page 正常，web_search 被必应页面跳转阻断。发现并修复两处：续聊后子任务重跑（spawn_agent 支持 task_id 引用；续聊的检查点后来改为续接链，见 Q21），web_search 跳转错误不再白白重试；均已用真实模型复验。第二周复盘已完成 | 待反馈 | [Day 14 实践](docs/day-14/day-14-lab.md)、[复盘](docs/week-02-review.md) |
+| Day 15：评测指标 | 5 个核心指标（完成率、异常结局与可恢复性、端到端延迟、成本、工具可靠性），结局与成本以检查点为准、工具指标来自 trace；`go run . metrics` 采集；12 个真实任务（含 2 个故障题）已跑通 | 待反馈 | [Day 15 实践](docs/day-15/day-15-lab.md) |
+| 扩展：结构化协议（B0） | `-app-server` 模式，JSON-RPC 双向：turn/start、turn/interrupt、item/turn 通知、联网审批请求；观测台与 RunChild 作为界面，去掉终端文本解析；审批当轮生效、续接链、队列、页面新旧存档均用真实模型验证 | 待反馈 | [B0 实践](docs/bonus-protocol/protocol-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
 | 扩展：子 agent | 独立上下文、子进程、权限继承、幂等与父任务恢复已有验证 | 用户追问换措辞导致哈希失配，回答见 [Q15](docs/deep-questions.md#q15)；复述待确认 | [子 agent 实践](docs/bonus-subagents/subagents-lab.md) |
 | 扩展：模型路由 | 方舟/DeepSeek 手动路由、工具调用、子 agent 继承与续聊已有记录 | 待反馈 | [路由实践](docs/bonus-routing/routing-lab.md) |
@@ -55,17 +57,18 @@
 | Skills | 触发准确率未系统评估 | 纳入评测集；知识内容与执行权限分开 |
 | 工具取消 | 不配合取消的工具可能在调用方放弃等待后继续执行；Bash 已使用 cgroup 清理 | 按工具检查取消和资源回收，见 [Day 8](docs/day-08/day-08-lab.md) |
 | 父子进程 | 父进程被 kill -9 后，子进程可能暂时继续执行并占有任务锁；task_id 引用靠模型遵守规则，模型若仍改写 task 重派，会新开子任务 | 父死亡信号或锁释放等待；续跑时把已派出的子任务列进上下文，见 [Q15](docs/deep-questions.md#q15) |
-| 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估；观测台在中断后的续聊沿用并覆盖旧检查点，用户另起一题时旧任务的问题与结局被抹掉，“一个ID一个问题”不再成立 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14)；每轮新 ID 加续接链、子任务按链查找、撤掉沿用父 ID，见 [Q21](docs/deep-questions.md#q21) |
+| 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14)（续聊覆盖旧检查点的问题已改为续接链，见 [Q21](docs/deep-questions.md#q21)） |
 | 副作用恢复 | 模型看到“结果未知”后仍可能决定重做；repeatable 按工具名写死，误标会静默重做 | 幂等键、状态查询与高风险确认；MCP 注解仅对可信 server 采信，见 [Q13](docs/deep-questions.md#q13) |
-| 浏览器网络 | 已拦截起始 URL、跳转和子资源的内网请求；`100.64.0.0/10`（含阿里云元数据 100.100.100.200）等特殊地址段未判为内网，DNS 重绑定与 WebSocket 仍有缺口 | 补全特殊地址段或只放行全局单播；用受控出口限制实际连接，见 [Q18](docs/deep-questions.md#q18) |
+| 浏览器网络 | 起始 URL、跳转和子资源都按公网全局单播判断（`internal/netguard`，含运营商级 NAT 与云元数据地址）；DNS 重绑定与 WebSocket 仍有缺口 | 用受控出口限制实际连接，见 [Q18](docs/deep-questions.md#q18) |
 | 网页内容 | 注入防护主要依赖 system 规则；工具失败后模型仍可能凭旧知识回答 | Week 3 注入攻防与回答可靠性评测 |
 | 浏览器执行 | 浏览器未纳入 Bash 沙箱；设置 CHROME_NO_SANDBOX=1 会关闭 Chrome 自身沙箱 | 保留 Chrome 自身沙箱，后续研究独立浏览器隔离 |
 | 浏览器效率 | 必应不向无头浏览器返回结果，web_search 当前不可用（已改为不重试并提示改用 open_page）；同页多次 find 会重新加载，子 agent 因此耗尽预算（Day 11、Day 14） | 正式搜索 API、正文缓存或会话句柄 |
 | 执行隔离 | bubblewrap 共享内核，seccomp 使用黑名单（主隔离靠 namespace 与去权限，seccomp 只缩小内核攻击面）；没有 systemd 用户会话时不施加 cgroup 限制 | 不可信或多租户场景改白名单并加 gVisor/微虚拟机，见 [Q16](docs/deep-questions.md#q16) |
 | 组合工具 | 浏览器仍能通过请求 URL 外发 Bash 取得的数据，这一条只靠 system 规则与模型判断；允许域名内的路径和数据没有细分权限（开放重定向已实测拦下，大域名与域前置仍是风险） | 跨工具数据流与高风险审批，见 [Q12](docs/deep-questions.md#q12)、[Q17](docs/deep-questions.md#q17)、[Q18](docs/deep-questions.md#q18) |
 | 运行数据 | 工作目录总大小、截图、检查点与 trace 文件缺少配额或自动清理 | 磁盘配额与保留期限 |
-| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span，按 trace 统计的成功率、尾部延迟和工具失败率会有偏；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；评测结局以检查点为准、trace 只做归因，检查点存 trace_id，长 span 开始时也落一行，见 [Q19](docs/deep-questions.md#q19)；指标与告警按 Week 3 评测课程补齐 |
-| 评测 | 现有小样本参与过调试，独立留出集、规模化评分与指标告警未建立 | 按后续评测课程补齐 |
+| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span（D15 指标已改以检查点为准）；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；长 span 开始时落记录，见 [Q19](docs/deep-questions.md#q19)；告警按评测课程补齐 |
+| 评测 | 已有 5 个运行指标（D15）；完成率不等于答对率，没有评测集、打分器与 pass^k；现有小样本参与过调试，没有独立留出集 | 按后续评测课程补齐 |
+| 结构化协议 | 观测台重启后不能接管正在运行的 agent；模型请求非流式，Item 没有 delta；旧存档仍靠兼容层的正则还原 | 事件落盘与按序号补读（进阶计划 B2/B3）；流式（B1） |
 
 ## 理解确认
 
@@ -78,3 +81,5 @@
 - 多任务：任务队列和子 agent 的责任有什么不同。
 - 安全：namespace、cgroup、seccomp 各限制什么；为什么断网的 Bash 加浏览器仍能外发数据。
 - 可观测性：traceparent 怎样让子进程挂到父 span 下；为什么 kill -9 后会出现孤儿 span；Simple 与 Batch 处理器的取舍。
+- 协议：为什么协议和日志要分通道；审批请求为什么只能由界面上的人回答；子 agent 的事件与请求怎样逐级转发。
+- 指标：完成与答对的区别；pass^k 怎么算、为什么比 pass@k 更适合面向用户的 agent；为什么结局要以检查点而不是 trace 为准。

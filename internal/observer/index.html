@@ -581,7 +581,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {} }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {} }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -596,7 +596,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.stopRequested = false; r.checkpoint = ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -657,41 +657,64 @@ function apply(r, e) {
     c.tools = (c.compact ? [] : (m.tool_calls || [])).map((t, i) => ({ id: t.id, name: t.function.name, args: t.function.arguments, start: time, call: c, index: i }));
   } else if (e.kind === "stdout" || e.kind === "stderr") {
     r.logs.push(e);
-    const ragCase = /^RAG case: (Q\d+) mode=(baseline|rag) /.exec(e.text || "");
-    if (ragCase) {
-      r.caseLabel = ragCase[1] + (ragCase[2] === "rag" ? " · 有检索" : " · 无检索");
-      r.caseStart = true;
-      r.prevMessages = []; r.lastMainMessages = []; // 对比实验每题独立，不能误标为压缩。
-    }
-    // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
-    const mem = /^Memory (\w+): (.*)$/.exec(e.text || "");
-    if (mem && !["search", "forget", "hit"].includes(mem[1]) && !/^phase=(search|cli) /.test(mem[2])) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: mem[1], text: mem[2], fields: memFields(mem[2]) });
-    // skill 索引与 MCP 连接在 agent 启动时打印，归到本轮开头的“能力”卡片。
-    if (/^(Skills?|MCP) (loaded|error|connect|initialize|tools\/list|register|skip)\b|^Skills: /.test(e.text || "")) r.caps.push({ turn: r.memTurn, text: e.text });
-    const checkpoint = /^Checkpoint: id=(\S+) /.exec(e.text || "");
-    if (checkpoint) r.checkpoint = checkpoint[1];
-    // 浏览器画面按“任务ID/调用ID”保存；续聊每轮是新进程、新任务ID，所以在打印这一行时记下当时的任务ID。
-    const web = /^Browser \[([^\]]+)\]: (search|open) url=(\S+)/.exec(e.text || "");
-    if (web) r.web[web[1]] = { task: r.checkpoint, url: web[3] };
-    const capacity = /^Context: .* cap=(\d+) /.exec(e.text || "");
-    if (capacity) r.inputCapacity = Number(capacity[1]);
+    if (!r.protocol) legacyLine(r, e, time);
   }
-  else if (e.kind === "allow" || e.kind === "deny") r.netDecision[e.text] = e.kind;
+  else if (e.kind === "notify") applyNotify(r, e.method, e.body || {}, time);
+  else if (e.kind === "approval") { const p = e.body || {}; if (p.domain) r.netPending[p.domain] = true; }
+  else if (e.kind === "allow" || e.kind === "deny") { r.netDecision[e.text] = e.kind; delete r.netPending[e.text]; }
   else if (e.kind === "stop") { r.stopRequested = true; r.logs.push({ ...e, kind: "stdout", text: e.text }); }
-  else if (e.kind === "exit") { r.exit = e.text || "exit"; r.tEnd = time; }
-  if (e.kind === "stdout" || e.kind === "stderr") {
-    // 父 agent 打印子 agent 的起止；子进程的输出带 “  │ call_id ” 前缀转发过来。
-    const life = /^Subagent (start|done|stop) \[([^\]]+)\]: (.*)$/.exec(e.text || "");
-    if (life) {
-      const info = r.subCalls[life[2]] ??= { task: "", state: "running" };
-      if (life[1] === "start") Object.assign(info, { task: /task_id=(\S+)/.exec(life[3])?.[1] || "", state: "running" });
-      if (life[1] === "done") Object.assign(info, { state: "done", calls: Number(/model_calls=(\d+)/.exec(life[3])?.[1] || 0), replayed: /replayed=true/.test(life[3]) });
-      // 被取消、超时或进程中途退出的子任务可以续跑，标为“已中断”；预算耗尽、熔断等才算失败。
-      if (life[1] === "stop") Object.assign(info, { state: /（(cancelled|timeout|进程中途退出)）/.test(life[3]) ? "stopped" : "failed", error: life[3] });
-    }
-    const child = /^  │ (\S+) ?(.*)$/.exec(e.text || "");
-    const info = child && r.subCalls[child[1]];
-    if (info?.task) (r.subs[info.task] ??= Object.assign(newRun(info.task), { isSub: true })).logs.push({ ...e, text: child[2] });
+  else if (e.kind === "exit") { r.exit = e.text || "exit"; r.tEnd = time; r.netPending = {}; }
+}
+
+// B0：agent 经协议发来的结构化通知。页面需要的信息（任务ID、输入容量、记忆与能力事件、浏览器地址、子 agent 的起止和输出、
+// 实验分组）都从这里来，不再解析终端文本。方法名见 internal/protocol 与 docs/bonus-protocol。
+function applyNotify(r, method, p, time) {
+  if (method === "turn/started") { if (p.turn_id) r.checkpoint = p.turn_id; if (p.input_capacity) r.inputCapacity = p.input_capacity; }
+  else if (method === "memory/event") {
+    // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
+    if (!["search", "forget", "hit"].includes(p.kind) && !/^phase=(search|cli) /.test(p.text || "")) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: p.kind, text: p.text, fields: memFields(p.text || "") });
+  }
+  // skill 索引与 MCP 连接在 agent 启动时发生，归到本轮开头的“能力”卡片。
+  else if (method === "capability/event") r.caps.push({ turn: r.memTurn, kind: p.kind, text: p.text, count: p.count });
+  // 浏览器画面按“任务ID/调用ID”保存；续聊每轮是新进程、新任务ID，所以记下当时的任务ID。
+  else if (method === "browser/navigate") r.web[p.call_id] = { task: r.checkpoint, url: p.url };
+  else if (method === "subagent/started") Object.assign(r.subCalls[p.call_id] ??= {}, { task: p.task_id, text: p.task, state: "running" });
+  // 被取消、超时或进程中途退出的子任务可以续跑，标为“已中断”（stopped）；预算耗尽、熔断等才算失败。
+  else if (method === "subagent/completed") Object.assign(r.subCalls[p.call_id] ??= { task: p.task_id }, { state: p.state, calls: p.model_calls || 0, replayed: !!p.replayed, error: p.error || "" });
+  else if (method === "subagent/log") subRun(r, p.task_id).logs.push({ kind: "stdout", text: p.text, time });
+  // 子 agent 转发上来的通知，原样应用到它自己的运行状态上（任务ID、浏览器地址、结局……），和父 agent 走同一套处理。
+  else if (method === "subagent/message" && p.message?.method) applyNotify(subRun(r, p.task_id), p.message.method, p.message.params || {}, time);
+  else if (method === "turn/completed") r.termination = p.outcome === "no_tool_calls" ? "" : p.outcome + (p.error ? "：" + p.error : "");
+  else if (method === "lab/case") {
+    r.caseLabel = p.id + (p.mode === "rag" ? " · 有检索" : " · 无检索");
+    r.caseStart = true;
+    r.prevMessages = []; r.lastMainMessages = []; // 对比实验每题独立，不能误标为压缩。
+  }
+}
+function subRun(r, task) { return r.subs[task] ??= Object.assign(newRun(task), { isSub: true }); }
+
+// B0 之前的存档没有协议通知，只有终端文本：把当时的日志行换算成同样的通知。新的运行不经过这里。
+function legacyLine(r, e, time) {
+  const t = e.text || "";
+  let m;
+  if ((m = /^RAG case: (Q\d+) mode=(baseline|rag) /.exec(t))) applyNotify(r, "lab/case", { id: m[1], mode: m[2] }, time);
+  if ((m = /^Memory (\w+): (.*)$/.exec(t))) applyNotify(r, "memory/event", { kind: m[1], text: m[2] }, time);
+  if (/^(Skills?|MCP) (loaded|error|connect|initialize|tools\/list|register|skip)\b|^Skills: /.test(t)) {
+    const kind = t.startsWith("Skills: ") ? "skills_loaded" : t.startsWith("MCP register:") ? "mcp_register" : /^(Skill|MCP) error/.test(t) ? (t.startsWith("MCP") ? "mcp_error" : "skill_error") : t.startsWith("MCP skip") ? "mcp_skip" : "mcp";
+    applyNotify(r, "capability/event", { kind, text: t, count: Number(/^Skills: loaded=(\d+)/.exec(t)?.[1] || 0) }, time);
+  }
+  if ((m = /^Checkpoint: id=(\S+) /.exec(t))) r.checkpoint = m[1];
+  if ((m = /^Browser \[([^\]]+)\]: (search|open) url=(\S+)/.exec(t))) applyNotify(r, "browser/navigate", { call_id: m[1], url: m[3] }, time);
+  if ((m = /^Context: .* cap=(\d+) /.exec(t))) r.inputCapacity = Number(m[1]);
+  if ((m = /^Subagent (start|done|stop) \[([^\]]+)\]: (.*)$/.exec(t))) {
+    if (m[1] === "start") applyNotify(r, "subagent/started", { call_id: m[2], task_id: /task_id=(\S+)/.exec(m[3])?.[1] || "" }, time);
+    if (m[1] === "done") applyNotify(r, "subagent/completed", { call_id: m[2], state: "done", model_calls: Number(/model_calls=(\d+)/.exec(m[3])?.[1] || 0), replayed: /replayed=true/.test(m[3]) }, time);
+    if (m[1] === "stop") applyNotify(r, "subagent/completed", { call_id: m[2], state: /（(cancelled|timeout|进程中途退出)）/.test(m[3]) ? "stopped" : "failed", error: m[3] }, time);
+  }
+  const child = /^  │ (\S+) ?(.*)$/.exec(t), info = child && r.subCalls[child[1]];
+  if (info?.task) {
+    subRun(r, info.task).logs.push({ ...e, text: child[2] });
+    if (child[2].startsWith("Termination:") && child[2] !== "Termination: no_tool_calls") subRun(r, info.task).termination = child[2].slice(12).trim();
   }
 }
 
@@ -1570,11 +1593,11 @@ function memoryCard(r, turn, phase) {
 function capsCard(r, turn) {
   const logs = r.caps.filter((l) => l.turn === turn);
   if (!logs.length) return null;
-  const loaded = logs.map((l) => /^Skills: loaded=(\d+)/.exec(l.text)).find(Boolean);
-  const tools = logs.filter((l) => (l.text || "").startsWith("MCP register:")).length;
-  const errors = logs.filter((l) => /^(Skill|MCP) (error|skip)/.test(l.text)).length;
+  const loaded = logs.find((l) => l.kind === "skills_loaded");
+  const tools = logs.filter((l) => l.kind === "mcp_register").length;
+  const errors = logs.filter((l) => ["skill_error", "mcp_error", "mcp_skip"].includes(l.kind)).length;
   const parts = [];
-  if (r.skills.length) parts.push(`Skills ${loaded ? loaded[1] : "?"}/${r.skills.length} 个索引写进 system`);
+  if (r.skills.length) parts.push(`Skills ${loaded ? loaded.count : "?"}/${r.skills.length} 个索引写进 system`);
   if (r.mcp.length) parts.push(`MCP ${r.mcp.length} 个 server · 注册 ${tools} 个工具`);
   if (errors) parts.push(`${errors} 条跳过`);
   const rows = [];
@@ -1725,7 +1748,9 @@ function agentCard(r, t) {
   card.type = "button";
   card.title = "在右侧查看这个子 agent 的完整过程";
   const text = el("span", "t");
-  text.append(el("b", "", `子 agent ${i + 1}`), el("span", "", clip(args?.task ?? t.args, 140)));
+  // 只传 task_id 续跑的子任务，显示它的任务原文（来自 subagent/started），而不是一串ID。
+  const task = args?.task ?? (args?.task_id ? "续跑：" + (item?.info?.text || args.task_id) : t.args);
+  text.append(el("b", "", `子 agent ${i + 1}`), el("span", "", clip(task, 140)));
   card.append(el("span", "av", String(i + 1)), text, el("span", "sub-st " + st.key, st.text), el("span", "chev", "›"));
   card.onclick = () => { ui.subOpen = ui.subOpen === t.id ? null : t.id; ui.webOpen = null; renderChat(); };
   return card;
@@ -1765,8 +1790,7 @@ function renderSubPanel() {
     const flowBox = el("div", "a");
     sub.calls.forEach((c, i) => c.compact ? flowBox.append(renderCompact(c)) : renderCall(flowBox, sub, c, i === sub.calls.length - 1));
     body.append(flowBox);
-    const end = sub.logs.findLast((l) => (l.text || "").startsWith("Termination:"));
-    if (end && end.text !== "Termination: no_tool_calls") body.append(el("div", "stopcard err", "子 agent 停止：" + end.text.slice(12).trim()));
+    if (sub.termination) body.append(el("div", "stopcard err", "子 agent 停止：" + sub.termination));
     if (sub.logs.length) {
       const logs = fold(`子进程终端输出 · ${sub.logs.length} 行`, sub.logs.map((l) => l.text).join("\n"));
       body.append(logs);
@@ -1802,16 +1826,20 @@ function bashCard(r, c, t) {
   for (const n of notes) body.push(el("div", "meta", n));
   return step(`t${c.n}-${t.index}`, head, body);
 }
-// 模型只能发起请求；“允许 / 拒绝”只有人在页面上点。决定记进对话记录，下一轮续聊时作为 -net-allow 传给 agent。
+// 模型只能发起请求；“允许 / 拒绝”只有人在页面上点。B0 起 agent 在这里暂停等待：页面上点了，观测台当场回复，本轮接着执行；
+// 决定同时记进对话记录，之后的续聊作为 -net-allow 传给 agent。
 function netCard(r, t) {
   const args = parse(t.args) || {}, res = parse(t.result), domain = res?.result?.domain || args.domain || "";
-  const root = ui.run, decision = root.netDecision[domain];
+  const root = ui.run, decision = root.netDecision[domain], waiting = !!root.netPending[domain];
+  const status = res?.result?.status;
   const card = el("div", "net-card");
   card.append(el("div", "", "沙箱请求访问 "), el("b", "", domain), el("div", "why", "理由：" + (args.reason || "")));
   const acts = el("div", "acts");
-  if (res?.result?.status === "already_allowed") acts.append(el("span", "meta", "已在白名单中"));
-  else if (decision) acts.append(el("span", "meta", decision === "allow" ? "已允许：下一轮对话起，沙箱可经代理访问它及其子域名" : "已拒绝"));
-  else if (res?.status === "ok") {
+  if (status === "already_allowed") acts.append(el("span", "meta", "已在白名单中"));
+  else if (status === "allowed") acts.append(el("span", "meta", "已允许：本轮接下来的命令可经代理访问它及其子域名"));
+  else if (status === "denied") acts.append(el("span", "meta", "已拒绝"));
+  else if (decision && !waiting) acts.append(el("span", "meta", decision === "allow" ? "已允许：下一轮对话起，沙箱可经代理访问它及其子域名" : "已拒绝"));
+  else if (waiting || res?.status === "ok") {
     const yes = el("button", "yes", "允许"), no = el("button", "", "拒绝");
     yes.type = no.type = "button";
     const decide = async (allow) => {
@@ -1820,11 +1848,12 @@ function netCard(r, t) {
         const resp = await fetch(`/runs/${encodeURIComponent(root.id)}/network`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain, allow }) });
         if (!resp.ok) throw new Error(await resp.text());
         root.netDecision[domain] = allow ? "allow" : "deny";
+        delete root.netPending[domain];
         renderChat();
       } catch (err) { alert("操作失败：" + err.message); yes.disabled = no.disabled = false; }
     };
     yes.onclick = () => decide(true); no.onclick = () => decide(false);
-    acts.append(yes, no, el("span", "meta", "批准后下一轮生效"));
+    acts.append(yes, no, el("span", "meta", waiting ? "agent 正在等待：批准后本轮立即生效" : "批准后下一轮生效"));
   } else acts.append(el("span", "meta", res ? (res.error || "请求无效") : "等待中…"));
   card.append(acts);
   return card;

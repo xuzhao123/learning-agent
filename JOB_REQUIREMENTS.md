@@ -64,10 +64,10 @@
 | C02 | 工具调用、循环护栏、运行时与检查点。见 [Day 2](docs/day-02/day-02-lab.md)、[Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md) | 长任务规划、更多异常组合与稳定性评估 | 待反馈 |
 | C03 | Transcript/View、压缩和来源可追溯的长期记忆。见 [Day 3](docs/day-03/day-03-lab.md)、[Day 5](docs/day-05/day-05-lab.md) | 记忆检索升级的真实对比、写入与遗忘质量评估 | 用户已指出上下文设计问题；整体理解待确认 |
 | C04 | 原生工具编排、知识型 Skills、手动模型路由。见 [Day 1](docs/day-01/day-01-lab.md)、[Skills](docs/bonus-skills/skills-lab.md)、[路由](docs/bonus-routing/routing-lab.md) | 按用途路由、级联与故障转移 | 待反馈 |
-| C05 | MCP client/server，stdio、Streamable HTTP 与多 server 接入；参数校验对照已有记录。见 [Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[观测台](docs/observer/observer-notes.md) | 远程鉴权、动态工具列表与第三方 server 最小环境权限 | 待反馈 |
+| C05 | MCP client/server，stdio、Streamable HTTP 与多 server 接入；参数校验对照已有记录。见 [Day 6](docs/day-06/day-06-lab.md)、[Day 7](docs/day-07/day-07-lab.md)、[观测台](docs/observer/observer-notes.md)；agent 与界面之间仿 Codex app-server 的双向 JSON-RPC 协议（turn/item 通知、审批请求逐级转发），见 [B0](docs/bonus-protocol/protocol-lab.md) | 远程鉴权、动态工具列表与第三方 server 最小环境权限 | 待反馈 |
 | C06 | Go 向量检索，本地/线上模型；记忆加入背景、BM25、RRF 与重排。见 [Day 4](docs/day-04/day-04-lab.md)、[Day 5](docs/day-05/day-05-lab.md) | 记忆升级的真实评估、独立语料与检索阈值校准 | 待反馈 |
 | C07 | 工具并发、有限重试、文件锁事务、检查点、任务队列与幂等。见 [Day 8](docs/day-08/day-08-lab.md)、[Day 9](docs/day-09/day-09-lab.md)、[Day 10](docs/day-10/day-10-lab.md) | 多机协调、全局限流、死信队列与持久化版本 | 待反馈 |
-| C08 | Day 4 固定题集、无检索/有检索对比与人工评阅；结果见 [对比报告](docs/day-04/day-04-lab.md) | 留出集、规模化评分、回归集与线上失败归因 | 待反馈 |
+| C08 | Day 4 固定题集、无检索/有检索对比与人工评阅；D15 的 5 个运行指标（完成率、异常结局、延迟、成本、工具可靠性），结局与成本以检查点为准。见 [Day 4](docs/day-04/day-04-lab.md)、[Day 15](docs/day-15/day-15-lab.md) | 答对率与打分器、pass^k、留出集、回归集与线上失败归因 | 待反馈 |
 | C09 | Turn/Step、原始请求响应、轨迹/迷宫/对比与续聊；D13 用 OpenTelemetry 做端到端调用链（观测台、agent、子 agent、队列、MCP server 跨进程成树，GenAI 语义约定，可选 OTLP 导出到 Jaeger），由 span 汇总次数、失败率与 P50/P95。见 [观测台](docs/observer/observer-notes.md)、[Day 13](docs/day-13/day-13-lab.md) | 采样、Metrics SDK 与告警、带 trace_id 的结构化日志、流式阶段（TTFT）、基于 trace 的线上失败归因 | 待反馈 |
 | C10 | MCP 参数与信任边界、只读 Skills、浏览器内网拦截、Bash 隔离及联网审批。见 [Day 7](docs/day-07/day-07-lab.md)、[Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md) | 多租户、注入攻防、跨工具外发与完整审计；现有沙箱限制见 Day 12 边界 | 待反馈 |
 | C11 | chromedp 页面读取与画面，Bash 沙箱代码执行；Day 14 综合演练中二者与子 agent、停止续聊一起端到端运行。见 [Day 11](docs/day-11/day-11-lab.md)、[Day 12](docs/day-12/day-12-lab.md)、[Day 14](docs/day-14/day-14-lab.md) | 可用的搜索（web_search 被必应页面跳转阻断）、操作型浏览器、会话保持、CI 执行器与生产使用 | 待反馈 |

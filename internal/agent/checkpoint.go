@@ -21,27 +21,37 @@ import (
 // 续跑只依赖这个文件和其中保存的启动参数，不依赖进程内存，所以 kill -9 之后也能接着跑。
 type Checkpoint struct {
 	ID       string   `json:"id"`
-	Args     []string `json:"args"`             // 首次启动的命令行参数：续跑时原样恢复工具开关、预算等配置
-	Question string   `json:"question"`         // 也是幂等校验的依据：同一个ID不能换问题
-	Status   string   `json:"status"`           // running：运行中，或进程已经死掉；stopped：停下了，见 reason；done：完成
-	Reason   string   `json:"reason,omitempty"` // 与终端 Termination 一致：no_tool_calls、cancelled、timeout、max_steps…
-	Answer   string   `json:"answer,omitempty"`
-	Error    string   `json:"error,omitempty"`
-	Step     int      `json:"step"`  // 已完整结束的轮次
-	Calls    int      `json:"calls"` // 已用掉的模型请求：预算跨续跑累计
+	Args     []string `json:"args"`     // 首次启动的命令行参数：续跑时原样恢复工具开关、预算等配置
+	Question string   `json:"question"` // 也是幂等校验的依据：同一个ID不能换问题
+	// 续接链：这一轮接着哪一轮的对话（上一轮的检查点ID）。每一轮都有自己的ID，旧的检查点不会被覆盖；
+	// spawn_agent 按 task_id 引用子任务时，接受链上任何一轮派出的子任务。
+	Continues string `json:"continues,omitempty"`
+	Status    string `json:"status"`           // running：运行中，或进程已经死掉；stopped：停下了，见 reason；done：完成
+	Reason    string `json:"reason,omitempty"` // 与终端 Termination 一致：no_tool_calls、cancelled、timeout、max_steps…
+	Answer    string `json:"answer,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Step      int    `json:"step"`  // 已完整结束的轮次
+	Calls     int    `json:"calls"` // 已用掉的模型请求：预算跨续跑累计
 	// 模型看到的 View。最后一条若是带 tool_calls 的 assistant 而后面没有结果，
 	// 说明进程死在执行这批工具的途中：续跑时由 replayBatch 补齐。
-	Messages   []llm.Message `json:"messages"`
-	Summary    []string      `json:"summary"`
-	LastAction string        `json:"last_action"`
-	Repeated   int           `json:"repeated"`
-	UpdatedAt  time.Time     `json:"updated_at"`
+	Messages []llm.Message `json:"messages"`
+	// D15 指标的依据：评测的结局、耗时和成本以检查点为准（kill -9 也不会丢），trace 只用来归因（见 Q19）。
+	StartedAt  time.Time `json:"started_at,omitempty"` // 首次开始；续跑不变，所以耗时包含中断的那段时间
+	Input      int       `json:"input_tokens"`         // 累计用量，跨续跑累加，包含摘要与记忆辅助调用
+	Output     int       `json:"output_tokens"`
+	Cached     int       `json:"cached_tokens"`
+	Traces     []string  `json:"traces,omitempty"` // 每次运行（首次与各次续跑）的 trace_id
+	Summary    []string  `json:"summary"`
+	LastAction string    `json:"last_action"`
+	Repeated   int       `json:"repeated"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // 由 main 设置：CheckpointID 为空表示不写检查点（Day 3/4 实验）；Resume 不为空表示本次是续跑。
 var (
 	CheckpointID   string
 	CheckpointArgs []string
+	Continues      string // 本轮接着的上一轮检查点ID，见 Checkpoint.Continues
 	Resume         *Checkpoint
 )
 
@@ -138,4 +148,17 @@ func pendingCount(m *llm.Message) int {
 		return 0
 	}
 	return len(m.ToolCalls)
+}
+
+// Lineage 是从本轮往前的续接链（含本轮），最多回溯 64 轮；链上某一轮的检查点读不到就停在那里。
+func Lineage(id string) []string {
+	chain := []string{id}
+	for len(chain) < 64 {
+		cp, err := LoadCheckpoint(chain[len(chain)-1])
+		if err != nil || cp.Continues == "" || !ValidID(cp.Continues) {
+			break
+		}
+		chain = append(chain, cp.Continues)
+	}
+	return chain
 }

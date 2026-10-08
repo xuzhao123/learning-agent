@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -182,9 +183,18 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 	}
 	// D13：压缩单独一个 span；摘要请求（purpose=compact 的 chat span）挂在它下面。
 	ctx, span := telemetry.Begin(ctx, "compact_context", trace.SpanKindInternal, attribute.Int("agent.context.before", before), attribute.Int("agent.context.capacity", cap))
+	item := protocol.Item{ID: fmt.Sprintf("compact-%d", c.CompactCount+1), Type: "compaction", Data: map[string]int{"before": before, "capacity": cap}}
+	protocol.ItemStarted(llm.TaskID, item)
 	defer func() {
-		span.SetAttributes(attribute.Int("agent.context.after", llm.ContextTokens(c.View, c.withTools)))
+		after := llm.ContextTokens(c.View, c.withTools)
+		span.SetAttributes(attribute.Int("agent.context.after", after))
 		telemetry.End(span, err, "compact_error")
+		data := map[string]any{"before": before, "after": after, "capacity": cap}
+		if err != nil {
+			data["error"] = err.Error()
+		}
+		item.Data = data
+		protocol.ItemCompleted(llm.TaskID, item)
 	}()
 	if c.CompactCount > 0 && c.stepsSinceCompact <= 1 {
 		c.Compacts++

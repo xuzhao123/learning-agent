@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 
 	"github.com/google/uuid"
@@ -62,6 +63,9 @@ type event struct {
 	Sub       bool            `json:"sub,omitempty"`       // 请求来自子 agent：不进入父对话流、不参与续聊恢复
 	Trace     string          `json:"trace,omitempty"`     // D13：start/continue 上记这次交互的 trace_id
 	Span      string          `json:"span,omitempty"`      // D13：request 上记 agent 的 chat span ID（来自 traceparent 头）
+	Method    string          `json:"method,omitempty"`    // B0：notify / approval 事件的协议方法名，参数在 Body
+	RPC       int64           `json:"rpc,omitempty"`       // B0：agent 发来的请求ID（approval），回复时带回
+	Protocol  bool            `json:"protocol,omitempty"`  // B0：start/continue 上标记这一轮经协议运行；之前的存档没有，页面据此启用旧存档兼容
 }
 
 type run struct {
@@ -73,9 +77,12 @@ type run struct {
 	events   []event
 	changed  chan struct{}
 	file     *os.File
-	proc     *os.Process // 正在运行的 agent 进程，停止按钮向它的进程组发信号
-	stopping bool        // 已发过一次 SIGINT；再按一次强制结束
+	proc     *os.Process // 正在运行的 agent 进程；强制结束时向它的进程组发 SIGKILL
+	stopping bool        // 已请求过一次停止；再按一次强制结束
 	rootTask string      // 本次启动的父 agent 任务ID：启动后第一个带任务ID的请求一定来自父 agent
+	// B0：与正在运行的 agent 之间的协议连接，以及它在等待答复的联网审批（域名 → 请求ID）。
+	conn      *protocol.Conn
+	approvals map[string][]int64
 }
 
 type server struct {
@@ -227,7 +234,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "memory_ttl须为正的时长（如1m），且需开启长期记忆", http.StatusBadRequest)
 		return
 	}
-	args := []string{"-question", input.Query}
+	args := []string{}
 	if input.RAG {
 		args = append(args, "-rag")
 	}
@@ -285,8 +292,12 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
 	ctx, span := r.beginTurn(input.Query)
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider, Bash: input.Bash, Trace: span.SpanContext().TraceID().String()})
-	s.launch(ctx, r, args, nil)
+	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider, Bash: input.Bash, Trace: span.SpanContext().TraceID().String(), Protocol: true})
+	var turn map[string]any
+	if !input.ContextLab && !input.RAGLab {
+		turn = map[string]any{"question": input.Query}
+	}
+	s.launch(ctx, r, args, turn, "")
 	json.NewEncoder(w).Encode(r.summary())
 }
 
@@ -334,14 +345,8 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	r.file, r.Done = file, false
 	r.mu.Unlock()
 	ctx, span := r.beginTurn(strings.TrimSpace(input.Query))
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow(), Trace: span.SpanContext().TraceID().String()})
-	args := []string{"-history-stdin", "-question", strings.TrimSpace(input.Query)}
-	if history.TaskID != "" {
-		// 接着一轮被打断的任务：沿用它的检查点ID。子任务ID = 父ID + task 原文哈希，
-		// 父ID不变，模型照抄同一个 task 时就能续跑被打断的子任务或取回已完成的结果，而不是从头再跑。
-		// 正常结束的轮次续聊时不沿用：新问题里出现相同的 task，应当重新执行，而不是拿旧结论回答。
-		args = append(args, "-task-id", history.TaskID)
-	}
+	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow(), Trace: span.SpanContext().TraceID().String(), Protocol: true})
+	args := []string{}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
 	}
@@ -368,7 +373,10 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 			args = append(args, "-net-allow", domain)
 		}
 	}
-	s.launch(ctx, r, args, history)
+	// 问题、续聊上下文与续接关系放进 turn/start。每一轮都用新的检查点ID，旧检查点保持原样（“一个ID一个问题”），
+	// 续接关系让模型可以按 task_id 续跑之前各轮的子任务。
+	turn := map[string]any{"question": strings.TrimSpace(input.Query), "history": history, "continues": history.Continues}
+	s.launch(ctx, r, args, turn, history.Model)
 	json.NewEncoder(w).Encode(r.summary())
 }
 
@@ -388,23 +396,23 @@ func (r *run) beginTurn(query string) (context.Context, trace.Span) {
 	return ctx, span
 }
 
-func (s *server) launch(ctx context.Context, r *run, args []string, history *resumeInput) {
+// B0：agent 以 -app-server 启动，stdout 是协议，stderr 是给人看的终端输出。
+// turn 为 nil 时（上下文、检索实验）由命令行参数决定要做什么，不发 turn/start。
+func (s *server) launch(ctx context.Context, r *run, args []string, turn map[string]any, model string) {
 	span := trace.SpanFromContext(ctx)
-	cmd := s.agentCommand(context.Background(), args...)
+	cmd := s.agentCommand(context.Background(), append([]string{"-app-server"}, args...)...)
 	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID)
 	cmd.Env = append(cmd.Env, telemetry.Env(ctx)...)
-	if history != nil {
-		data, err := json.Marshal(history)
-		if err != nil {
-			r.add(event{Kind: "exit", Text: "无法编码续聊历史"})
-			telemetry.End(span, err, "launch_error")
-			return
-		}
-		cmd.Stdin = bytes.NewReader(data)
-		cmd.Env = append(cmd.Env, "LLM_MODEL="+history.Model)
+	if model != "" {
+		cmd.Env = append(cmd.Env, "LLM_MODEL="+model)
 	}
+	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
+	conn := protocol.NewConn(stdout, stdin, r.handle)
+	r.mu.Lock()
+	r.conn, r.approvals = conn, map[string][]int64{}
+	r.mu.Unlock()
 	// 自己的进程组：停止时向整组发信号。-dev 模式下组里是 go run 和它编译出的 agent，两者都能收到。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -414,15 +422,23 @@ func (s *server) launch(ctx context.Context, r *run, args []string, history *res
 		r.mu.Lock()
 		r.proc, r.stopping, r.rootTask = cmd.Process, false, ""
 		r.mu.Unlock()
+		if turn != nil {
+			go func() {
+				if err := conn.Call(context.Background(), "turn/start", turn, nil); err != nil {
+					r.add(event{Kind: "stdout", Text: "turn/start 失败：" + err.Error()})
+				}
+			}()
+		}
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go r.copyLines(&wg, "stdout", stdout)
-		go r.copyLines(&wg, "stderr", stderr)
+		wg.Add(1)
+		// 终端输出只有人读；页面需要的结构化信息都来自协议通知。
+		go r.copyLines(&wg, "stdout", stderr)
 		go func() {
 			wg.Wait()
+			<-conn.Closed()
 			err := cmd.Wait()
 			r.mu.Lock()
-			r.proc = nil
+			r.proc, r.conn, r.approvals = nil, nil, nil
 			r.mu.Unlock()
 			text := "exit 0"
 			if err != nil {
@@ -492,7 +508,7 @@ type resumeInput struct {
 	Effort    string            `json:"-"`
 	RAG       bool              `json:"-"`
 	Embedding string            `json:"-"`
-	TaskID    string            `json:"-"` // 上一轮被打断时它的检查点ID：续聊沿用，子任务才能接着跑
+	Continues string            `json:"-"` // 上一轮的检查点ID：本轮用新ID并记下续接关系，子任务可以按 task_id 引用之前各轮的子任务
 }
 
 // 调用方持有r.mu。请求里的View已经包含摘要，直接延续它，不重新拼接所有旧请求。
@@ -503,7 +519,7 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 		if err != nil {
 			return nil, err
 		}
-		result.TaskID = id
+		result.Continues = id
 		return r.withEmbedding(result), nil
 	}
 	start, end := 0, len(r.events)
@@ -515,7 +531,9 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 	if start == 0 && r.Query == contextLabTitle {
 		// Day 3后半段是独立的大工具场景；续聊接在33轮学习对话之后。
 		for i, e := range r.events {
-			if e.Kind == "stdout" && strings.HasPrefix(e.Text, "Recall complete:") {
+			// B0 起是 lab/phase 通知；之前的存档只有日志行。
+			if (e.Kind == "notify" && e.Method == "lab/phase" && strings.Contains(string(e.Body), "recall_complete")) ||
+				(e.Kind == "stdout" && strings.HasPrefix(e.Text, "Recall complete:")) {
 				end = i
 				break
 			}
@@ -580,6 +598,7 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 	if result == nil {
 		return nil, errors.New("存档没有完整的回答，无法恢复续聊上下文")
 	}
+	result.Continues = r.lastCheckpoint()
 	return r.withEmbedding(result), nil
 }
 
@@ -619,21 +638,30 @@ func (r *run) checkpointHistory(id string) (*resumeInput, error) {
 	return result, nil
 }
 
-// 本次启动的 agent 打印的检查点ID（子 agent 的行带 “│” 前缀，不会匹配）。
+// 最近一轮 agent 的检查点ID：来自它的 turn/started 通知（子 agent 的通知包在 subagent/message 里，不会混进来）。
+// B0 之前的存档没有通知，退回到当时打印的 “Checkpoint: id=…” 行。
 func (r *run) lastCheckpoint() string {
 	for i := len(r.events) - 1; i >= 0; i-- {
 		e := r.events[i]
 		if e.Kind == "start" || e.Kind == "continue" {
 			return ""
 		}
-		if m := checkpointLine.FindStringSubmatch(e.Text); e.Kind == "stdout" && m != nil {
+		if e.Kind == "notify" && e.Method == "turn/started" {
+			var p struct {
+				TurnID string `json:"turn_id"`
+			}
+			if json.Unmarshal(e.Body, &p) == nil && p.TurnID != "" {
+				return p.TurnID
+			}
+		}
+		if m := legacyCheckpointLine.FindStringSubmatch(e.Text); e.Kind == "stdout" && m != nil {
 			return m[1]
 		}
 	}
 	return ""
 }
 
-var checkpointLine = regexp.MustCompile(`^Checkpoint: id=([A-Za-z0-9._-]{1,128}) `)
+var legacyCheckpointLine = regexp.MustCompile(`^Checkpoint: id=([A-Za-z0-9._-]{1,128}) `)
 
 func (r *run) withEmbedding(result *resumeInput) *resumeInput {
 	result.Embedding = "ark"
@@ -922,7 +950,17 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 	}
 	r.mu.Unlock()
 	r.add(event{Kind: kind, Text: input.Domain})
-	json.NewEncoder(w).Encode(map[string]any{"net_allow": r.netAllow()})
+	// B0：如果 agent 正在等这个域名的审批，当场回复；它会在本轮接着执行。否则只记下来，下一轮续聊时作为 -net-allow 传入。
+	r.mu.Lock()
+	conn, waiting := r.conn, r.approvals[input.Domain]
+	delete(r.approvals, input.Domain)
+	r.mu.Unlock()
+	for _, id := range waiting {
+		if conn != nil {
+			conn.Reply(id, map[string]string{"decision": kind}, nil)
+		}
+	}
+	json.NewEncoder(w).Encode(map[string]any{"net_allow": r.netAllow(), "answered": len(waiting)})
 }
 
 // 当前允许的域名：按时间顺序处理 allow/deny，后一次决定覆盖前一次。
@@ -955,13 +993,28 @@ func (s *server) stopRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "这条对话没有在运行", http.StatusConflict)
 		return
 	}
-	signal, text := syscall.SIGINT, "已请求停止：向 agent 发送 SIGINT，等待它回填结果、写好检查点后退出"
 	if force {
-		signal, text = syscall.SIGKILL, "强制结束：向 agent 发送 SIGKILL"
-	}
-	if err := syscall.Kill(-proc.Pid, signal); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if err := syscall.Kill(-proc.Pid, syscall.SIGKILL); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		r.add(event{Kind: "stop", Text: "强制结束：向 agent 发送 SIGKILL"})
+		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	// 第一次：经协议发 turn/interrupt，agent 回填结果、写好检查点再退出（第一段）；协议不通时退回 SIGINT。
+	r.mu.Lock()
+	conn := r.conn
+	r.mu.Unlock()
+	text := "已请求停止：经协议发送 turn/interrupt，等待 agent 回填结果、写好检查点后退出"
+	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
+	defer cancel()
+	if conn == nil || conn.Call(ctx, "turn/interrupt", nil, nil) != nil {
+		if err := syscall.Kill(-proc.Pid, syscall.SIGINT); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		text = "已请求停止：向 agent 发送 SIGINT，等待它回填结果、写好检查点后退出"
 	}
 	r.add(event{Kind: "stop", Text: text})
 	w.WriteHeader(http.StatusNoContent)
@@ -1102,4 +1155,32 @@ func (s *server) traceMetrics(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// B0：agent 发来的协议消息。通知原样存成 notify 事件（页面按方法名还原过程）；
+// 联网审批请求存成 approval 事件，并记下请求ID，等用户在页面上点“允许 / 拒绝”时回复。
+func (r *run) handle(m protocol.Message) {
+	if m.IsRequest() {
+		if m.Method != "network/requestApproval" {
+			r.mu.Lock()
+			conn := r.conn
+			r.mu.Unlock()
+			if conn != nil {
+				conn.Reply(*m.ID, nil, &protocol.Error{Code: -32601, Message: "观测台不支持 " + m.Method})
+			}
+			return
+		}
+		var params struct {
+			Domain string `json:"domain"`
+		}
+		json.Unmarshal(m.Params, &params)
+		r.mu.Lock()
+		if r.approvals != nil {
+			r.approvals[params.Domain] = append(r.approvals[params.Domain], *m.ID)
+		}
+		r.mu.Unlock()
+		r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})
+		return
+	}
+	r.add(event{Kind: "notify", Method: m.Method, Body: m.Params})
 }

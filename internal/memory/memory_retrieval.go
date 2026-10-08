@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/telemetry"
 
@@ -105,7 +106,12 @@ func (r *Retrieval) degrade(reason string) {
 }
 
 // 记忆检索的终端行都带 phase；观测台据此把开场调入和运行中的 search_memory 分开显示。
-func memLog(format string, args ...any) { fmt.Println(Redact(fmt.Sprintf(format, args...))) }
+// 记忆事件：终端照旧打印“Memory 类型: 内容”，有界面时再发一条 memory/event，界面直接读类型字段，不解析文本。
+func memLog(kind, format string, args ...any) {
+	text := Redact(fmt.Sprintf(format, args...))
+	fmt.Printf("Memory %s: %s\n", kind, text)
+	protocol.Notify("memory/event", map[string]string{"kind": kind, "text": text})
+}
 
 func hashText(parts ...string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(parts, "\x00"))))[:32]
@@ -123,7 +129,7 @@ func (s *Store) Retrieve(ctx context.Context, phase, query, mode string) (_ *Ret
 	}()
 	var list []Memory
 	// 1. 锁内只取快照（顺带删除过期条目），之后的 embedding 与模型请求都在锁外。
-	if err := s.update(0, func(file *memoryFile, _ time.Time, _ func(string, ...any)) {
+	if err := s.update(0, func(file *memoryFile, _ time.Time, _ func(string, string, ...any)) {
 		list = slices.Clone(file.Memories)
 	}); err != nil {
 		return nil, err
@@ -155,7 +161,7 @@ func (s *Store) Retrieve(ctx context.Context, phase, query, mode string) (_ *Ret
 			bm25 = bm25Search(query, chunks)
 		}
 		r.Vector, r.BM25 = len(vector), len(bm25)
-		memLog("Memory index: phase=%s plan=%s memories=%d chunks=%d contextual=%d no_source=%d pending=%d too_long=%d vectors_cached=%d vectors_built=%d",
+		memLog("index", "phase=%s plan=%s memories=%d chunks=%d contextual=%d no_source=%d pending=%d too_long=%d vectors_cached=%d vectors_built=%d",
 			phase, plan.Name, r.Total, r.Chunks, r.Contextual, r.NoSource, r.Pending, r.TooLong, r.VectorCached, r.VectorBuilt)
 		// 4. 合并去重 + RRF。
 		r.Candidates = fuse(list, chunks, vector, bm25)
@@ -198,9 +204,9 @@ func (s *Store) logRetrieval(r *Retrieval) {
 		degraded = "无"
 	}
 	if r.Phase == "recall" {
-		memLog("Memory load: phase=recall path=%s total=%d injected=%d", memoryPath, r.Total, r.Selected)
+		memLog("load", "phase=recall path=%s total=%d injected=%d", memoryPath, r.Total, r.Selected)
 	}
-	memLog("Memory retrieve: phase=%s mode=%s vector=%d bm25=%d fused=%d rerank=%s selected=%d tokens=%d/%d content=%s",
+	memLog("retrieve", "phase=%s mode=%s vector=%d bm25=%d fused=%d rerank=%s selected=%d tokens=%d/%d content=%s",
 		r.Phase, r.Mode, r.Vector, r.BM25, r.Fused, r.Rerank, r.Selected, r.Tokens, s.tokens, degraded)
 	selected := map[*memoryHit]bool{}
 	for _, h := range r.Hits {
@@ -209,11 +215,11 @@ func (s *Store) logRetrieval(r *Retrieval) {
 		if r.Phase != "recall" {
 			event = "hit"
 		}
-		memLog("Memory %s: phase=%s id=%s kind=%s %s content=%s", event, r.Phase, h.Memory.ID, h.Memory.Kind, h.scoreText(), clipText(h.Memory.Content, 80))
+		memLog(event, "phase=%s id=%s kind=%s %s content=%s", r.Phase, h.Memory.ID, h.Memory.Kind, h.scoreText(), clipText(h.Memory.Content, 80))
 	}
 	for _, h := range r.Candidates {
 		if !selected[h] && h.Reranked {
-			memLog("Memory drop: phase=%s id=%s %s relevant=%t content=%s", r.Phase, h.Memory.ID, h.scoreText(), h.Relevant, clipText(h.Note, 60))
+			memLog("drop", "phase=%s id=%s %s relevant=%t content=%s", r.Phase, h.Memory.ID, h.scoreText(), h.Relevant, clipText(h.Note, 60))
 		}
 	}
 }
@@ -361,25 +367,25 @@ func (s *Store) ensureIndex(ctx context.Context, phase string, list []Memory, pl
 		if s.contextLeft.Add(-1) < 0 {
 			s.contextLeft.Add(1)
 			c.Reason = "本次运行的背景生成预算已用完，暂按原文检索"
-			memLog("Memory contextualize: phase=%s id=%s chunk=%d/%d status=budget content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, c.Reason)
+			memLog("contextualize", "phase=%s id=%s chunk=%d/%d status=budget content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, c.Reason)
 			continue
 		}
 		text, err := s.contextualize(ctx, byID[c.MemoryID], *c, plan)
 		c.Updated = time.Now()
 		if err != nil {
 			c.Reason = Redact(clipText("背景生成失败："+err.Error(), 160))
-			memLog("Memory contextualize: phase=%s id=%s chunk=%d/%d status=failed content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, c.Reason)
+			memLog("contextualize", "phase=%s id=%s chunk=%d/%d status=failed content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, c.Reason)
 			continue
 		}
 		// 提示词里的长度只是要求，这里按向量模型的实际计数校验拼接后的整段；超限不截断背景，
 		// 退回原文并记为最终状态（同一配置下重试大概率仍超限，不再反复消耗预算）。
 		if n := plan.Count(text + "\n" + c.Text); n > plan.Limit {
 			c.Status, c.Reason = "too_long", fmt.Sprintf("背景加片段共%d个单位，超过向量模型上限%d，未采用背景，按原文检索：%s", n, plan.Limit, clipText(text, 60))
-			memLog("Memory contextualize: phase=%s id=%s chunk=%d/%d status=too_long content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, c.Reason)
+			memLog("contextualize", "phase=%s id=%s chunk=%d/%d status=too_long content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, c.Reason)
 			continue
 		}
 		c.Context, c.Status, c.Reason = text, "contextual", ""
-		memLog("Memory contextualize: phase=%s id=%s chunk=%d/%d status=ok chars=%d content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, utf8.RuneCountInString(text), text)
+		memLog("contextualize", "phase=%s id=%s chunk=%d/%d status=ok chars=%d content=%s", phase, c.MemoryID, c.Chunk, c.Chunks, utf8.RuneCountInString(text), text)
 	}
 	for _, c := range chunks {
 		switch c.Status {
@@ -486,7 +492,7 @@ func loadIndex() (memoryIndex, error) {
 	var saved memoryIndex
 	// 派生数据可以重建：损坏或版本不同就当作空索引，原始记忆不受影响。
 	if json.Unmarshal(data, &saved) != nil || saved.Version != memoryIndexVersion || saved.Chunks == nil {
-		fmt.Println("Memory index: rebuild=true reason=索引文件损坏或版本变化，按原始记忆重建")
+		memLog("index", "rebuild=true reason=索引文件损坏或版本变化，按原始记忆重建")
 		return index, nil
 	}
 	return saved, nil
@@ -928,7 +934,7 @@ func (s *Store) touch(hits []*memoryHit, r *Retrieval) ([]*memoryHit, error) {
 		return nil, nil
 	}
 	valid := []*memoryHit{}
-	err := s.update(0, func(file *memoryFile, now time.Time, _ func(string, ...any)) {
+	err := s.update(0, func(file *memoryFile, now time.Time, _ func(string, string, ...any)) {
 		for _, h := range hits {
 			i := slices.IndexFunc(file.Memories, func(m Memory) bool { return m.ID == h.Memory.ID })
 			if i < 0 || file.Memories[i].Content != h.Memory.Content {

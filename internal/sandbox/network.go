@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"learning-agent/internal/netguard"
 )
 
 // 网络：沙箱在自己的网络 namespace 里，只有回环接口，直接连外网一定失败。
@@ -27,6 +29,18 @@ import (
 // 白名单只能由用户添加（-net-allow，或在观测台点“允许”）。模型只能调用 request_network_access 发起请求，不能自己批准。
 var Allow []string
 
+// 运行中也会加入新域名（用户在界面上当场批准），代理的检查与追加用同一把锁。
+var allowMu sync.Mutex
+
+// AllowDomain 把用户刚批准的域名加进白名单，本轮接下来的命令立即可以访问。
+func AllowDomain(domain string) {
+	allowMu.Lock()
+	defer allowMu.Unlock()
+	if !slices.Contains(Allow, domain) {
+		Allow = append(Allow, domain)
+	}
+}
+
 const proxyPort = "3128"
 
 var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
@@ -37,6 +51,8 @@ func ValidDomain(domain string) bool { return len(domain) <= 253 && domainPatter
 // 白名单里的 example.com 同时放行它的子域名 a.example.com。
 func allowed(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	allowMu.Lock()
+	defer allowMu.Unlock()
 	return slices.ContainsFunc(Allow, func(a string) bool { return host == a || strings.HasSuffix(host, "."+a) })
 }
 
@@ -75,8 +91,8 @@ func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
 		return deny("无法解析域名")
 	}
 	for _, ip := range ips {
-		if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsUnspecified() {
-			return deny("解析到本机或内网地址 " + ip.IP.String())
+		if netguard.Internal(ip.IP) {
+			return deny("解析到本机、内网或保留地址 " + ip.IP.String())
 		}
 	}
 	fmt.Printf("Sandbox net: allow host=%s port=%s\n", host, port)

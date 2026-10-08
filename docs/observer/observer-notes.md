@@ -156,17 +156,17 @@ MCP 配置可填 stdio 启动命令或 http(s) 地址。源码启动命令相对
 
 勾选“Bash 沙箱”启用 bash 和 request_network_access。同一任务共享工作目录，同批 Bash 顺序执行；命令非零退出仍返回结果，不自动重试。
 
-模型只能请求联网，用户点击“允许”后才加入白名单。允许/拒绝显示在对话流，批准项记入存档供续聊恢复。浏览器是独立网络通道，不受 Bash 白名单直接约束。隔离、资源条件和组合风险见 [Day 12 实践](../day-12/day-12-lab.md) 与 [Q12](../deep-questions.md#q12)。
+模型只能请求联网，用户点击“允许”后才加入白名单。B0 起这是 agent 发给观测台的请求（`network/requestApproval`）：agent 暂停等待，用户在对话流的卡片上点“允许”，观测台当场回复，**本轮**接下来的命令就能访问；最多等 4 分钟，没有答复时 agent 返回待批准并结束本轮。子 agent 发起的审批经父 agent 转发到同一张卡片。决定同时记入存档，之后的续聊作为 `-net-allow` 传入。浏览器是独立网络通道，不受 Bash 白名单直接约束。隔离、资源条件和组合风险见 [Day 12 实践](../day-12/day-12-lab.md) 与 [Q12](../deep-questions.md#q12)。
 
 ## 6. 停止与恢复
 
 运行中发送键变为 ■：
 
-- 第一次点击向 agent 进程组发 SIGINT，优雅停止、回填调用状态并保存检查点；父 agent 向子任务传递停止信号。
+- 第一次点击经协议发 `turn/interrupt`（拿不到确认时退回 SIGINT），优雅停止、回填调用状态并保存检查点；父 agent 向子任务传递停止信号。
 - 正在停止时再点一次，确认后强制结束，未保存的进度可能丢失。
 - 取消中的模型请求记录为 499，与上游故障区分。
 
-正常结束后，续聊从最后一次普通请求和完整 assistant 回答恢复 View。停止、超时或出错后，从任务检查点恢复，并沿用这个检查点的任务 ID（`-task-id`），被打断的子 agent 才能按 task_id 续跑；缺少结果的工具调用补为“未执行”或“结果未知”，不会在恢复历史时直接重做。之后模型根据新消息决定核对、重做还是放弃。
+正常结束后，续聊从最后一次普通请求和完整 assistant 回答恢复 View。停止、超时或出错后，从任务检查点恢复。每一轮都用新的检查点 ID，并以 `continues` 指向上一轮，旧检查点保持原样；模型可以用 task_id 引用之前各轮派出的子任务，让它们从检查点续跑；缺少结果的工具调用补为“未执行”或“结果未知”，不会在恢复历史时直接重做。之后模型根据新消息决定核对、重做还是放弃。
 
 恢复的是模型视图，不重新注入全部压缩前原文；更早轨迹仍在观测存档中。每次新提问获得新的请求预算，Turn 连续递增，Step 从 1 开始。整条记录的时间跨度包含两次提问之间的等待。底层语义见 [Day 8](../day-08/day-08-lab.md)、[Day 9](../day-09/day-09-lab.md)。
 
@@ -183,11 +183,13 @@ MCP 配置可填 stdio 启动命令或 http(s) 地址。源码启动命令相对
   → 各进程的 span 写入 .data/traces/<trace_id>.jsonl，“调用链”按 trace 读取
 ```
 
+agent 以 `-app-server` 启动：stdout 是 JSON-RPC 协议（问题与续聊上下文经 `turn/start` 传入，agent 发回 `turn/*`、`item/*`、记忆、能力、浏览器、子 agent 等通知，以及联网审批请求），stderr 是终端输出。页面需要的结构化信息只读通知；B0 之前的存档没有通知，由页面的兼容层把当时的日志行换算成同样的通知。协议细节见 [B0 实践](../bonus-protocol/protocol-lab.md)。
+
 观测台把子进程 LLM_API_URL 指向自己的代理地址。模型选择与真实上游由 agent 的 llm.Providers 决定，代理接受声明的 https 上游；密钥从本地配置读取，Authorization 转发但不写入观测记录。
 
 默认子进程是当前可执行文件，-dev 才使用 go run。每个任务进程独立，避免包级功能开关互相覆盖。agent 使用通用的 -history-stdin 恢复上下文，不读取观测台的存档路径。
 
-事件包括 start、continue、request、response、stdout、stderr、exit。start/continue 带这次交互的 trace_id，request 带 agent 的 chat span_id。观测台重启时读取已有存档，对话列表按最近活动排序。原始请求响应、模型消息和工具结果都可能包含业务内容，运行数据留在 .data/，不复制到学习目录。
+事件包括 start、continue、request、response、stdout、stderr、exit，以及 B0 的 notify（协议通知）与 approval（审批请求）。start/continue 带这次交互的 trace_id，request 带 agent 的 chat span_id。观测台重启时读取已有存档，对话列表按最近活动排序。原始请求响应、模型消息和工具结果都可能包含业务内容，运行数据留在 .data/，不复制到学习目录。
 
 ## 8. 自己动手观察
 

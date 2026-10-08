@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -47,7 +48,7 @@ const (
 
 var Definitions = []map[string]any{
 	{"name": "bash", "description": "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。工作目录 /workspace 在本任务内保留文件；每次调用是新的 shell（cd 和环境变量不保留）。不能写其他位置，默认不能联网。", "parameters": llm.Parameters("command")},
-	{"name": "request_network_access", "description": "请求用户允许沙箱访问一个域名（如 pypi.org）。只能发起请求，由用户在界面上批准，批准后下一轮对话起生效。", "parameters": map[string]any{
+	{"name": "request_network_access", "description": "请求用户允许沙箱访问一个域名（如 pypi.org）。由用户在界面上批准：用户当场批准时本轮接下来就能访问；没有界面或用户未答复时返回 pending。", "parameters": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"domain": map[string]string{"type": "string", "description": "要访问的域名，小写，不含协议和路径，如 pypi.org"},
@@ -56,6 +57,9 @@ var Definitions = []map[string]any{
 		"required": []string{"domain", "reason"},
 	}},
 }
+
+// ApprovalWait 是 request_network_access 等待用户答复的时长；执行器给这个工具的单次时限比它多留一些余量。
+var ApprovalWait = 4 * time.Minute
 
 func Rules() string {
 	rule := "\n可以用 bash 在 Linux 沙箱里执行命令：工作目录 /workspace（本任务内保留文件），每次调用是新的 shell；只能写 /workspace 和 /tmp；内存、进程数和时长有限。"
@@ -98,10 +102,32 @@ func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 		if allowed(domain) {
 			return map[string]string{"domain": domain, "status": "already_allowed"}, nil
 		}
-		// 观测台按这一行显示“允许 / 拒绝”按钮；命令行用户看到它，加 -net-allow 重新运行。
-		fmt.Printf("Network request [%s]: domain=%s reason=%s\n", callID, domain, strings.ReplaceAll(strings.TrimSpace(args.Reason), "\n", " "))
+		reason := strings.ReplaceAll(strings.TrimSpace(args.Reason), "\n", " ")
+		fmt.Printf("Network request [%s]: domain=%s reason=%s\n", callID, domain, reason)
+		// B0：向界面发起请求，在这里暂停，等用户点“允许 / 拒绝”。模型不能替用户回答：请求只走界面连接，模型碰不到。
+		waitCtx, cancel := context.WithTimeout(ctx, ApprovalWait)
+		defer cancel()
+		var answer struct {
+			Decision string `json:"decision"`
+		}
+		err := protocol.Call(waitCtx, "network/requestApproval", map[string]string{"call_id": callID, "domain": domain, "reason": reason}, &answer)
+		switch {
+		case ctx.Err() != nil:
+			return nil, ctx.Err() // 整轮被中断：交给执行器按“结果未知”处理
+		case err == nil && answer.Decision == "allow":
+			AllowDomain(domain)
+			fmt.Printf("Network approved [%s]: domain=%s\n", callID, domain)
+			return map[string]string{"domain": domain, "status": "allowed", "message": "用户已批准：本轮接下来的命令就可以经代理访问 " + domain + " 及其子域名。"}, nil
+		case err == nil && answer.Decision == "deny":
+			fmt.Printf("Network denied [%s]: domain=%s\n", callID, domain)
+			return map[string]string{"domain": domain, "status": "denied", "message": "用户拒绝了这个请求。不要再请求同一个域名，换别的办法，或在回答里说明无法完成的原因。"}, nil
+		case errors.Is(err, protocol.ErrNoClient) || (err == nil && answer.Decision == "unavailable"):
+			// 命令行或队列里没有可以批准的人：保持原来的做法，由用户下次运行时加 -net-allow。
+			return map[string]string{"domain": domain, "status": "pending",
+				"message": "当前没有可以当场批准的界面。用户可以在下次运行时加 -net-allow " + domain + "。请在回答里说明需要访问的原因，然后结束本轮。"}, nil
+		}
 		return map[string]string{"domain": domain, "status": "pending",
-			"message": "已向用户发起请求。只有用户在界面上点“允许”（或命令行加 -net-allow " + domain + "）后，下一轮对话起才能访问。请在回答里说明需要访问的原因，然后结束本轮。"}, nil
+			"message": "用户暂时没有答复。之后批准的话，下一轮对话起可以访问。请在回答里说明需要访问的原因，然后结束本轮。"}, nil
 	}
 	command := strings.TrimSpace(args.Command)
 	if command == "" || len(command) > 16<<10 {

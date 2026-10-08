@@ -23,6 +23,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/netguard"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 )
 
@@ -213,6 +215,8 @@ func search(ctx context.Context, callID, query string) (any, error) {
 	}
 	address := "https://www.bing.com/search?mkt=zh-CN&q=" + url.QueryEscape(query) // cn.bing.com 会再跳转到这里
 	fmt.Printf("Browser [%s]: search url=%s\n", callID, address)
+	// B0：界面按调用ID找这一步的画面与地址，不再解析这一行日志。
+	protocol.Notify("browser/navigate", map[string]string{"call_id": callID, "action": "search", "url": address})
 	page, err := inTab[struct {
 		URL, Title, Text string
 		Results          []map[string]string
@@ -240,6 +244,7 @@ func open(ctx context.Context, callID, address, find string) (any, error) {
 		return nil, llm.Permanent(err)
 	}
 	fmt.Printf("Browser [%s]: open url=%s\n", callID, address)
+	protocol.Notify("browser/navigate", map[string]string{"call_id": callID, "action": "open", "url": address})
 	// innerText 是渲染后用户看到的文字：脚本生成的内容在，隐藏元素和 <script> 不在。
 	// 正文和链接优先取 main/article 里的，跳过导航栏的“登录”“首页”之类（正文太短时退回整页）；链接按地址去重。
 	page, err := inTab[struct {
@@ -343,8 +348,8 @@ func privateHost(host string) error {
 		return fmt.Errorf("无法解析域名 %s", host)
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return fmt.Errorf("不允许访问本机或内网地址：%s → %s", host, ip)
+		if netguard.Internal(ip) {
+			return fmt.Errorf("不允许访问本机、内网或保留地址：%s → %s", host, ip)
 		}
 	}
 	return nil

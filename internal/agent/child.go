@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
+	"learning-agent/internal/sandbox"
 	"learning-agent/internal/telemetry"
 )
 
@@ -23,7 +26,10 @@ import (
 //
 // 每个任务一个子进程：功能开关是包级变量、一个进程只跑一个任务；子进程崩溃也拖不垮调度方。
 // 返回的错误按能否再试分类：llm.IsPermanent 为真时再跑也一样，否则可以稍后续跑。
-func RunChild(ctx context.Context, id, question string, args []string, out io.Writer) (cp *Checkpoint, replayed bool, err error) {
+//
+// B0：子进程以 -app-server 启动，父进程就是它的界面：子进程的通知包一层 subagent/message 转给上级界面（callID 为空时，
+// 比如队列，不转发）；子进程的请求（联网审批）转给上级界面，没有上级界面时如实回答“没人能批准”。给人看的日志写到 out。
+func RunChild(ctx context.Context, id, question string, args []string, out io.Writer, callID string) (cp *Checkpoint, replayed bool, err error) {
 	cp, err = LoadCheckpoint(id)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -50,8 +56,29 @@ func RunChild(ctx context.Context, id, question string, args []string, out io.Wr
 	if err != nil {
 		return cp, false, err
 	}
-	cmd := exec.CommandContext(ctx, self, args...)
-	cmd.Stdout, cmd.Stderr = out, out
+	cmd := exec.CommandContext(ctx, self, append([]string{"-app-server"}, args...)...)
+	// 协议走一对管道：子进程的 stdout → 父进程读，父进程写 → 子进程的 stdin。用 *os.File 而不是 io.Writer，Wait 不必等复制协程。
+	fromChild, childOut, err := os.Pipe()
+	if err != nil {
+		return cp, false, err
+	}
+	childIn, toChild, err := os.Pipe()
+	if err != nil {
+		return cp, false, err
+	}
+	defer fromChild.Close()
+	defer toChild.Close()
+	cmd.Stdout, cmd.Stdin, cmd.Stderr = childOut, childIn, out
+	var conn *protocol.Conn
+	conn = protocol.NewConn(fromChild, toChild, func(m protocol.Message) {
+		if m.IsRequest() {
+			go relayRequest(ctx, conn, id, m)
+			return
+		}
+		if callID != "" {
+			protocol.Notify("subagent/message", map[string]any{"call_id": callID, "task_id": id, "message": m})
+		}
+	})
 	// D13：TRACEPARENT 指向调用方当前的 span（spawn_agent 的 execute_tool，或队列的 queue_task），
 	// 子进程的 invoke_agent 就挂在它下面。同名变量以后面的为准，覆盖从父进程继承来的那个。
 	cmd.Env = append(os.Environ(), telemetry.Env(ctx)...)
@@ -60,7 +87,18 @@ func RunChild(ctx context.Context, id, question string, args []string, out io.Wr
 	// 取消时先发 SIGINT，让子进程回填工具结果、写好检查点再退出；10 秒还没退出才强制结束。
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
-	runErr := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		childOut.Close()
+		childIn.Close()
+		return cp, false, err
+	}
+	childOut.Close() // 父进程这一侧不再需要子进程那一端；子进程退出后读到 EOF
+	childIn.Close()
+	runErr := cmd.Wait()
+	select { // 读完子进程退出前写出的最后几条通知（turn/completed 等）
+	case <-conn.Closed():
+	case <-time.After(2 * time.Second):
+	}
 	cp, err = LoadCheckpoint(id)
 	if err != nil {
 		// 连检查点都没写出来：多半是参数错误，再启动一次也一样。
@@ -83,4 +121,25 @@ func RunChild(ctx context.Context, id, question string, args []string, out io.Wr
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
+}
+
+// 子 agent 发来的请求转给上级界面。目前只有联网审批：用户批准后，父进程自己的白名单也加上这个域名。
+func relayRequest(ctx context.Context, conn *protocol.Conn, taskID string, m protocol.Message) {
+	if m.Method != "network/requestApproval" {
+		conn.Reply(*m.ID, nil, &protocol.Error{Code: -32601, Message: "未知方法 " + m.Method})
+		return
+	}
+	params := map[string]any{}
+	json.Unmarshal(m.Params, &params)
+	params["task_id"] = taskID
+	var answer struct {
+		Decision string `json:"decision"`
+	}
+	if err := protocol.Call(ctx, m.Method, params, &answer); err != nil {
+		answer.Decision = "unavailable"
+	}
+	if domain, ok := params["domain"].(string); ok && answer.Decision == "allow" {
+		sandbox.AllowDomain(domain)
+	}
+	conn.Reply(*m.ID, answer, nil)
 }

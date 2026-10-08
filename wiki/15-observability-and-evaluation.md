@@ -230,13 +230,26 @@ ctx, span := tracer.Start(ctx, "invoke_agent worker")
 
 **代理与进程内打点**：代理只看得到模型请求的原文，工具耗时只能用前后两次请求的间隔去估；进程内 span 能看到工具、检索、子进程的结构，但默认不含原文。两者并存时用 `traceparent` 头把截获的请求和 chat span 对上。社区的 GenAI 语义约定统一了 `chat`、`execute_tool`、`invoke_agent` 等 span 名与 `gen_ai.*` 属性，内容属性需要显式开启。原理与算例见 [Day 13 笔记](../docs/day-13/day-13-notes.md)。
 
+### 一致性与数据来源：pass^k 和“以持久状态为准”
+
+同一任务跑 n 次、成功 c 次，单次成功率是 c/n；“k 次全部成功”的无偏估计是 C(c,k)/C(n,k)，对所有任务取平均就是 pass^k（τ-bench）。例：8 次成功 6 次，单次 75%，pass^4 = 15/70 ≈ 21%。pass@k（至少一次成功）随 k 增大趋近 100%，pass^k 趋近 0；面向用户的 agent 更关心后者。
+
+```text
+完成率、结局分布、耗时、成本  ← 持久化任务状态（检查点）：每个边界同步写，kill -9 也在
+工具失败率、重试、慢在哪一步  ← trace：只导出已结束的 span，崩溃时正在执行的部分会丢
+```
+
+只从 trace 统计成功率会产生幸存者偏差：崩溃的任务没有根 span，既不进分子也不进分母。所以结局以持久状态为准，trace 只做归因，并在报告里注明工具层指标可能偏低（[Q19](../docs/deep-questions.md#q19)）。“完成”只说明给出了最终回答；“答对”需要评测集和打分器，二者不能混报。原理见 [Day 15 笔记](../docs/day-15/day-15-notes.md)。
+
 ### 对照已有实现
 
 [observer.proxy、add、streamEvents](../internal/observer/server.go)记录请求、用途、任务与事件；[embedding请求](../internal/retrieval/embedding.go)另走向量接口，[检索实验](../internal/labs/rag_lab.go)提供现有固定对比。
 
 Day 13 起，[internal/telemetry](../internal/telemetry/telemetry.go) 用 OpenTelemetry Go SDK 给模型请求、工具、检索、记忆、MCP、沙箱、浏览器、子 agent 和队列打 span，写到本地文件，可选 OTLP 导出；观测台每次交互一个 trace，“调用链”标签展示 span 树和由 span 汇总的次数、失败率、P50/P95。实现与实验见 [Day 13 实践](../docs/day-13/day-13-lab.md)。
 
-仍然没有：采样、Metrics SDK 与告警、带 trace_id 的结构化日志（重试等事件目前挂在 span 上）、留出集或统计区间自动评分。页面中的 LLM token 总量不能直接当作包含全部向量/资源的费用账单。上文的事件类型、公式与区间是技术学习内容，不表示都已自动算出。
+Day 15 起，`go run . metrics`（[internal/metrics](../internal/metrics/metrics.go)）按上一节的分工统计完成率、异常结局与可恢复性、端到端延迟、成本和工具可靠性；检查点补记开始时间、累计用量与 trace_id。B0 起观测台读取 agent 的结构化协议通知，不再解析终端文本（[B0 实践](../docs/bonus-protocol/protocol-lab.md)）。
+
+仍然没有：采样、Metrics SDK 与告警、带 trace_id 的结构化日志（重试等事件目前挂在 span 上）、答对率与打分器、pass^k、留出集或统计区间自动评分。页面中的 LLM token 总量不能直接当作包含全部向量/资源的费用账单。上文的事件类型、公式与区间是技术学习内容，不表示都已自动算出。
 
 ### 进阶推演
 
@@ -265,6 +278,7 @@ Day 13 起，[internal/telemetry](../internal/telemetry/telemetry.go) 用 OpenTe
 
 - [观测台说明](../docs/observer/observer-notes.md)
 - [Day 13 可观测性笔记](../docs/day-13/day-13-notes.md)、[Day 13 实践](../docs/day-13/day-13-lab.md)
+- [Day 15 评测指标笔记](../docs/day-15/day-15-notes.md)、[Day 15 实践](../docs/day-15/day-15-lab.md)
 - [Day 4 分层评估](../docs/day-04/day-04-notes.md)
 - [Day 4 对比实践](../docs/day-04/day-04-lab.md)
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tools"
 
@@ -61,7 +62,7 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 	}()
 	var c *client.Client
 	if IsURL(command) {
-		fmt.Printf("MCP connect: url=%s\n", command)
+		protocol.Event("capability/event", "mcp_connect", "MCP connect: url="+command)
 		// 远程 server 不是本进程启动的，Close 只断开连接，不会结束对方。
 		if c, err = client.NewStreamableHttpClient(command); err == nil {
 			err = c.Start(ctx)
@@ -74,7 +75,7 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 		if len(fields) == 0 {
 			return nil, nil, errors.New("mcp-server 需要一条命令或 http(s) 地址")
 		}
-		fmt.Printf("MCP connect: command=%s\n", command)
+		protocol.Event("capability/event", "mcp_connect", "MCP connect: command="+command)
 		// server 的 stderr 是它的日志通道，原样转到本进程 stderr；stdout 只承载协议消息。
 		c, err = client.NewStdioMCPClientWithOptions(fields[0], nil, fields[1:], transport.WithCommandStderrWriter(os.Stderr))
 		if err != nil {
@@ -93,7 +94,7 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 	span.SetName("initialize " + info.ServerInfo.Name)
 	span.SetAttributes(attribute.String("mcp.protocol.version", c.ProtocolVersion()), attribute.String("mcp.server.name", info.ServerInfo.Name))
 	capabilities, _ := json.Marshal(info.Capabilities)
-	fmt.Printf("MCP initialize: protocol=%s server=%s/%s capabilities=%s\n", c.ProtocolVersion(), info.ServerInfo.Name, info.ServerInfo.Version, capabilities)
+	protocol.Event("capability/event", "mcp_initialize", fmt.Sprintf("MCP initialize: protocol=%s server=%s/%s capabilities=%s", c.ProtocolVersion(), info.ServerInfo.Name, info.ServerInfo.Version, capabilities))
 	if info.Capabilities.Tools == nil {
 		c.Close()
 		return nil, nil, errors.New("MCP server 没有声明 tools capability")
@@ -103,7 +104,7 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 		c.Close()
 		return nil, nil, fmt.Errorf("tools/list 失败：%w", err)
 	}
-	fmt.Printf("MCP tools/list: count=%d\n", len(result.Tools))
+	protocol.Event("capability/event", "mcp_tools_list", fmt.Sprintf("MCP tools/list: count=%d", len(result.Tools)), "count", len(result.Tools))
 	return &Connection{client: c, tools: map[string]string{}, transport: transportName}, result.Tools, nil
 }
 
@@ -121,7 +122,7 @@ func (m *Connection) Definitions(tools []sdk.Tool) []map[string]any {
 		// 方舟函数名只允许字母、数字、_、-，最长64；MCP 还允许“.”，替换掉。
 		name := "mcp_" + invalidToolChars.ReplaceAllString(tool.Name, "_")
 		if len(name) > 64 || taken[name] {
-			fmt.Printf("MCP skip: tool=%s reason=名称过长或与已有工具重名\n", tool.Name)
+			protocol.Event("capability/event", "mcp_skip", "MCP skip: tool="+tool.Name+" reason=名称过长或与已有工具重名")
 			continue
 		}
 		data, err := json.Marshal(tool)
@@ -129,13 +130,13 @@ func (m *Connection) Definitions(tools []sdk.Tool) []map[string]any {
 			InputSchema map[string]any `json:"inputSchema"`
 		}
 		if err != nil || json.Unmarshal(data, &decoded) != nil || decoded.InputSchema == nil {
-			fmt.Printf("MCP skip: tool=%s reason=inputSchema 无效\n", tool.Name)
+			protocol.Event("capability/event", "mcp_skip", "MCP skip: tool="+tool.Name+" reason=inputSchema 无效")
 			continue
 		}
 		taken[name] = true
 		m.tools[name] = tool.Name
 		definitions = append(definitions, map[string]any{"name": name, "description": tool.Description, "parameters": decoded.InputSchema})
-		fmt.Printf("MCP register: %s → %s\n", tool.Name, name)
+		protocol.Event("capability/event", "mcp_register", "MCP register: "+tool.Name+" → "+name, "tool", name)
 	}
 	return definitions
 }

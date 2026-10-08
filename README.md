@@ -70,13 +70,15 @@ go build -o bin/learning-agent .
 | Day 12 | 代码执行沙箱 | [笔记](docs/day-12/day-12-notes.md) | [实践](docs/day-12/day-12-lab.md) | — |
 | Day 13 | 可观测性：调用链追踪 | [笔记](docs/day-13/day-13-notes.md) | [实践](docs/day-13/day-13-lab.md) | — |
 | Day 14 | 第二周综合与复盘 | [复盘](docs/week-02-review.md) | [实践](docs/day-14/day-14-lab.md) | — |
+| Day 15 | 评测指标：成功、可靠、延迟、成本 | [笔记](docs/day-15/day-15-notes.md) | [实践](docs/day-15/day-15-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
+| 扩展 | agent 与界面的结构化协议（B0） | [笔记](docs/bonus-protocol/protocol-notes.md) | [实践](docs/bonus-protocol/protocol-lab.md) | — |
 
 补充阅读：
 
-- [28 天学习计划](plan.md)：课程安排与长期目标；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链。
+- [28 天学习计划](plan.md)：课程安排与长期目标；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
 - [Agent 工程面试题库](wiki/16-interview-preparation.md)：126 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。
@@ -95,8 +97,8 @@ go build -o bin/learning-agent .
 | 知识与记忆 | [retrieval](internal/retrieval/)、[memory](internal/memory/) | 向量检索、规则写入、两路召回与重排 |
 | 工具扩展 | [tools](internal/tools/)、[mcp](internal/mcp/)、[skills](internal/skills/) | 本地工具、协议服务、按需加载知识 |
 | 多任务执行 | [queue](internal/queue/)、[子进程](internal/agent/child.go)、[子 agent](internal/agent/subagent.go) | worker、任务 ID、独立上下文与权限继承 |
-| 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/) | 页面读取、进程隔离、网络与资源边界 |
-| 观测与实验 | [observer](internal/observer/)、[telemetry](internal/telemetry/)、[labs](internal/labs/) | 模型请求代理、OpenTelemetry span 与导出、界面、上下文与检索实验 |
+| 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/)、[netguard](internal/netguard/) | 页面读取、进程隔离、网络与资源边界、出口地址判断 |
+| 观测与实验 | [observer](internal/observer/)、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
 
 一个 agent 进程运行一个任务，功能开关由入口设置。观测台、任务队列和子 agent 用独立子进程执行任务；检索等工具直接在该 agent 进程内调用。具体运行边界见 [PROJECT.md](PROJECT.md)。
 
@@ -117,7 +119,9 @@ go build -o bin/learning-agent .
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `-question` | 交互输入 | 交给模型的任务 |
-| `-history-stdin` | false | 从stdin接收上次上下文JSON，配合-question续聊；观测台自动处理 |
+| `-history-stdin` | false | 从stdin接收上次上下文JSON，配合-question续聊（命令行用；观测台改经 `turn/start` 传入） |
+| `-continues` | 空 | 续聊时上一轮的检查点ID：本轮用新ID并记下续接关系，子 agent 可按 task_id 引用之前各轮的子任务；观测台自动处理 |
+| `-app-server` | false | B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；观测台与父 agent 启动子进程时使用 |
 | `-parallel` | 4 | 工具执行并发，1到16 |
 | `-max-steps` | 10 | 模型请求总预算，包含最终回答与上下文摘要 |
 | `-retries` | 2 | 工具额外重试次数，0到5 |
@@ -166,4 +170,4 @@ go build -o bin/learning-agent .
 
 </details>
 
-观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。
+观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。

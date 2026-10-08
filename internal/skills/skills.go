@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/protocol"
 )
 
 // Bonus：知识型 skill。三级加载：索引常驻 system → load_skill 读全文 →（v1 不做）references/scripts。
@@ -41,7 +42,7 @@ func Scan(dir string, only []string) []Skill {
 	for _, path := range paths {
 		s, _, err := readSkill(path)
 		if err != nil {
-			fmt.Printf("Skill error: %s: %v\n", path, err)
+			protocol.Event("capability/event", "skill_error", fmt.Sprintf("Skill error: %s: %v", path, err))
 			continue
 		}
 		found[s.Name] = true
@@ -53,10 +54,10 @@ func Scan(dir string, only []string) []Skill {
 	}
 	for _, name := range only {
 		if !found[name] {
-			fmt.Printf("Skill error: %s: 没有找到这个 skill\n", name)
+			protocol.Event("capability/event", "skill_error", "Skill error: "+name+": 没有找到这个 skill")
 		}
 	}
-	fmt.Printf("Skills: loaded=%d names=%s\n", len(skills), strings.Join(names, ","))
+	protocol.Event("capability/event", "skills_loaded", fmt.Sprintf("Skills: loaded=%d names=%s", len(skills), strings.Join(names, ",")), "count", len(skills))
 	return skills
 }
 

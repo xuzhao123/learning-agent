@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 
 	"go.opentelemetry.io/otel"
@@ -191,7 +192,19 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 		semconv.GenAIRequestModel(config.Model), attribute.String("agent.purpose", purpose), attribute.Int("agent.request.number", n),
 		attribute.Int("agent.request.input_estimate", ContextTokens(history, withTools)), attribute.String("gen_ai.request.reasoning_effort", config.Effort))
 	telemetry.Content(span, semconv.GenAIInputMessagesKey, history)
+	// B0：一次模型调用是一个 modelCall Item。完整的请求与响应原文仍由观测台的代理记录，这里只给结构化摘要。
+	item := protocol.Item{ID: fmt.Sprintf("model-%d", n), Type: "modelCall", Data: map[string]any{"purpose": purpose, "number": n, "input_estimate": ContextTokens(history, withTools)}}
+	protocol.ItemStarted(TaskID, item)
 	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose)
+	done := map[string]any{"purpose": purpose, "number": n, "tool_calls": len(reply.Message.ToolCalls)}
+	if u := reply.Usage; u != nil {
+		done["usage"] = u
+	}
+	if err != nil {
+		done["error"] = err.Error()
+	}
+	item.Data = done
+	protocol.ItemCompleted(TaskID, item)
 	if u := reply.Usage; u != nil {
 		span.SetAttributes(semconv.GenAIUsageInputTokens(u.Prompt), semconv.GenAIUsageOutputTokens(u.Completion))
 		if u.Details.Cached != nil {

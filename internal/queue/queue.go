@@ -161,7 +161,7 @@ func runTask(ctx context.Context, t Task, extra []string, attempts int) (result 
 		result.attempts = attempt
 		fmt.Printf("Queue start: id=%s attempt=%d/%d\n", t.ID, attempt, attempts)
 		fmt.Fprintf(log, "\n===== %s attempt %d =====\n", time.Now().Format(time.RFC3339), attempt)
-		cp, replayed, err := agent.RunChild(ctx, t.ID, t.Question, args, log)
+		cp, replayed, err := agent.RunChild(ctx, t.ID, t.Question, args, log, "")
 		result.elapsed = time.Since(start)
 		if cp != nil {
 			result.calls = cp.Calls

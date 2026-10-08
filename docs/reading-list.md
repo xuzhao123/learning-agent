@@ -114,6 +114,14 @@
 
 先读 [学习笔记](bonus-subagents/subagents-notes.md)，重点是独立上下文、任务说明与权限继承。完整资料见 [参考](bonus-subagents/subagents-notes.md#参考)。
 
+## Day 15 · 评测指标
+
+先读 [学习笔记](day-15/day-15-notes.md)，重点是完成与答对的区别、pass@k 与 pass^k、分母的取法、每次成功的成本，以及为什么指标的数据不能只取自 trace。完整资料见 [参考](day-15/day-15-notes.md#参考)。
+
+## 扩展 · 结构化协议（B0）
+
+先读 [学习笔记](bonus-protocol/protocol-notes.md)，重点是 JSON-RPC 的请求、响应与通知，Thread / Turn / Item 会话模型，服务端主动发起的审批请求，以及为什么不用 MCP 承载。完整资料见 [参考](bonus-protocol/protocol-notes.md#参考)。
+
 ## 扩展 · 模型路由
 
 先读 [学习笔记](bonus-routing/routing-notes.md)，重点是供应商差异、按用途路由与故障转移。完整资料见 [参考](bonus-routing/routing-notes.md#参考)。

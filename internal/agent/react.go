@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"learning-agent/internal/browser"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/memory"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
@@ -68,6 +70,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		}
 		root.SetAttributes(attribute.String("agent.outcome", reason), attribute.Int("agent.model_calls", client.Calls),
 			semconv.GenAIUsageInputTokens(client.Input), semconv.GenAIUsageOutputTokens(client.Completion))
+
 		if err != nil {
 			root.SetStatus(codes.Error, reason)
 			root.SetAttributes(semconv.ErrorTypeKey.String(reason))
@@ -91,7 +94,22 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			return err
 		}
 	}
-	cp := &Checkpoint{ID: CheckpointID, Args: CheckpointArgs, Question: question, Status: "running"}
+	cp := &Checkpoint{ID: CheckpointID, Args: CheckpointArgs, Question: question, Continues: Continues, Status: "running", StartedAt: time.Now().UTC()}
+	// B0：一轮结束。先于下面写检查点的 defer 声明，所以在检查点写好之后才发出；界面据此显示结局，不再找终端里的 Termination 行。
+	defer func() {
+		completed := map[string]any{"turn_id": CheckpointID, "outcome": "no_tool_calls", "model_calls": client.Calls,
+			"usage": map[string]int{"input": client.Input, "output": client.Completion, "cached": client.Cached}}
+		var stop *stopError
+		switch {
+		case errors.As(err, &stop):
+			completed["outcome"], completed["error"] = stop.reason, firstLine(err.Error())
+		case err != nil:
+			completed["outcome"], completed["error"] = "error", firstLine(err.Error())
+		default:
+			completed["answer"] = cp.Answer
+		}
+		protocol.Notify("turn/completed", completed)
+	}()
 	summary := []string{}
 	lastAction, repeated := "", 0
 	completed := 0 // 已经完整结束的轮次（模型回答 + 工具结果都已写回）
@@ -102,16 +120,20 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		if err != nil {
 			return err
 		}
-		// 预算跨续跑累计：否则“崩溃 → 续跑”就能绕过 max_steps 无限循环。
-		client.Calls = resume.Calls
+		// 预算跨续跑累计：否则“崩溃 → 续跑”就能绕过 max_steps 无限循环。用量同样累计，D15 的成本才是整个任务的。
+		client.Calls, client.Input, client.Completion, client.Cached = resume.Calls, resume.Input, resume.Output, resume.Cached
 		cp.Status, cp.Reason, cp.Error = "running", "", ""
 		fmt.Printf("Resume: id=%s completed_rounds=%d model_calls=%d/%d pending_calls=%d\n", cp.ID, completed, client.Calls, maxSteps, pendingCount(pending))
+	}
+	if tid := root.SpanContext().TraceID(); tid.IsValid() && !slices.Contains(cp.Traces, tid.String()) {
+		cp.Traces = append(cp.Traces, tid.String())
 	}
 	save := func() error {
 		if CheckpointID == "" {
 			return nil
 		}
 		cp.Step, cp.Calls, cp.Messages, cp.Summary, cp.LastAction, cp.Repeated = completed, client.Calls, conversation.View, summary, lastAction, repeated
+		cp.Input, cp.Output, cp.Cached = client.Input, client.Completion, client.Cached
 		return cp.write()
 	}
 	if CheckpointID != "" {
@@ -144,6 +166,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	}
 	if resume == nil {
 		conversation.Append(llm.Message{Role: "user", Content: question})
+		protocol.ItemCompleted(CheckpointID, protocol.Item{ID: "user", Type: "userMessage", Data: map[string]string{"text": question}})
 	}
 	if memory.Active != nil {
 		// remember_memory 的引文只能来自本次会话里用户说过的话（不含摘要、模型回答和工具结果）。
@@ -270,7 +293,11 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 	run := func(call llm.ToolCall) (result llm.Observation) {
 		// D13：一个逻辑调用一个 execute_tool span，包含排队、各次尝试与退避；工具内部的 span 挂在它下面。
 		ctx, span := toolSpan(ctx, call)
-		defer func() { endTool(span, result) }()
+		protocol.ItemStarted(CheckpointID, toolItem(call, nil))
+		defer func() {
+			endTool(span, result)
+			protocol.ItemCompleted(CheckpointID, toolItem(call, &result))
+		}()
 		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
 		select {
 		case slots <- struct{}{}:
@@ -317,6 +344,7 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 		_, span := toolSpan(ctx, call)
 		span.SetAttributes(attribute.Bool("agent.tool.replayed", true))
 		endTool(span, results[i])
+		protocol.ItemCompleted(CheckpointID, toolItem(call, &results[i]))
 	}
 	for j, result := range ExecuteBatch(ctx, again, parallel, retries) {
 		results[index[j]] = result
@@ -387,8 +415,11 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 // 不配合取消的工具也不会卡住循环；代价是它可能在后台继续跑完，副作用照样发生——所以记为“结果未知”。
 func runAttempt(ctx context.Context, call llm.ToolCall) (any, error) {
 	timeout := ToolTimeout
-	if call.Function.Name == "spawn_agent" {
+	switch call.Function.Name {
+	case "spawn_agent":
 		timeout = SubagentTimeout
+	case "request_network_access":
+		timeout = sandbox.ApprovalWait + 30*time.Second // 等人点按钮，工具自己会在 ApprovalWait 到时返回 pending
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -438,6 +469,15 @@ func describe(o llm.Observation) string {
 		return tried + o.Error
 	}
 	return tried + "失败：" + o.Error
+}
+
+// B0：一次工具调用是一个 toolCall Item；完成时带上和回填给模型的同一个 Observation。
+func toolItem(call llm.ToolCall, o *llm.Observation) protocol.Item {
+	data := map[string]any{"tool": call.Function.Name, "arguments": call.Function.Arguments}
+	if o != nil {
+		data["observation"] = o
+	}
+	return protocol.Item{ID: call.ID, Type: "toolCall", Data: data}
 }
 
 func toolSpan(ctx context.Context, call llm.ToolCall) (context.Context, trace.Span) {

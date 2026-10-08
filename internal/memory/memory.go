@@ -124,9 +124,10 @@ func (s *Store) locked(fn func() error) error {
 // 每次读、写、删都是一个事务：加锁 → 读文件 → 清理过期 → 修改 → 容量淘汰 → 原子写回 → 派生索引失效。
 // limit 只在写入新记忆时传入；读取和删除传 0，不会因为某条命令的默认容量误删其他条目。
 // 日志先收集，文件落盘成功后才打印。
-func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, logf func(string, ...any))) error {
-	var logs []string
-	logf := func(format string, args ...any) { logs = append(logs, Redact(fmt.Sprintf(format, args...))) }
+func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, logf func(string, string, ...any))) error {
+	type entry struct{ kind, text string }
+	var logs []entry
+	logf := func(kind, format string, args ...any) { logs = append(logs, entry{kind, fmt.Sprintf(format, args...)}) }
 	saved := false
 	err := s.locked(func() error {
 		var file memoryFile
@@ -142,7 +143,7 @@ func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, l
 		file.Memories = slices.DeleteFunc(file.Memories, func(m Memory) bool {
 			expired := !m.ExpireAt.IsZero() && !now.Before(m.ExpireAt)
 			if expired {
-				logf("Memory expire: id=%s kind=%s expired_at=%s content=%s", m.ID, m.Kind, m.ExpireAt.Format(time.RFC3339), clipText(m.Content, 80))
+				logf("expire", "id=%s kind=%s expired_at=%s content=%s", m.ID, m.Kind, m.ExpireAt.Format(time.RFC3339), clipText(m.Content, 80))
 			}
 			return expired
 		})
@@ -156,7 +157,7 @@ func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, l
 				}
 			}
 			m := file.Memories[i]
-			logf("Memory evict: id=%s kind=%s retention=%.3f limit=%d content=%s", m.ID, m.Kind, retention(m, now), limit, clipText(m.Content, 80))
+			logf("evict", "id=%s kind=%s retention=%.3f limit=%d content=%s", m.ID, m.Kind, retention(m, now), limit, clipText(m.Content, 80))
 			file.Memories = slices.Delete(file.Memories, i, i+1)
 		}
 		if file.Memories == nil {
@@ -177,8 +178,8 @@ func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, l
 		return pruneDerived(file.Memories, false)
 	})
 	if saved {
-		for _, line := range logs {
-			fmt.Println(line)
+		for _, e := range logs {
+			memLog(e.kind, "%s", e.text)
 		}
 	}
 	return err
@@ -335,7 +336,7 @@ func (s *Store) Remember(quote, kind string) (any, error) {
 		return strings.Contains(strings.Join(strings.Fields(text), " "), normalized)
 	})
 	reject := func(reason string) (any, error) {
-		fmt.Println(Redact("Memory skip: source=user reason=" + reason + " content=" + clipText(quote, 80)))
+		memLog("skip", "source=user reason=%s content=%s", reason, clipText(quote, 80))
 		return map[string]any{"accepted": false, "reason": reason}, nil
 	}
 	if !found {
@@ -357,7 +358,7 @@ func (s *Store) Remember(quote, kind string) (any, error) {
 		importance = 0.8
 	}
 	s.requests = append(s.requests, Memory{Kind: kind, Source: "user", Content: quote, Importance: importance})
-	fmt.Printf("Memory request: kind=%s content=%s\n", kind, Redact(clipText(quote, 80)))
+	memLog("request", "kind=%s content=%s", kind, clipText(quote, 80))
 	return map[string]any{"accepted": true, "kind": kind, "content": quote, "note": "本轮结束时保存；编号在保存后生成"}, nil
 }
 
@@ -470,11 +471,11 @@ func (s *Store) Commit(question string, transcript []llm.Message) error {
 		notes = append(notes, note)
 	}
 	if len(s.requests) == 0 && rememberHint(question) {
-		fmt.Println("Memory hint: 用户消息含“记住”类说法，但模型没有调用 remember_memory，本轮不写入")
+		memLog("hint", "用户消息含“记住”类说法，但模型没有调用 remember_memory，本轮不写入")
 	}
 	notes = append(notes, s.failures...)
 	if len(notes) == 0 {
-		fmt.Println("Memory write: none")
+		memLog("write", "none")
 		return nil
 	}
 	// 落盘前统一检查：用户原话含疑似密钥整条拒存（原话不能改写）；程序生成的失败记录脱敏后再存。
@@ -484,7 +485,7 @@ func (s *Store) Commit(question string, transcript []llm.Message) error {
 			note.Content = Redact(note.Content)
 		}
 		if reason := rejectReason(note.Content); reason != "" {
-			fmt.Printf("Memory skip: source=%s reason=%s\n", note.Source, reason)
+			memLog("skip", "source=%s reason=%s", note.Source, reason)
 			continue
 		}
 		kept = append(kept, note)
@@ -492,7 +493,7 @@ func (s *Store) Commit(question string, transcript []llm.Message) error {
 	if len(kept) == 0 {
 		return nil
 	}
-	return s.update(s.limit, func(file *memoryFile, now time.Time, logf func(string, ...any)) {
+	return s.update(s.limit, func(file *memoryFile, now time.Time, logf func(string, string, ...any)) {
 		for _, note := range kept {
 			key := strings.Join(strings.Fields(note.Content), " ")
 			i := slices.IndexFunc(file.Memories, func(m Memory) bool {
@@ -506,7 +507,7 @@ func (s *Store) Commit(question string, transcript []llm.Message) error {
 				if m.Context == nil && note.Context != nil {
 					m.Context, sourced = note.Context, " source=added"
 				}
-				logf("Memory refresh: id=%s kind=%s%s content=%s", m.ID, m.Kind, sourced, clipText(m.Content, 80))
+				logf("refresh", "id=%s kind=%s%s content=%s", m.ID, m.Kind, sourced, clipText(m.Content, 80))
 				continue
 			}
 			file.Next++
@@ -516,7 +517,7 @@ func (s *Store) Commit(question string, transcript []llm.Message) error {
 			if !note.ExpireAt.IsZero() {
 				expire = note.ExpireAt.Format(time.RFC3339)
 			}
-			logf("Memory write: id=%s kind=%s source=%s expire=%s source_chars=%d content=%s", note.ID, note.Kind, note.Source, expire, utf8.RuneCountInString(note.Context.Text), clipText(note.Content, 80))
+			logf("write", "id=%s kind=%s source=%s expire=%s source_chars=%d content=%s", note.ID, note.Kind, note.Source, expire, utf8.RuneCountInString(note.Context.Text), clipText(note.Content, 80))
 		}
 	})
 }
@@ -549,7 +550,7 @@ var sourceLabel = regexp.MustCompile(`\n\[(用户|工具)`)
 // forget_memory 与 -memory-forget 共用：记错了必须能删，删除原因写进终端轨迹。
 func (s *Store) Forget(id, reason string) (any, error) {
 	var removed *Memory
-	err := s.update(0, func(file *memoryFile, _ time.Time, logf func(string, ...any)) {
+	err := s.update(0, func(file *memoryFile, _ time.Time, logf func(string, string, ...any)) {
 		i := slices.IndexFunc(file.Memories, func(m Memory) bool { return m.ID == id })
 		if i < 0 {
 			return
@@ -557,7 +558,7 @@ func (s *Store) Forget(id, reason string) (any, error) {
 		m := file.Memories[i]
 		removed = &m
 		file.Memories = slices.Delete(file.Memories, i, i+1)
-		logf("Memory forget: id=%s kind=%s reason=%s content=%s", m.ID, m.Kind, clipText(reason, 60), clipText(m.Content, 80))
+		logf("forget", "id=%s kind=%s reason=%s content=%s", m.ID, m.Kind, clipText(reason, 60), clipText(m.Content, 80))
 	})
 	if err == nil && removed == nil {
 		err = fmt.Errorf("没有编号为 %s 的记忆，可能已过期、被淘汰或删除", id)

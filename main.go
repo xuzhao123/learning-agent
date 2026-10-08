@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 
 	"learning-agent/internal/agent"
 	"learning-agent/internal/browser"
@@ -21,7 +23,9 @@ import (
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
 	"learning-agent/internal/memory"
+	"learning-agent/internal/metrics"
 	"learning-agent/internal/observer"
+	"learning-agent/internal/protocol"
 	"learning-agent/internal/queue"
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/sandbox"
@@ -32,7 +36,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；其余用法都是 agent 本身。
+// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；其余用法都是 agent 本身。
 func main() {
 	run := run
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
@@ -48,6 +52,14 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
 		service = "observer"
+	}
+	// D15：只读检查点和 trace，统计 5 个核心指标；不请求模型，也不创建 span。
+	if len(os.Args) > 1 && os.Args[1] == "metrics" {
+		if err := metrics.Run(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if slices.Contains(os.Args, "-mcp-serve") {
 		service = "mcp-calculator"
@@ -65,6 +77,8 @@ func main() {
 func run() error {
 	question := flag.String("question", "", "要交给 agent 的问题")
 	historyStdin := flag.Bool("history-stdin", false, "从stdin读取上次模型上下文JSON，配合-question续聊")
+	appServer := flag.Bool("app-server", false, "B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；问题与续聊上下文由 turn/start 给出")
+	flag.StringVar(&agent.Continues, "continues", "", "续聊时上一轮的检查点ID：本轮用新ID，记下续接关系，子任务可按 task_id 引用之前各轮派出的子任务")
 	parallel := flag.Int("parallel", 4, "同时执行的工具数，1 到 16")
 	maxSteps := flag.Int("max-steps", 10, "模型请求总次数，包含最终回答和上下文摘要")
 	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
@@ -115,8 +129,8 @@ func run() error {
 	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
 	flag.Parse()
 	if *resume != "" {
-		if flag.NFlag() != 1 || flag.NArg() != 0 {
-			return errors.New("resume须单独使用：配置取自检查点里保存的启动参数")
+		if flag.NFlag() != 1+boolInt(*appServer) || flag.NArg() != 0 {
+			return errors.New("resume须单独使用（可以再加 -app-server）：配置取自检查点里保存的启动参数")
 		}
 		cp, err := agent.LoadCheckpoint(*resume)
 		if err != nil {
@@ -130,12 +144,64 @@ func run() error {
 		if !agent.Resumable(cp) {
 			return fmt.Errorf("任务 %s 因 %s 停止，续跑结果也一样；要重做请换一个任务ID", cp.ID, cp.Reason)
 		}
-		// 用首次启动的参数重新解析：工具开关、预算、超时都和中断前一致。
+		// 用首次启动的参数重新解析：工具开关、预算、超时都和中断前一致。通信方式以本次命令行为准。
+		wantAppServer := *appServer
 		if err := flag.CommandLine.Parse(cp.Args); err != nil {
 			return err
 		}
-		*question, *taskID, *historyStdin = cp.Question, cp.ID, false
+		*question, *taskID, *historyStdin, *appServer = cp.Question, cp.ID, false, wantAppServer
 		agent.Resume = cp
+	}
+	// B0：-app-server 时 stdout 归协议所有，在任何打印之前分流。
+	var history *agent.HistoryInput
+	starts := make(chan protocol.Message, 1)
+	interrupted := make(chan struct{})
+	var interruptOnce sync.Once
+	interrupt := func() { interruptOnce.Do(func() { close(interrupted) }) }
+	if *appServer {
+		out := os.Stdout
+		os.Stdout = os.Stderr
+		// 界面先退出时写协议会失败；忽略 SIGPIPE，让进程照常走第一段收尾，而不是被信号直接杀掉。
+		signal.Ignore(syscall.SIGPIPE)
+		protocol.Client = protocol.NewConn(os.Stdin, out, func(m protocol.Message) {
+			switch m.Method {
+			case "turn/start":
+				select {
+				case starts <- m:
+				default:
+					protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32600, Message: "一个 agent 进程只处理一轮"})
+				}
+			case "turn/interrupt":
+				interrupt()
+				protocol.Client.Reply(*m.ID, nil, nil)
+			default:
+				if m.IsRequest() {
+					protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32601, Message: "未知方法 " + m.Method})
+				}
+			}
+		})
+		// 界面断开等同于中断：收尾、写好检查点再退出。
+		go func() { <-protocol.Client.Closed(); interrupt() }()
+		if *question == "" && agent.Resume == nil && !*contextLab && !*ragLab {
+			var m protocol.Message
+			select {
+			case m = <-starts:
+			case <-protocol.Client.Closed():
+				return errors.New("界面在发起 turn/start 之前断开")
+			}
+			// 问题、续聊上下文和续接关系都由界面在 turn/start 里给出，不再分别经命令行和 stdin 传入。
+			var params struct {
+				Question  string              `json:"question"`
+				History   *agent.HistoryInput `json:"history"`
+				Continues string              `json:"continues"`
+			}
+			if err := json.Unmarshal(m.Params, &params); err != nil || strings.TrimSpace(params.Question) == "" {
+				protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32602, Message: "turn/start 需要非空的 question"})
+				return errors.New("turn/start 参数无效")
+			}
+			*question, history, agent.Continues = params.Question, params.History, params.Continues
+			protocol.Client.Reply(*m.ID, nil, nil)
+		}
 	}
 	if *mcpServe {
 		// stdout 归协议所有，在任何打印之前分流。
@@ -277,6 +343,15 @@ func run() error {
 	defer stop()
 	// 第一次 Ctrl+C 取消 ctx：在跑的工具被打断、结果回填、检查点写好再退出。之后恢复默认处理，再按一次立即结束。
 	context.AfterFunc(ctx, stop)
+	// turn/interrupt 走同一条路：和第一次 Ctrl+C 一样取消 ctx，开始第一段收尾。
+	go func() {
+		select {
+		case <-interrupted:
+			fmt.Println("Interrupt: turn/interrupt")
+			stop()
+		case <-ctx.Done():
+		}
+	}()
 	if *timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, *timeout)
@@ -306,7 +381,6 @@ func run() error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	}
-	var history *agent.HistoryInput
 	if *historyStdin {
 		if *contextLab || strings.TrimSpace(*question) == "" {
 			return errors.New("history-stdin需要-question，不能与context-lab一起使用")
@@ -358,6 +432,18 @@ func run() error {
 	}
 	config.Effort = *effort
 	fmt.Printf("Model: provider=%s model=%s upstream=%s\n", config.Provider, config.Model, config.Upstream)
+	// B0：一轮开始。界面从这里拿任务ID（检查点、浏览器画面目录都按它存放）、输入容量和 trace_id，不再从日志里解析。
+	turnStarted := func(turn string) {
+		thread := telemetry.ConversationID
+		if thread == "" {
+			thread = turn
+		}
+		protocol.Notify("turn/started", map[string]any{"thread_id": thread, "turn_id": turn, "continues": agent.Continues, "resume": agent.Resume != nil,
+			"trace_id": root.SpanContext().TraceID().String(), "input_capacity": options.Capacity(), "provider": config.Provider, "model": config.Model, "pid": os.Getpid()})
+	}
+	if *contextLab || *ragLab {
+		turnStarted("")
+	}
 	if *contextLab {
 		return labs.RunContext(ctx, config, options, *maxSteps)
 	}
@@ -376,7 +462,7 @@ func run() error {
 	for _, command := range mcpCommands {
 		conn, listed, err := mcp.Connect(ctx, command)
 		if err != nil {
-			fmt.Printf("MCP error: command=%s error=%v\n", command, err)
+			protocol.Event("capability/event", "mcp_error", fmt.Sprintf("MCP error: command=%s error=%v", command, err))
 			continue
 		}
 		defer conn.Close()
@@ -406,7 +492,8 @@ func run() error {
 		llm.Tools = append(llm.Tools, agent.SpawnDefinition)
 	}
 	// D9：每次普通运行都写检查点，并在整个运行期间持有它的锁，同一任务不会被两个进程同时执行。
-	agent.CheckpointID, agent.CheckpointArgs = *taskID, os.Args[1:]
+	// 通信方式不存进检查点：之后在命令行续跑时，不该变成协议模式。
+	agent.CheckpointID, agent.CheckpointArgs = *taskID, slices.DeleteFunc(slices.Clone(os.Args[1:]), func(a string) bool { return a == "-app-server" || a == "--app-server" })
 	if agent.CheckpointID == "" {
 		agent.CheckpointID = agent.NewCheckpointID()
 	}
@@ -416,19 +503,18 @@ func run() error {
 	if !agent.ValidID(agent.CheckpointID) {
 		return errors.New("task-id只能包含字母、数字和 ._-，最长128")
 	}
+	if agent.Continues != "" && agent.Resume == nil {
+		if _, err := agent.LoadCheckpoint(agent.Continues); err != nil || history == nil {
+			return fmt.Errorf("continues 需要配合续聊上下文，且上一轮的检查点 %s 要存在", agent.Continues)
+		}
+	}
 	unlock, err := agent.LockCheckpoint(agent.CheckpointID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	if _, err := os.Stat(agent.CheckpointPath(agent.CheckpointID)); agent.Resume == nil && err == nil {
-		// 续聊接着一轮被打断的任务时（观测台在停止后续聊），沿用它的ID：上下文由 -history-stdin 给出，
-		// 新的运行覆盖这份检查点；ID不变，子任务ID才对得上。已完成的任务不能这样覆盖。
-		cp, loadErr := agent.LoadCheckpoint(agent.CheckpointID)
-		if history == nil || loadErr != nil || cp.Status == "done" {
-			return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
-		}
-		fmt.Printf("Continue: 沿用被打断任务的检查点ID %s（上一轮 status=%s reason=%s）\n", cp.ID, cp.Status, cp.Reason)
+		return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
 	}
 	llm.TaskID = agent.CheckpointID
 	if browser.Enabled {
@@ -437,6 +523,7 @@ func run() error {
 	// 沙箱工作目录按任务ID分开：同一任务的多次调用、续跑共用；子 agent 有自己的目录。
 	sandbox.Dir = filepath.Join(".data", "sandbox", agent.CheckpointID)
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
+	turnStarted(agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
 }
 
@@ -451,4 +538,11 @@ func (l *stringList) Set(value string) error {
 	}
 	*l = append(*l, strings.TrimSpace(value))
 	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
