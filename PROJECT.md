@@ -10,7 +10,7 @@
 
 一个 Go 模块、一个入口：`go run .` 运行 agent，`go run . observe` 运行观测台，`go run . queue` 运行队列，`go run . metrics` 统计指标，`go run . eval` 跑评测与归因。一个 agent 进程执行一个任务；检索与记忆在任务进程内调用，观测台、队列和子 agent 通过子进程执行任务。
 
-已覆盖 Day 1–17 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱、OpenTelemetry 调用链、D15 指标采集、D16 评测集与回归、D17 失败归因与回放验证；agent 与界面之间改为结构化协议（B0，仿 Codex app-server）。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。
+已覆盖 Day 1–19 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱、OpenTelemetry 调用链、D15 指标采集、D16 评测集与回归、D17 失败归因与回放验证、D18–19 无害资料实验与工具权限边界；agent 与界面之间改为结构化协议（B0，仿 Codex app-server）。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。D18–19 按用户要求缩小为知识学习，不代表完成通用注入检测或外发防护。
 
 ## 课程进度
 
@@ -35,6 +35,8 @@
 | Day 15：评测指标 | 5 个核心指标（完成率、异常结局与可恢复性、端到端延迟、成本、工具可靠性），结局与成本以检查点为准、工具指标来自 trace；`go run . metrics` 采集；12 个真实任务（含 2 个故障题）已跑通 | 待反馈 | [Day 15 实践](docs/day-15/day-15-lab.md) |
 | Day 16：评测集与回归 | 22 题（回归 11、能力 7、留出 4，含反例与 1 道外网题），确定性打分器 + DeepSeek 三票评审，pass@1（按题聚类 SE）、pass^k、消融 Δ、基线逐题配对；观测台“D16 评测”页面与 `go run . eval` 共用记录，每个尝试可打开看轨迹。真实方舟运行：基线 pass@1 90% ± 13%、pass^3 88%，检索消融 Δ +1.00 | 待反馈 | [Day 16 实践](docs/day-16/day-16-lab.md) |
 | Day 17：失败归因 | 归因卡片、人工开放编码与归类计数、从检查点分叉的回放验证（含安慰剂对照）；定位 fault-unknown 根因（结果未知后没有下一步），修复执行器反馈后回归 0/3 → 3/3、无回归；另发现 2 个打分器错误、工具选择过度、无进展循环等，报告见实践；开放编码为 Claude 初编。观测台每段对话可一键归因：完整轨迹诊断 + 从请求快照分叉的回放验证（压缩过的对话也能回放）；同一段 DeepSeek 对话三次迭代，最终“已证实”（纠正 3/3、安慰剂 0/3） | 待反馈；开放编码待你复核 | [Day 17 实践](docs/day-17/day-17-lab.md) |
+| Day 18：不可信内容 | 按用户要求做轻量学习：正常资料、答案偏离、额外计算三份无害输入；真实模型与 D16 确定性检查复用，DeepSeek 三题两组共 6 次均完成，未出现额外计算；方舟 HTTP 403 单独记录，不作通过 | 资料与指令的区别待用户复述 | [Day 18 笔记](docs/day-18/day-18-notes.md)、[实践](docs/day-18/day-18-lab.md) |
+| Day 19：权限边界 | 工具结果加来源与 data_only 标记；执行及恢复核对本轮工具列表；实验防护组收紧能力。编译及人工边界检查通过，未提供工具拒绝且不重试、合法读取/计算和记忆来源对照通过；真实正常计算回归及观测台实验入口通过，标记确实进请求。两组均通过，不单独归因于标记 | 模型提示与程序权限的区别待用户复述 | [Day 19 笔记](docs/day-19/day-19-notes.md)、[实践](docs/day-19/day-19-lab.md) |
 | 扩展：结构化协议（B0） | `-app-server` 模式，JSON-RPC 双向：turn/start、turn/interrupt、item/turn 通知、联网审批请求；观测台与 RunChild 作为界面，去掉终端文本解析；审批当轮生效、续接链、队列、页面新旧存档均用真实模型验证 | 待反馈 | [B0 实践](docs/bonus-protocol/protocol-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
 | 扩展：子 agent | 独立上下文、子进程、权限继承、幂等与父任务恢复已有验证 | 用户追问换措辞导致哈希失配，回答见 [Q15](docs/deep-questions.md#q15)；复述待确认 | [子 agent 实践](docs/bonus-subagents/subagents-lab.md) |
@@ -63,7 +65,7 @@
 | 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14)（续聊覆盖旧检查点的问题已改为续接链，见 [Q21](docs/deep-questions.md#q21)） |
 | 副作用恢复 | 超时的“结果未知”已附上下一步（不重做、不构造标识轮询，交给用户决定），回归 3/3；续跑回填的“结果未知”仍是旧说明；repeatable 按工具名写死，误标会静默重做 | 幂等键、状态查询与高风险确认；MCP 注解仅对可信 server 采信，见 [Q13](docs/deep-questions.md#q13) |
 | 浏览器网络 | 起始 URL、跳转和子资源都按公网全局单播判断（`internal/netguard`，含运营商级 NAT 与云元数据地址）；DNS 重绑定与 WebSocket 仍有缺口 | 用受控出口限制实际连接，见 [Q18](docs/deep-questions.md#q18) |
-| 网页内容 | 注入防护主要依赖 system 规则；工具失败后模型仍可能凭旧知识回答 | Week 3 注入攻防与回答可靠性评测 |
+| 外部内容 | 已标记工具数据并检查工具允许列表；仍可能发生错误回答或滥用菜单内工具，本课未验证真实网页/MCP 传输与跨工具外发 | 按资源、参数与数据流补权限，扩大真实入口评测；见 [Day 19 边界](docs/day-19/day-19-lab.md#5-当前没有覆盖的范围) |
 | 浏览器执行 | 浏览器未纳入 Bash 沙箱；设置 CHROME_NO_SANDBOX=1 会关闭 Chrome 自身沙箱 | 保留 Chrome 自身沙箱，后续研究独立浏览器隔离 |
 | 浏览器效率 | 必应不向无头浏览器返回结果，web_search 当前不可用（已改为不重试并提示改用 open_page）；同页多次 find 会重新加载，子 agent 因此耗尽预算（Day 11、Day 14） | 正式搜索 API、正文缓存或会话句柄 |
 | 执行隔离 | bubblewrap 共享内核，seccomp 使用黑名单（主隔离靠 namespace 与去权限，seccomp 只缩小内核攻击面）；没有 systemd 用户会话时不施加 cgroup 限制 | 不可信或多租户场景改白名单并加 gVisor/微虚拟机，见 [Q16](docs/deep-questions.md#q16) |
@@ -88,3 +90,4 @@
 - 指标：完成与答对的区别；pass^k 怎么算、为什么比 pass@k 更适合面向用户的 agent；为什么结局要以检查点而不是 trace 为准。
 - 评测：为什么每道题要一个结果打分器和一个过程打分器、过程不查顺序；标准误为什么按题聚类；消融时为什么排除 with_only 检查。
 - 归因：为什么只记第一个上游错误；回放验证为什么要保留前缀、配安慰剂对照；fault-unknown 的回放里，为什么只补事实（rp1）反而引出了重做。
+- 注入防护：为什么正文自称 system 不能增加权限；资料标记和允许列表各保证什么；两组都通过时能得出什么结论。

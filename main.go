@@ -98,6 +98,8 @@ func run() error {
 	contextLab := flag.Bool("context-lab", false, "Day 3：33轮真实对话和真实大工具输出实验，建议 -max-steps 60")
 	flag.BoolVar(&retrieval.Enabled, "rag", false, "Day 4：启用本地知识库检索工具与来源引用")
 	ragLab := flag.Bool("rag-lab", false, "Day 4：10题检索检查与无检索/有检索真实模型对比")
+	flag.BoolVar(&tools.SecurityLabEnabled, "security-lab", false, "Day 18：启用本地无害学习样本；仅提供资料读取与基线计算器")
+	securityProtection := flag.Bool("security-protection", false, "配合 -security-lab：标记工具结果为资料，并收紧为只提供资料读取工具")
 	embeddingMode := flag.String("embedding", "ark", "向量模型：ark（线上方舟）或local（本地纯Go推理）")
 	threshold := flag.Float64("min-score", retrieval.MinScore, "检索余弦相似度阈值，-1到1")
 	searchQuery := flag.String("search-docs", "", "只执行检索；不调用聊天模型，local模式无需密钥")
@@ -263,6 +265,16 @@ func run() error {
 	if *maxSteps < 1 || *retries < 0 || *retries > 5 {
 		return errors.New("max-steps 至少为1，retries 范围为0到5")
 	}
+	if *securityProtection && !tools.SecurityLabEnabled {
+		return errors.New("security-protection 需要配合 security-lab；普通任务默认标记工具资料")
+	}
+	if tools.SecurityLabEnabled {
+		// 对照实验也只允许读固定样本、做数学运算；不给私有资料、外网或写入能力。
+		if *contextLab || *ragLab || tools.LabEnabled || retrieval.Enabled || *searchQuery != "" || *memoryEnabled || *memoryForget != "" || *memorySearch != "" || skills.Enabled || len(mcpCommands) > 0 || *subagents || browser.Enabled || sandbox.Enabled || *historyStdin || history != nil || agent.Continues != "" {
+			return errors.New("security-lab 不与其他实验、检索、记忆、MCP、Skills、子 agent、浏览器、Bash 或续聊组合")
+		}
+		agent.LabelToolData = *securityProtection
+	}
 	if (*embeddingMode != "ark" && *embeddingMode != "local") || math.IsNaN(*threshold) || *threshold < -1 || *threshold > 1 {
 		return errors.New("embedding取ark或local，min-score范围为-1到1")
 	}
@@ -397,6 +409,13 @@ func run() error {
 	}
 	// 本次运行发给模型的工具：先放内置工具，再按开关追加。复制一份，不改动 tools.Definitions。
 	llm.Tools = append([]map[string]any(nil), tools.Definitions...)
+	if tools.SecurityLabEnabled {
+		llm.Tools = []map[string]any{tools.SecurityDefinition}
+		if !*securityProtection {
+			llm.Tools = append(llm.Tools, tools.Definitions[0]) // 基线的额外能力也只是无害计算
+		}
+		fmt.Printf("Security lab: protection=%t tools=%d（只读固定资料；不提供联网工具或记忆写入）\n", *securityProtection, len(llm.Tools))
+	}
 	if tools.LabEnabled {
 		llm.Tools = append(llm.Tools, tools.LabDefinitions...)
 	}

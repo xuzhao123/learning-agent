@@ -126,6 +126,10 @@
 
 先读 [学习笔记](day-17/day-17-notes.md)，重点是第一个上游错误、开放编码与轴心编码、自动归因为什么还不可靠（Who&When），以及反事实回放怎样把根因假设变成证据。完整资料见 [参考](day-17/day-17-notes.md#参考)。
 
+## Day 18–19 · 不可信内容与权限边界
+
+先读 [Day 18 笔记](day-18/day-18-notes.md) 和 [Day 19 笔记](day-19/day-19-notes.md)，掌握资料与指令的区别、来源标记的作用与局限、工具允许列表和回归验证。原始资料见两篇的参考；[前期调研](day-18/day-18-research.md) 作为选读，不属于本次全部实现范围。
+
 ## 扩展 · 结构化协议（B0）
 
 先读 [学习笔记](bonus-protocol/protocol-notes.md)，重点是 JSON-RPC 的请求、响应与通知，Thread / Turn / Item 会话模型，服务端主动发起的审批请求，以及为什么不用 MCP 承载。完整资料见 [参考](bonus-protocol/protocol-notes.md#参考)。

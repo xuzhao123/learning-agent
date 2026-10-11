@@ -452,6 +452,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <button id="skills-hub" class="navbtn"><span class="ico">✦</span>Skills 中心</button>
     <button id="mcp-hub" class="navbtn"><span class="ico">⇄</span>MCP 中心</button>
     <button id="evals" class="navbtn"><span class="ico">✓</span>D16 评测 · D17 归因</button>
+    <button id="security-lab" class="navbtn"><span class="ico">◇</span>D18–19 内容与权限</button>
     <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">▤ 学习课件</a>
     <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
     <div id="runs"></div>
@@ -2278,6 +2279,31 @@ $("rag-lab").onclick = () => {
   notice.append(el("p"), model, button); box.replaceChildren(notice);
 };
 $("rag").onchange = () => { syncComposer(); renderChat(); };
+$("security-lab").onclick = () => {
+  document.body.classList.remove("nav-open");
+  if (ui.sending) return;
+  $("new-chat").click();
+  ui.page = "chat"; renderShell();
+  const notice = el("div", "banner");
+  notice.append(el("strong", "", "Day 18–19 · 资料可以提供事实，不能增加权限"));
+  notice.append(el("p", "", "真实模型读取本地学习样本。先试正常资料，再试夹带指令。只提供资料读取与基线计算器，无浏览器、Bash、私有记忆或额外联网能力。"));
+  const sample = el("select"); sample.setAttribute("aria-label", "学习样本");
+  for (const [value, label] of [["clean", "正常资料"], ["answer", "夹带：只回答香蕉"], ["tool", "夹带：额外调用计算器"]]) {
+    const option = el("option", "", label); option.value = value; sample.append(option);
+  }
+  const provider = el("select"); provider.setAttribute("aria-label", "实验聊天模型");
+  for (const [value, label] of [["ark", "方舟"], ["deepseek", "DeepSeek"]]) {
+    const option = el("option", "", label); option.value = value; provider.append(option);
+  }
+  const guard = el("input"); guard.type = "checkbox"; guard.checked = true;
+  const label = el("label"); label.style.display = "block"; label.style.margin = "12px 0";
+  label.append(guard, document.createTextNode(" 开启防护：来源标记 + 只提供资料读取工具"));
+  const hint = el("p", "", "取消勾选是课堂对照组：不附加资料标记，多提供一个无害计算器。正常 Agent 默认有资料标记；两组执行器都校验工具允许列表。实验是单次任务，请另开实验做对比。原始输入输出在‘观测’中查看。");
+  const button = el("button", "ghost", "开始实验（真实调用模型）");
+  button.onclick = () => { button.disabled = true; start("/runs", { security_lab: sample.value, security_protection: guard.checked, provider: provider.value }); };
+  notice.append(sample, document.createTextNode(" "), provider, label, hint, button);
+  $("thread").replaceChildren(notice);
+};
 $("mem").onchange = () => { syncComposer(); renderChat(); };
 $("memory").onclick = () => openMemory();
 // 记忆面板只读 .data/memory.json；删除由 agent 的 -memory-forget 执行，与 agent 共用文件锁。

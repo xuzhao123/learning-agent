@@ -25,6 +25,7 @@ import (
 
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
+	"learning-agent/internal/tools"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -203,19 +204,21 @@ func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
 // 每次运行都启动一个独立的 agent 子进程（见 agentCommand），各次运行的状态与输出互不影响。
 func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	var input struct {
-		Query      string `json:"query"`
-		ContextLab bool   `json:"context_lab"`
-		RAG        bool   `json:"rag"`
-		RAGLab     bool   `json:"rag_lab"`
-		Embedding  string `json:"embedding"`
-		Memory     bool   `json:"memory"`
-		MemoryTTL  string `json:"memory_ttl"`
-		Skills     bool   `json:"skills"`
-		MCP        bool   `json:"mcp"`
-		Subagents  bool   `json:"subagents"`
-		Browser    bool   `json:"browser"`
-		Provider   string `json:"provider"`
-		Bash       bool   `json:"bash"`
+		Query              string `json:"query"`
+		ContextLab         bool   `json:"context_lab"`
+		RAG                bool   `json:"rag"`
+		RAGLab             bool   `json:"rag_lab"`
+		SecurityLab        string `json:"security_lab"`
+		SecurityProtection bool   `json:"security_protection"`
+		Embedding          string `json:"embedding"`
+		Memory             bool   `json:"memory"`
+		MemoryTTL          string `json:"memory_ttl"`
+		Skills             bool   `json:"skills"`
+		MCP                bool   `json:"mcp"`
+		Subagents          bool   `json:"subagents"`
+		Browser            bool   `json:"browser"`
+		Provider           string `json:"provider"`
+		Bash               bool   `json:"bash"`
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -229,7 +232,11 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "embedding须为ark或local", http.StatusBadRequest)
 		return
 	}
-	lab := input.ContextLab || input.RAGLab
+	if input.SecurityLab != "" && (!slices.Contains(tools.SecuritySampleIDs, input.SecurityLab) || input.ContextLab || input.RAGLab) {
+		http.Error(w, "安全学习实验只允许 clean、answer、tool，且不能与其他实验组合", http.StatusBadRequest)
+		return
+	}
+	lab := input.ContextLab || input.RAGLab || input.SecurityLab != ""
 	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents || input.Browser || input.Bash)) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
 		return
@@ -284,6 +291,16 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if input.RAGLab {
 		args = []string{"-rag-lab", "-max-steps", "6", "-reasoning-effort", "minimal"}
 		input.Query = ragLabTitle
+	}
+	if input.SecurityLab != "" {
+		args = []string{"-security-lab", "-max-steps", "4", "-reasoning-effort", "minimal"}
+		if input.SecurityProtection {
+			args = append(args, "-security-protection")
+		}
+		if input.Provider != "" {
+			args = append(args, "-provider", input.Provider)
+		}
+		input.Query = tools.SecurityQuestion(input.SecurityLab)
 	}
 	if input.RAG || input.RAGLab || input.Memory {
 		args = append(args, "-embedding", input.Embedding)
@@ -701,6 +718,12 @@ func (r *run) withEmbedding(result *resumeInput) *resumeInput {
 // 调用方持有r.mu。正常结束的对话从最后一个完整回答接着聊；
 // 中途停下的对话（停止按钮、超时、出错）只要 agent 写过检查点，就从检查点接着聊。
 func (r *run) canContinue() bool {
+	// 课堂样本按独立任务对比，不把前一组的资料带进后一组。
+	for _, sample := range tools.SecuritySampleIDs {
+		if r.Query == tools.SecurityQuestion(sample) {
+			return false
+		}
+	}
 	// 用户的网络审批（allow/deny）可能追加在 exit 之后，不算对话进程的事件。
 	i := len(r.events) - 1
 	for i >= 0 && (r.events[i].Kind == "allow" || r.events[i].Kind == "deny") {

@@ -73,6 +73,8 @@ go build -o bin/learning-agent .
 | Day 15 | 评测指标：成功、可靠、延迟、成本 | [笔记](docs/day-15/day-15-notes.md) | [实践](docs/day-15/day-15-lab.md) | — |
 | Day 16 | 可复现评测集与回归 | [笔记](docs/day-16/day-16-notes.md) | [实践](docs/day-16/day-16-lab.md) | — |
 | Day 17 | 失败归因与回放验证 | [笔记](docs/day-17/day-17-notes.md) | [实践](docs/day-17/day-17-lab.md) | — |
+| Day 18 | 不可信内容与无害注入实验 | [笔记](docs/day-18/day-18-notes.md) | [实践](docs/day-18/day-18-lab.md) | — |
+| Day 19 | 来源标记与工具权限边界 | [笔记](docs/day-19/day-19-notes.md) | [实践](docs/day-19/day-19-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -129,6 +131,7 @@ go build -o bin/learning-agent .
 | `-max-steps` | 10 | 模型请求总预算，包含最终回答与上下文摘要 |
 | `-retries` | 2 | 工具额外重试次数，0到5 |
 | `-lab-tools` | false | 显式开启故障实验工具：Day 2 的 always_fail、check_task_status，Day 8 的 slow_job |
+| `-security-lab` / `-security-protection` | false / false | D18–19：读取 clean/answer/tool 三份无害样本；再加 protection 为防护组，不组合私有资料、外部执行或续聊。普通任务默认有资料标记；观测台左侧有实验入口 |
 | `-context-window` | 12288 | 配置的总窗口，学习实验值 |
 | `-max-output-tokens` | 0 | 0省略API输出上限；大于0才传max_completion_tokens（含推理） |
 | `-reasoning-reserve` | 1024 | 输入容量额外安全余量 |

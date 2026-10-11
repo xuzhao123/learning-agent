@@ -178,6 +178,10 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 ### 对照已有实现
 
+[D18–19 轻量实验](../docs/day-19/day-19-lab.md) 加了两条边界：[react.go](../internal/agent/react.go) 给工具结果写外层 `source` 和 `authority=data_only`，system 说明结果不能授权；[dispatch.go](../internal/agent/dispatch.go) 在实际执行前核对本轮 `llm.Tools`，未提供的工具不执行且不自动重试。正文的可信自述不改变外层权限。标记表达指令权限，不能当作事实可信度评分。
+
+实验防护组只给读取固定资料的工具，对照组多一个无害计算器。两组均通过本次简单输入，没有观察到分数提升；来源标记与能力收紧同时变化，不能单独归因。允许列表只限制工具名，菜单内参数、对象权限和外发内容仍需由对应工具校验。学习入口见 [Day 18](../docs/day-18/day-18-notes.md)、[Day 19](../docs/day-19/day-19-notes.md)。
+
 [bwrapArgs与run](../internal/sandbox/sandbox.go)、[网络代理与dialChecked](../internal/sandbox/network.go)、[seccompProgram](../internal/sandbox/seccomp.go)提供当前边界；[browser.guard](../internal/browser/browser.go)检查页面请求。
 
 当前seccomp是黑名单、共享内核；没有systemd用户会话时资源限制会降级，工作目录无总配额。浏览器未纳入同一出口沙箱、DNS重绑定/WebSocket仍有缺口。更强策略需要按威胁模型实现与验证，不能从这些片段推导“已经完备”。

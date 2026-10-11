@@ -127,12 +127,14 @@ type ToolCall struct {
 // Status 区分四种结局：ok 成功；error 确定失败（没有产生结果）；not_run 还没开始就被取消，可以放心重做；
 // unknown 执行中超时或被取消，副作用可能已经发生，重做前要先核对。
 type Observation struct {
-	ID       string `json:"id"`
-	Tool     string `json:"tool"`
-	Status   string `json:"status"`
-	Result   any    `json:"result,omitempty"`
-	Error    string `json:"error,omitempty"`
-	Attempts int    `json:"attempts"`
+	ID        string `json:"id"`
+	Tool      string `json:"tool"`
+	Status    string `json:"status"`
+	Source    string `json:"source,omitempty"`
+	Authority string `json:"authority,omitempty"` // 指令权限标记，不是内容真实性评分
+	Result    any    `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Attempts  int    `json:"attempts"`
 }
 
 // 不可重试的错误：参数错误、未知工具、业务拒绝。同样的输入再试一次结果也一样，重试只会浪费时间。

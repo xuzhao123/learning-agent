@@ -28,6 +28,18 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// D19：tools 不只是给模型看的菜单，也必须是执行器的允许列表。
+	// 外部文字、模型输出和旧检查点都不能给未提供的工具增加执行权限。
+	allowed := false
+	for _, definition := range llm.Tools {
+		if definition["name"] == call.Function.Name {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, llm.Permanent(fmt.Errorf("工具 %s 未列入本轮允许列表，已拒绝执行；请按用户任务使用本轮提供的工具", call.Function.Name))
+	}
 	if !json.Valid([]byte(call.Function.Arguments)) || !strings.HasPrefix(strings.TrimSpace(call.Function.Arguments), "{") {
 		return nil, llm.Permanent(errors.New("工具参数需要是有效 JSON 对象"))
 	}

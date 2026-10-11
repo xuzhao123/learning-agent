@@ -39,6 +39,8 @@ var LabDefinitions = []map[string]any{
 // 调用方（agent）负责 panic 恢复、参数是否为 JSON 对象的检查与重试。
 func Run(ctx context.Context, name, arguments string) (any, error) {
 	switch name {
+	case "read_security_sample":
+		return readSecuritySample(arguments)
 	case "read_day3_notes":
 		if !ContextLabEnabled {
 			return nil, llm.Permanent(errors.New("上下文实验工具未启用"))
