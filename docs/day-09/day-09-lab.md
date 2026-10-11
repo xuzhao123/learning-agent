@@ -17,7 +17,8 @@
 | `status`、`reason`、`answer`、`error` | `running` / `stopped` / `done`；停止原因与终端 `Termination` 一致 |
 | `step`、`calls` | 已完整结束的轮次；已用的模型请求数（预算跨续跑累计） |
 | `messages` | 模型看到的 View。末尾若是带 `tool_calls` 的 assistant 而没有结果，就是一批中断的调用 |
-| `summary`、`last_action`、`repeated` | 执行记录与重复动作计数，续跑后熔断照常生效 |
+| `summary`、`progress` | 执行记录与循环检测状态（最近动作窗口、见过的结果、无进展轮数，D20 起），续跑后熔断照常生效 |
+| `private` | D20：本任务已读入的私有数据来源，续跑后外发检查照常生效 |
 
 写入时机，对应笔记第 3 节的两个边界：
 

@@ -16,6 +16,7 @@ import (
 //	界面 → agent   请求  turn/start（问题、续聊上下文）、turn/interrupt
 //	agent → 界面   通知  turn/started、item/started、item/completed、turn/completed 等
 //	agent → 界面   请求  network/requestApproval：agent 暂停，等界面回复允许或拒绝再继续
+//	agent → 界面   请求  tool/requestApproval（D20）：高风险操作执行前同样暂停，等界面上的人确认
 //
 // agent 以 -app-server 运行时，stdout 只承载协议，给人看的日志改走 stderr。
 // 子 agent 也是这样被父 agent 启动的：父进程的 RunChild 就是它的“界面”。

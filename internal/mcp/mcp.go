@@ -37,6 +37,19 @@ type Connection struct {
 	client    *client.Client
 	tools     map[string]string // agent 侧工具名 → server 上的原名
 	transport string            // D13：network.transport，stdio 为 pipe，Streamable HTTP 为 tcp
+	// D20：server 明确声明 destructiveHint=true 的工具，执行前要用户确认。
+	// 注解是 server 自己说的，只用来收紧：声明了破坏性就确认；没声明或自称只读不因此免检（外发检查照常）。
+	destructive map[string]bool
+}
+
+// Destructive 报告 agent 侧的这个工具是否被 server 声明为破坏性操作。
+func Destructive(name string) bool {
+	for _, conn := range Conns {
+		if conn.destructive[name] {
+			return true
+		}
+	}
+	return false
 }
 
 // -mcp-server 的值是 http(s) 地址时连远程 server（Streamable HTTP），否则当作 stdio 子进程命令。
@@ -105,7 +118,7 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 		return nil, nil, fmt.Errorf("tools/list 失败：%w", err)
 	}
 	protocol.Event("capability/event", "mcp_tools_list", fmt.Sprintf("MCP tools/list: count=%d", len(result.Tools)), "count", len(result.Tools))
-	return &Connection{client: c, tools: map[string]string{}, transport: transportName}, result.Tools, nil
+	return &Connection{client: c, tools: map[string]string{}, transport: transportName, destructive: map[string]bool{}}, result.Tools, nil
 }
 
 var invalidToolChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
@@ -135,6 +148,9 @@ func (m *Connection) Definitions(tools []sdk.Tool) []map[string]any {
 		}
 		taken[name] = true
 		m.tools[name] = tool.Name
+		if hint := tool.Annotations.DestructiveHint; hint != nil && *hint {
+			m.destructive[name] = true
+		}
 		definitions = append(definitions, map[string]any{"name": name, "description": tool.Description, "parameters": decoded.InputSchema})
 		protocol.Event("capability/event", "mcp_register", "MCP register: "+tool.Name+" → "+name, "tool", name)
 	}
@@ -361,6 +377,8 @@ func newServer(logger *log.Logger) *server.MCPServer {
 	)
 	tool := sdk.NewTool("calculator",
 		sdk.WithDescription("计算四则运算、括号、sqrt 和 floor，返回 result 数值。"),
+		// D20：如实声明只读、无破坏性、不访问外部（mcp-go 的默认值按规范是“可能破坏、会访问外部”）。
+		sdk.WithReadOnlyHintAnnotation(true), sdk.WithDestructiveHintAnnotation(false), sdk.WithIdempotentHintAnnotation(true), sdk.WithOpenWorldHintAnnotation(false),
 		sdk.WithString("expression", sdk.Required(), sdk.MaxLength(1024), sdk.Description("数学表达式，例如 (1234*5678) 或 floor(sqrt(2))")),
 	)
 	s.AddTool(tool, func(ctx context.Context, request sdk.CallToolRequest) (*sdk.CallToolResult, error) {

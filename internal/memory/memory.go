@@ -76,6 +76,7 @@ type Store struct {
 	contextLeft atomic.Int64  // 本次进程还能发起几次背景生成
 	Client      *llm.Client   // 背景生成与重排共用本轮的模型客户端，计入同一请求预算
 	Block       string        // 运行开头取回的记忆，写进 system；之后不变，压缩重建 system 时内容一致
+	Recalled    int           // D20：开头取回了几条记忆；大于 0 时本任务含有私有数据
 	failures    []Memory
 	requests    []Memory // 本轮模型通过 remember_memory 登记、已通过程序校验的写入，本轮结束时落盘
 	UserTexts   []string // 本次会话里用户的原话，remember_memory 的引文只能从这里来
@@ -206,6 +207,7 @@ func (s *Store) Recall(ctx context.Context, question string) error {
 	for _, h := range r.Hits {
 		lines = append(lines, memoryLine(h))
 	}
+	s.Recalled = len(lines)
 	if len(lines) == 0 {
 		s.Block = "\n【长期记忆】本次会话开始时没有取回相关记忆。"
 		return nil

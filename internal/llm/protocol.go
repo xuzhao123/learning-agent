@@ -124,8 +124,8 @@ type ToolCall struct {
 	} `json:"function"`
 }
 
-// Status 区分四种结局：ok 成功；error 确定失败（没有产生结果）；not_run 还没开始就被取消，可以放心重做；
-// unknown 执行中超时或被取消，副作用可能已经发生，重做前要先核对。
+// Status 区分五种结局：ok 成功；error 确定失败（没有产生结果）；not_run 还没开始就被取消，可以放心重做；
+// unknown 执行中超时或被取消，副作用可能已经发生，重做前要先核对；denied 高风险操作没有得到用户确认，没有执行（D20）。
 type Observation struct {
 	ID        string `json:"id"`
 	Tool      string `json:"tool"`
@@ -135,6 +135,7 @@ type Observation struct {
 	Result    any    `json:"result,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Attempts  int    `json:"attempts"`
+	Note      string `json:"note,omitempty"` // 执行器附加的说明（如无进展提示），不是工具输出
 }
 
 // 不可重试的错误：参数错误、未知工具、业务拒绝。同样的输入再试一次结果也一样，重试只会浪费时间。

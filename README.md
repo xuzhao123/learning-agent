@@ -75,6 +75,7 @@ go build -o bin/learning-agent .
 | Day 17 | 失败归因与回放验证 | [笔记](docs/day-17/day-17-notes.md) | [实践](docs/day-17/day-17-lab.md) | — |
 | Day 18 | 不可信内容与无害注入实验 | [笔记](docs/day-18/day-18-notes.md) | [实践](docs/day-18/day-18-lab.md) | — |
 | Day 19 | 来源标记与工具权限边界 | [笔记](docs/day-19/day-19-notes.md) | [实践](docs/day-19/day-19-lab.md) | — |
+| Day 20 | 高风险操作确认与执行边界 | [笔记](docs/day-20/day-20-notes.md) | [实践](docs/day-20/day-20-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -96,7 +97,7 @@ go build -o bin/learning-agent .
 | --- | --- | --- |
 | 入口 | [main.go](main.go) | 参数、工具开关、agent / observe / queue / metrics / eval 的入口 |
 | 模型协议 | [internal/llm](internal/llm/) | messages、tools、tool_calls、请求预算与用量 |
-| 执行循环 | [internal/agent/react.go](internal/agent/react.go)、[工具分发](internal/agent/dispatch.go) | 结果回填、并发、分类重试与终止 |
+| 执行循环 | [internal/agent/react.go](internal/agent/react.go)、[工具分发](internal/agent/dispatch.go)、[确认与循环检测](internal/agent/approval.go) | 结果回填、并发、分类重试与终止；D20 高风险确认、私有数据标记、结果日志与无进展检测 |
 | 上下文与恢复 | [上下文管理](internal/agent/context_manager.go)、[检查点](internal/agent/checkpoint.go) | Transcript/View、压缩、写前日志、续跑 |
 | 知识与记忆 | [retrieval](internal/retrieval/)、[memory](internal/memory/) | 向量检索、规则写入、两路召回与重排 |
 | 工具扩展 | [tools](internal/tools/)、[mcp](internal/mcp/)、[skills](internal/skills/) | 本地工具、协议服务、按需加载知识 |
@@ -167,6 +168,7 @@ go build -o bin/learning-agent .
 | `-task-id` | 随机 UUID | Day 9：检查点ID（字母、数字和 `._-`）；已存在时拒绝启动，提示改用 `-resume` |
 | `-resume` | 空 | Day 9：从该ID的检查点续跑，配置取自检查点；须单独使用；已完成的直接返回存档答案 |
 | `-subagents` | false | 增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程），每次运行最多4个 |
+| `-private-input` | false | D20：任务输入已含私有数据，外发类工具执行前要确认；父 agent 派出子任务时自动加上，一般不手动使用 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
 | `-provider` | ark | 模型路由：`ark`（豆包，方舟）或 `deepseek`；子 agent 继承，续跑沿用 |
 | `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux） |

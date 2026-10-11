@@ -158,6 +158,8 @@ MCP 配置可填 stdio 启动命令或 http(s) 地址。源码启动命令相对
 
 模型只能请求联网，用户点击“允许”后才加入白名单。B0 起这是 agent 发给观测台的请求（`network/requestApproval`）：agent 暂停等待，用户在对话流的卡片上点“允许”，观测台当场回复，**本轮**接下来的命令就能访问；最多等 4 分钟，没有答复时 agent 返回待批准并结束本轮。子 agent 发起的审批经父 agent 转发到同一张卡片。决定同时记入存档，之后的续聊作为 `-net-allow` 传入。浏览器是独立网络通道，不受 Bash 白名单直接约束。隔离、资源条件和组合风险见 [Day 12 实践](../day-12/day-12-lab.md) 与 [Q12](../deep-questions.md#q12)。
 
+D20 起还有高风险操作确认（`tool/requestApproval`）：删除记忆、MCP 声明的破坏性工具、任务读到私有数据后的浏览器与 MCP 调用、续跑时重做中断的操作，执行前在对应工具上方出现“需要你确认”卡片，显示风险、原因和完整参数。只对这一次调用有效，不留到下一轮；agent 结束时仍未答复的显示为未答复。决定记为 decision 事件。见 [Day 20 实践](../day-20/day-20-lab.md#2-在观测台里操作)。
+
 ## 6. 停止与恢复
 
 运行中发送键变为 ■：
@@ -189,7 +191,7 @@ agent 以 `-app-server` 启动：stdout 是 JSON-RPC 协议（问题与续聊上
 
 默认子进程是当前可执行文件，-dev 才使用 go run。每个任务进程独立，避免包级功能开关互相覆盖。agent 使用通用的 -history-stdin 恢复上下文，不读取观测台的存档路径。
 
-事件包括 start、continue、request、response、stdout、stderr、exit，以及 B0 的 notify（协议通知）与 approval（审批请求）。start/continue 带这次交互的 trace_id，request 带 agent 的 chat span_id。观测台重启时读取已有存档，对话列表按最近活动排序。原始请求响应、模型消息和工具结果都可能包含业务内容，运行数据留在 .data/，不复制到学习目录。
+事件包括 start、continue、request、response、stdout、stderr、exit，以及 B0 的 notify（协议通知）、approval（审批请求）与 D20 的 decision（高风险确认的答复）。start/continue 带这次交互的 trace_id，request 带 agent 的 chat span_id。观测台重启时读取已有存档，对话列表按最近活动排序。原始请求响应、模型消息和工具结果都可能包含业务内容，运行数据留在 .data/，不复制到学习目录。
 
 ## 8. 自己动手观察
 

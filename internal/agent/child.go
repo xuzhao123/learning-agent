@@ -130,9 +130,10 @@ func firstLine(s string) string {
 	return line
 }
 
-// 子 agent 发来的请求转给上级界面。目前只有联网审批：用户批准后，父进程自己的白名单也加上这个域名。
+// 子 agent 发来的请求转给上级界面：联网审批与 D20 高风险操作确认。都只能由界面上的人回答；
+// 父进程没有界面时如实回答 unavailable。联网批准后，父进程自己的白名单也加上这个域名。
 func relayRequest(ctx context.Context, conn *protocol.Conn, taskID string, m protocol.Message) {
-	if m.Method != "network/requestApproval" {
+	if m.Method != "network/requestApproval" && m.Method != "tool/requestApproval" {
 		conn.Reply(*m.ID, nil, &protocol.Error{Code: -32601, Message: "未知方法 " + m.Method})
 		return
 	}
@@ -145,7 +146,7 @@ func relayRequest(ctx context.Context, conn *protocol.Conn, taskID string, m pro
 	if err := protocol.Call(ctx, m.Method, params, &answer); err != nil {
 		answer.Decision = "unavailable"
 	}
-	if domain, ok := params["domain"].(string); ok && answer.Decision == "allow" {
+	if domain, ok := params["domain"].(string); ok && m.Method == "network/requestApproval" && answer.Decision == "allow" {
 		sandbox.AllowDomain(domain)
 	}
 	conn.Reply(*m.ID, answer, nil)

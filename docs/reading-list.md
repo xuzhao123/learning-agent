@@ -130,6 +130,10 @@
 
 先读 [Day 18 笔记](day-18/day-18-notes.md) 和 [Day 19 笔记](day-19/day-19-notes.md)，掌握资料与指令的区别、来源标记的作用与局限、工具允许列表和回归验证。原始资料见两篇的参考；[前期调研](day-18/day-18-research.md) 作为选读，不属于本次全部实现范围。
 
+## Day 20 · 高风险操作确认与执行边界
+
+先读 [学习笔记](day-20/day-20-notes.md)，重点是哪些操作要停下来问人、失败即关闭、“致命三要素”与数据流标记、结果日志与幂等键、无进展循环，以及多租户隔离分层。完整资料见 [参考](day-20/day-20-notes.md#参考)。
+
 ## 扩展 · 结构化协议（B0）
 
 先读 [学习笔记](bonus-protocol/protocol-notes.md)，重点是 JSON-RPC 的请求、响应与通知，Thread / Turn / Item 会话模型，服务端主动发起的审批请求，以及为什么不用 MCP 承载。完整资料见 [参考](bonus-protocol/protocol-notes.md#参考)。

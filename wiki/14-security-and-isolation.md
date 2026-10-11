@@ -83,6 +83,8 @@ Shell 读取了私有文件
 
 可以减少它们的组合：限定文件范围，给子任务更少权限，控制所有出口，高风险动作要求人确认。审批应展示具体目标、数据范围和操作，不只是“允许继续”。
 
+一个可直接实现的粗粒度做法是数据流标记：任务读到私有数据后记下来源，之后每个外发通道都要人工确认；标记随续跑、续聊和子任务传递。它不知道参数里是否真的带了私有值，所以会多问，但不会漏。值级别的追踪（如 CaMeL）更精细，实现也更复杂。概念与取舍见 [Day 20 笔记](../docs/day-20/day-20-notes.md)。
+
 ## 技术展开
 
 ### 进阶术语：ABI、过滤程序、默认拒绝与连接绑定
@@ -180,13 +182,15 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 [D18–19 轻量实验](../docs/day-19/day-19-lab.md) 加了两条边界：[react.go](../internal/agent/react.go) 给工具结果写外层 `source` 和 `authority=data_only`，system 说明结果不能授权；[dispatch.go](../internal/agent/dispatch.go) 在实际执行前核对本轮 `llm.Tools`，未提供的工具不执行且不自动重试。正文的可信自述不改变外层权限。标记表达指令权限，不能当作事实可信度评分。
 
+[D20](../docs/day-20/day-20-lab.md) 在执行器加了高风险确认（[approval.go](../internal/agent/approval.go)）：删除记忆、MCP server 声明的破坏性工具、含私有数据后的浏览器与 MCP 调用、续跑时重做中断的副作用，执行前都经协议 `tool/requestApproval` 问界面上的人；没有界面、超时或拒绝都不执行。私有来源（bash、记忆、子 agent、父任务）存进检查点并传给子 agent。MCP 注解只用来收紧。白名单域名内的 bash 外发、值级别数据流与审计日志仍未覆盖。
+
 实验防护组只给读取固定资料的工具，对照组多一个无害计算器。两组均通过本次简单输入，没有观察到分数提升；来源标记与能力收紧同时变化，不能单独归因。允许列表只限制工具名，菜单内参数、对象权限和外发内容仍需由对应工具校验。学习入口见 [Day 18](../docs/day-18/day-18-notes.md)、[Day 19](../docs/day-19/day-19-notes.md)。
 
 [bwrapArgs与run](../internal/sandbox/sandbox.go)、[网络代理与dialChecked](../internal/sandbox/network.go)、[seccompProgram](../internal/sandbox/seccomp.go)提供当前边界；[browser.guard](../internal/browser/browser.go)检查页面请求。
 
 当前seccomp是黑名单、共享内核；没有systemd用户会话时资源限制会降级，工作目录无总配额。浏览器未纳入同一出口沙箱、DNS重绑定/WebSocket仍有缺口。更强策略需要按威胁模型实现与验证，不能从这些片段推导“已经完备”。
 
-实测补充（[Q16–Q18](../docs/deep-questions.md#q16)）：沙箱内 `CapEff=0`、`NoNewPrivs=1`、新建 user namespace 被拒，seccomp 黑名单之外仍有权限与 namespace 两层；只放行一个域名时，经它的开放重定向跳到白名单外的连接会被代理再次检查并拒绝，域名粒度真正的缺口是“白名单域名本身可写”和域前置；浏览器的内网判断曾漏掉 `100.64.0.0/10` 等特殊地址段（含阿里云元数据地址），现已改为与代理共用、只放行公网全局单播地址；外发到公网仍只靠规则与模型判断。
+实测补充（[Q16–Q18](../docs/deep-questions.md#q16)）：沙箱内 `CapEff=0`、`NoNewPrivs=1`、新建 user namespace 被拒，seccomp 黑名单之外仍有权限与 namespace 两层；只放行一个域名时，经它的开放重定向跳到白名单外的连接会被代理再次检查并拒绝，域名粒度真正的缺口是“白名单域名本身可写”和域前置；浏览器的内网判断曾漏掉 `100.64.0.0/10` 等特殊地址段（含阿里云元数据地址），现已改为与代理共用、只放行公网全局单播地址；D20 起，读到私有数据后的浏览器外发要人工确认（见上）。
 
 ### 进阶推演
 

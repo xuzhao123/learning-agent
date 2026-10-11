@@ -624,7 +624,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {} }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {} }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -703,10 +703,18 @@ function apply(r, e) {
     if (!r.protocol) legacyLine(r, e, time);
   }
   else if (e.kind === "notify") applyNotify(r, e.method, e.body || {}, time);
-  else if (e.kind === "approval") { const p = e.body || {}; if (p.domain) r.netPending[p.domain] = true; }
+  else if (e.kind === "approval") {
+    const p = e.body || {};
+    if (e.method === "tool/requestApproval") r.approvals[p.call_id] = { ...p, state: "waiting" };
+    else if (p.domain) r.netPending[p.domain] = true;
+  }
+  else if (e.kind === "decision") { const a = r.approvals[e.text]; if (a) a.state = (e.body || {}).decision; }
   else if (e.kind === "allow" || e.kind === "deny") { r.netDecision[e.text] = e.kind; delete r.netPending[e.text]; }
   else if (e.kind === "stop") { r.stopRequested = true; r.logs.push({ ...e, kind: "stdout", text: e.text }); }
-  else if (e.kind === "exit") { r.exit = e.text || "exit"; r.tEnd = time; r.netPending = {}; }
+  else if (e.kind === "exit") {
+    r.exit = e.text || "exit"; r.tEnd = time; r.netPending = {};
+    for (const a of Object.values(r.approvals)) if (a.state === "waiting") a.state = "expired";
+  }
 }
 
 // B0：agent 经协议发来的结构化通知。页面需要的信息（任务ID、输入容量、记忆与能力事件、浏览器地址、子 agent 的起止和输出、
@@ -776,11 +784,11 @@ function analyze(r) {
   for (const c of r.calls) for (const t of c.tools) {
     const v = parse(t.result);
     const shown = v && typeof v === "object" && "result" in v ? v.result : v;
-    t.state = !t.done ? (r.exit ? "lost" : "running") : v && typeof v === "object" && v.error ? "error" : (isEmpty(shown) || shown?.status === "insufficient") ? "empty" : "ok";
+    t.state = !t.done ? (r.exit ? "lost" : "running") : v?.status === "denied" ? "denied" : v && typeof v === "object" && v.error ? "error" : (isEmpty(shown) || shown?.status === "insufficient") ? "empty" : "ok";
     const key = t.name + " " + compact(t.args);
     t.repeatOf = seen.has(key) && seen.get(key) < c.n ? seen.get(key) : null;
     if (!seen.has(key)) seen.set(key, c.n);
-    t.reason = { error: "返回错误", empty: "空结果", lost: "没有返回结果" }[t.state] || (t.repeatOf ? `重复调用（请求 #${t.repeatOf} 已用相同参数）` : "");
+    t.reason = { error: "返回错误", empty: "空结果", lost: "没有返回结果", denied: "未获用户确认" }[t.state] || (t.repeatOf ? `重复调用（请求 #${t.repeatOf} 已用相同参数）` : "");
     t.detour = !!t.reason;
     if (t.detour) detours.push(t);
     const prior = failed.get(t.name);
@@ -1708,6 +1716,7 @@ function renderCall(box, r, c, last) {
   }
   if (m.content && c.tools.length) { const mid = md(m.content); mid.classList.add("mid"); box.append(mid); }
   for (const t of c.tools) {
+    if (ui.run.approvals[t.id]) box.append(approvalCard(ui.run, t.id));
     if (t.name === "spawn_agent" && !r.isSub) { box.append(agentCard(r, t)); continue; }
     if (WEB_TOOLS.includes(t.name)) { box.append(webCard(r, t)); continue; }
     if (t.name === "bash") { box.append(bashCard(r, c, t)); continue; }
@@ -1900,6 +1909,31 @@ function netCard(r, t) {
     yes.onclick = () => decide(true); no.onclick = () => decide(false);
     acts.append(yes, no, el("span", "meta", waiting ? "agent 正在等待：批准后本轮立即生效" : "批准后下一轮生效"));
   } else acts.append(el("span", "meta", res ? (res.error || "请求无效") : "等待中…"));
+  card.append(acts);
+  return card;
+}
+// D20：高风险操作确认。规则在 agent 的执行器里，命中后 agent 暂停等这里的答复；只对这一项调用有效，不留到下一轮。
+const RISK_LABEL = { irreversible: "不可撤回", destructive: "破坏性操作", outbound: "可能外发私有数据", redo: "重做中断的操作" };
+function approvalCard(root, callID) {
+  const a = root.approvals[callID];
+  const card = el("div", "net-card");
+  card.append(el("div", "", `需要你确认 · ${RISK_LABEL[a.risk] || a.risk} · `), el("b", "", a.tool), el("div", "why", "原因：" + a.reason + "\n参数：" + a.arguments));
+  const acts = el("div", "acts");
+  if (a.state === "waiting") {
+    const yes = el("button", "yes", "允许"), no = el("button", "", "拒绝");
+    yes.type = no.type = "button";
+    const decide = async (allow) => {
+      yes.disabled = no.disabled = true;
+      try {
+        const resp = await fetch(`/runs/${encodeURIComponent(root.id)}/approval`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ call_id: callID, allow }) });
+        if (!resp.ok) throw new Error(await resp.text());
+        a.state = allow ? "allow" : "deny";
+        renderChat();
+      } catch (err) { alert("操作失败：" + err.message); yes.disabled = no.disabled = false; }
+    };
+    yes.onclick = () => decide(true); no.onclick = () => decide(false);
+    acts.append(yes, no, el("span", "meta", "agent 正在等待：只对这一次调用有效"));
+  } else acts.append(el("span", "meta", { allow: "已允许", deny: "已拒绝", expired: "未答复（agent 已结束或等待超时）" }[a.state] || a.state));
   card.append(acts);
   return card;
 }

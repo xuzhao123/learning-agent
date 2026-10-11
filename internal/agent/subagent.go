@@ -88,7 +88,12 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 	relay := func(m protocol.Message) {
 		protocol.Notify("subagent/message", map[string]any{"call_id": call.ID, "task_id": id, "message": m})
 	}
-	cp, replayed, err := RunChild(ctx, id, task, append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps)), ChildIO{Out: out, Notify: relay})
+	childArgs := append(slices.Clone(SubagentArgs), "-max-steps", strconv.Itoa(SubagentSteps))
+	if len(privateSources) > 0 {
+		// D20：task 是父 agent 写的，可能带着它读到的私有数据；子 agent 从一开始就按含私有数据处理，外发同样要确认。
+		childArgs = append(childArgs, "-private-input")
+	}
+	cp, replayed, err := RunChild(ctx, id, task, childArgs, ChildIO{Out: out, Notify: relay})
 	out.flush()
 	if err != nil {
 		fmt.Printf("Subagent stop [%s]: %s\n", call.ID, err)
@@ -104,7 +109,7 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 	fmt.Printf("Subagent done [%s]: model_calls=%d replayed=%t\n", call.ID, cp.Calls, replayed)
 	protocol.Notify("subagent/completed", map[string]any{"call_id": call.ID, "task_id": id, "state": "done", "model_calls": cp.Calls, "replayed": replayed})
 	span.SetAttributes(attribute.Bool("agent.subagent.replayed", replayed))
-	return map[string]any{"task_id": id, "answer": cp.Answer, "model_calls": cp.Calls, "replayed": replayed}, nil
+	return map[string]any{"task_id": id, "answer": cp.Answer, "model_calls": cp.Calls, "replayed": replayed, "private": cp.Private}, nil
 }
 
 // 子进程的输出逐行加前缀转到终端，几个子 agent 并行时也分得清是谁在说话。

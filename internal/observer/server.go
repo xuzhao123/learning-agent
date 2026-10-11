@@ -86,6 +86,7 @@ type run struct {
 	// B0：与正在运行的 agent 之间的协议连接，以及它在等待答复的联网审批（域名 → 请求ID）。
 	conn      *protocol.Conn
 	approvals map[string][]int64
+	toolWaits map[string]int64 // D20：等待确认的高风险操作（调用ID → 请求ID）
 }
 
 type server struct {
@@ -142,6 +143,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.Handle("POST /runs/{id}/network", sameOrigin(http.HandlerFunc(s.decideNetwork)))
+	mux.Handle("POST /runs/{id}/approval", sameOrigin(http.HandlerFunc(s.decideTool)))
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
 	mux.HandleFunc("GET /traces/{id}", s.traceSpans)
@@ -437,7 +439,7 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 	stderr, _ := cmd.StderrPipe()
 	conn := protocol.NewConn(stdout, stdin, r.handle)
 	r.mu.Lock()
-	r.conn, r.approvals = conn, map[string][]int64{}
+	r.conn, r.approvals, r.toolWaits = conn, map[string][]int64{}, map[string]int64{}
 	r.mu.Unlock()
 	// 自己的进程组：停止时向整组发信号。-dev 模式下组里是 go run 和它编译出的 agent，两者都能收到。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -464,7 +466,7 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 			<-conn.Closed()
 			err := cmd.Wait()
 			r.mu.Lock()
-			r.proc, r.conn, r.approvals = nil, nil, nil
+			r.proc, r.conn, r.approvals, r.toolWaits = nil, nil, nil, nil
 			r.mu.Unlock()
 			text := "exit 0"
 			if err != nil {
@@ -995,6 +997,40 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"net_allow": r.netAllow(), "answered": len(waiting)})
 }
 
+// D20：高风险操作确认。agent 发来 tool/requestApproval 后暂停；用户在页面上点“允许 / 拒绝”，这里当场回复。
+// 只对正在等待的调用有效，不留到下一轮：下一轮的操作要重新确认。决定记进对话记录，页面重开后仍能看到。
+func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
+	r := s.find(req.PathValue("id"))
+	if r == nil {
+		http.Error(w, "找不到这条对话", http.StatusNotFound)
+		return
+	}
+	var input struct {
+		CallID string `json:"call_id"`
+		Allow  bool   `json:"allow"`
+	}
+	if json.NewDecoder(req.Body).Decode(&input) != nil || input.CallID == "" || len(input.CallID) > 256 {
+		http.Error(w, "需要 call_id", http.StatusBadRequest)
+		return
+	}
+	r.mu.Lock()
+	conn := r.conn
+	id, waiting := r.toolWaits[input.CallID]
+	delete(r.toolWaits, input.CallID)
+	r.mu.Unlock()
+	if !waiting || conn == nil {
+		http.Error(w, "这项操作已不在等待确认（可能已超时或 agent 已结束）", http.StatusConflict)
+		return
+	}
+	decision := "deny"
+	if input.Allow {
+		decision = "allow"
+	}
+	r.add(event{Kind: "decision", Text: input.CallID, Body: json.RawMessage(`{"decision":"` + decision + `"}`)})
+	conn.Reply(id, map[string]string{"decision": decision}, nil)
+	json.NewEncoder(w).Encode(map[string]string{"decision": decision})
+}
+
 // 当前允许的域名：按时间顺序处理 allow/deny，后一次决定覆盖前一次。
 func (r *run) netAllow() []string {
 	r.mu.Lock()
@@ -1193,6 +1229,19 @@ func (s *server) traceMetrics(w http.ResponseWriter, req *http.Request) {
 // 联网审批请求存成 approval 事件，并记下请求ID，等用户在页面上点“允许 / 拒绝”时回复。
 func (r *run) handle(m protocol.Message) {
 	if m.IsRequest() {
+		if m.Method == "tool/requestApproval" {
+			var params struct {
+				CallID string `json:"call_id"`
+			}
+			json.Unmarshal(m.Params, &params)
+			r.mu.Lock()
+			if r.toolWaits != nil {
+				r.toolWaits[params.CallID] = *m.ID
+			}
+			r.mu.Unlock()
+			r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})
+			return
+		}
 		if m.Method != "network/requestApproval" {
 			r.mu.Lock()
 			conn := r.conn

@@ -37,16 +37,16 @@ type Checkpoint struct {
 	// 说明进程死在执行这批工具的途中：续跑时由 replayBatch 补齐。
 	Messages []llm.Message `json:"messages"`
 	// D15 指标的依据：评测的结局、耗时和成本以检查点为准（kill -9 也不会丢），trace 只用来归因（见 Q19）。
-	StartedAt  time.Time `json:"started_at,omitempty"` // 首次开始；续跑不变，所以耗时包含中断的那段时间
-	Input      int       `json:"input_tokens"`         // 累计用量，跨续跑累加，包含摘要与记忆辅助调用
-	Output     int       `json:"output_tokens"`
-	Cached     int       `json:"cached_tokens"`
-	Traces     []string  `json:"traces,omitempty"` // 每次运行（首次与各次续跑）的 trace_id
-	Fork       *Fork     `json:"fork,omitempty"`   // D17 回放验证：从哪个检查点的第几轮分叉、注入了什么
-	Summary    []string  `json:"summary"`
-	LastAction string    `json:"last_action"`
-	Repeated   int       `json:"repeated"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	StartedAt time.Time `json:"started_at,omitempty"` // 首次开始；续跑不变，所以耗时包含中断的那段时间
+	Input     int       `json:"input_tokens"`         // 累计用量，跨续跑累加，包含摘要与记忆辅助调用
+	Output    int       `json:"output_tokens"`
+	Cached    int       `json:"cached_tokens"`
+	Traces    []string  `json:"traces,omitempty"` // 每次运行（首次与各次续跑）的 trace_id
+	Fork      *Fork     `json:"fork,omitempty"`   // D17 回放验证：从哪个检查点的第几轮分叉、注入了什么
+	Summary   []string  `json:"summary"`
+	Progress  progress  `json:"progress"`          // 循环检测：最近的动作与见过的结果，跨续跑累计
+	Private   []string  `json:"private,omitempty"` // D20：本任务已读入的私有数据来源；非空时外发类工具要用户确认
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // 由 main 设置：CheckpointID 为空表示不写检查点（Day 3/4 实验）；Resume 不为空表示本次是续跑。
@@ -228,18 +228,9 @@ func ForkSnapshot(src *Checkpoint, id string, messages []llm.Message, step, call
 	}
 	rounds := step
 	messages = append(slices.Clone(messages), llm.Message{Role: "user", Content: note})
+	// 循环检测按保留的调用与结果重新算一遍，和原来的运行在这一点上一致；私有数据来源沿用原任务（只会更严）。
 	cp := &Checkpoint{ID: id, Args: src.Args, Question: src.Question, Status: "running", Step: step, Calls: calls, Messages: messages,
-		StartedAt: time.Now().UTC(), Fork: &Fork{From: src.ID, Rounds: rounds, Note: note}}
-	// 重复动作计数按保留的调用重新算一遍，和原来的运行在这一点上一致。
-	for _, m := range messages {
-		for _, call := range m.ToolCalls {
-			if key := actionKey(call); key == cp.LastAction {
-				cp.Repeated++
-			} else {
-				cp.LastAction, cp.Repeated = key, 1
-			}
-		}
-	}
+		StartedAt: time.Now().UTC(), Fork: &Fork{From: src.ID, Rounds: rounds, Note: note}, Progress: replayProgress(messages), Private: src.Private}
 	for _, line := range src.Summary {
 		var n int
 		if _, err := fmt.Sscanf(line, "- 第%d轮", &n); err == nil && n <= rounds {

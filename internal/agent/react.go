@@ -112,11 +112,11 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		protocol.Notify("turn/completed", completed)
 	}()
 	summary := []string{}
-	lastAction, repeated := "", 0
-	completed := 0 // 已经完整结束的轮次（模型回答 + 工具结果都已写回）
+	var loop progress // 循环检测：最近的动作与见过的结果（见 approval.go）
+	completed := 0    // 已经完整结束的轮次（模型回答 + 工具结果都已写回）
 	var pending *llm.Message
 	if resume != nil {
-		cp, completed, summary, lastAction, repeated = resume, resume.Step, resume.Summary, resume.LastAction, resume.Repeated
+		cp, completed, summary, loop = resume, resume.Step, resume.Summary, resume.Progress
 		conversation, pending, err = resumeContext(resume, options)
 		if err != nil {
 			return err
@@ -126,6 +126,19 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		cp.Status, cp.Reason, cp.Error = "running", "", ""
 		fmt.Printf("Resume: id=%s completed_rounds=%d model_calls=%d/%d pending_calls=%d\n", cp.ID, completed, client.Calls, maxSteps, pendingCount(pending))
 	}
+	// D20：私有数据的来源跨续跑、续聊延续：续跑取检查点，续聊取上一轮；父 agent 派出时带 -private-input。
+	privateSources = slices.Clone(cp.Private)
+	if resume == nil && Continues != "" {
+		if prev, err := LoadCheckpoint(Continues); err == nil {
+			privateSources = slices.Clone(prev.Private)
+		}
+	}
+	if PrivateInput {
+		markPrivate("parent")
+	}
+	if memory.Active != nil && memory.Active.Recalled > 0 {
+		markPrivate("memory")
+	}
 	if tid := root.SpanContext().TraceID(); tid.IsValid() && !slices.Contains(cp.Traces, tid.String()) {
 		cp.Traces = append(cp.Traces, tid.String())
 	}
@@ -133,7 +146,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		if CheckpointID == "" {
 			return nil
 		}
-		cp.Step, cp.Calls, cp.Messages, cp.Summary, cp.LastAction, cp.Repeated = completed, client.Calls, conversation.View, summary, lastAction, repeated
+		cp.Step, cp.Calls, cp.Messages, cp.Summary, cp.Progress, cp.Private = completed, client.Calls, conversation.View, summary, loop, privateSources
 		cp.Input, cp.Output, cp.Cached = client.Input, client.Completion, client.Cached
 		return cp.write()
 	}
@@ -233,14 +246,12 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 				}
 				ids[call.ID] = true
 				key := actionKey(call)
-				if key == lastAction {
-					repeated++
-				} else {
-					lastAction, repeated = key, 1
-				}
-				// 按模型顺序计数，工具内部重试不算新动作；第三次请求到来就拦下整批，避免继续副作用。
-				if repeated >= 3 {
-					return stopRun("repeated_action", "疑似死循环：连续3次相同工具与参数，已拦下本轮批次："+key, summary)
+				var count int
+				loop.Recent, count = pushAction(loop.Recent, key)
+				// 按模型顺序计数，工具内部重试不算新动作；窗口里第三次出现就拦下整批，避免继续副作用。
+				// 窗口而不是只看相邻：A、B、A、B、A 这样交替调用也会被拦下。
+				if count >= actionLimit {
+					return stopRun("repeated_action", fmt.Sprintf("疑似死循环：最近%d个动作里相同工具与参数出现%d次，已拦下本轮批次：%s", actionWindow, count, key), summary)
 				}
 			}
 			calls = reply.ToolCalls
@@ -258,6 +269,14 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		} else {
 			observations = ExecuteBatch(ctx, calls, parallel, retries)
 		}
+		// 无进展：连续几轮拿到的都是见过的结果。先提示模型收尾，再不行就熔断，不让它把预算耗在换说法重查上。
+		stale := loop.observe(observations)
+		if stale >= staleHint {
+			fmt.Printf("No progress: stale_rounds=%d/%d\n", stale, staleLimit)
+			for i := range observations {
+				observations[i].Note = staleNote
+			}
+		}
 		for i, observation := range observations {
 			if LabelToolData {
 				// 标记放在正文外，结果即使自称 system，也仍属于工具数据。
@@ -274,6 +293,9 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			summary = append(summary, fmt.Sprintf("- 第%d轮 %s(%s)，%s", step, observation.Tool, calls[i].Function.Arguments, describe(observation)))
 			fmt.Printf("Observation [%s]: %s\n", observation.ID, data)
 			conversation.Append(llm.Message{Role: "tool", ToolCallID: observation.ID, Content: string(data)})
+			if observation.Status == "ok" {
+				trackPrivate(observation)
+			}
 		}
 		completed = step
 		if err := save(); err != nil {
@@ -281,6 +303,9 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		}
 		if err := ctx.Err(); err != nil {
 			return stopRun(ctxReason(ctx), err.Error(), summary)
+		}
+		if stale >= staleLimit {
+			return stopRun("no_progress", fmt.Sprintf("连续%d轮工具结果都与之前相同，没有新进展", stale), summary)
 		}
 	}
 	// 预算包含最终回答和上下文摘要；耗尽后用本地执行记录报告，不再额外请求模型。
@@ -304,6 +329,16 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 			protocol.ItemCompleted(CheckpointID, toolItem(call, &result))
 		}()
 		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
+		defer func() { writeJournal(result) }()
+		// D20：高风险操作先等人确认，再占并发槽位；等人的时间不算进单次工具时限。
+		if kind, reason := risk(call); kind != "" {
+			span.SetAttributes(attribute.String("agent.tool.risk", kind))
+			if decision := approve(ctx, call, kind, reason); decision != "allow" {
+				span.SetAttributes(attribute.String("agent.tool.approval", decision))
+				return denied(call, kind, decision)
+			}
+			span.SetAttributes(attribute.String("agent.tool.approval", "allow"))
+		}
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
@@ -333,17 +368,35 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 	return results
 }
 
-// 续跑时补齐中断前那一批：可重复的工具重新执行；其余的不替模型重做，回填“结果未知”，由模型决定先核对还是重做。
+// 续跑时补齐中断前那一批，按顺序查三处：
+//  1. 结果日志里有这项调用的记录：它在上个进程里已经做完，直接取回，不重做。
+//  2. 可重复的工具（只读或带幂等键）：重新执行。
+//  3. 其余的：D20 起问用户要不要重做；用户允许就执行，否则回填“结果未知”，不替用户决定。
 func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries int) []llm.Observation {
 	results := make([]llm.Observation, len(calls))
 	var again []llm.ToolCall
 	var index []int
 	for i, call := range calls {
+		if o, ok := readJournal(call); ok {
+			o.Note = "上一个进程已经执行完这项调用，这是当时的结果（取自结果日志，没有重做）。"
+			results[i] = o
+			fmt.Printf("Replay [%s]: %s journal → %s\n", call.ID, call.Function.Name, o.Status)
+			_, span := toolSpan(ctx, call)
+			span.SetAttributes(attribute.Bool("agent.tool.replayed", true), attribute.Bool("agent.tool.journal", true))
+			endTool(span, o)
+			protocol.ItemCompleted(CheckpointID, toolItem(call, &results[i]))
+			continue
+		}
 		if repeatable[call.Function.Name] {
 			again, index = append(again, call), append(index, i)
 			continue
 		}
+		if decision := approve(ctx, call, "redo", "上一个进程执行这项调用时中断，没有完成记录，可能已经生效；重做可能重复副作用"); decision == "allow" {
+			again, index = append(again, call), append(index, i)
+			continue
+		}
 		results[i] = llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "unknown", Error: interruptedUnknown}
+		writeJournal(results[i])
 		fmt.Printf("Replay [%s]: %s not_repeatable → unknown\n", call.ID, call.Function.Name)
 		// 没有执行，但留一个 span：调用链上能看到这一项在续跑时被回填成“结果未知”。
 		_, span := toolSpan(ctx, call)
@@ -364,7 +417,8 @@ var errUnknown = errors.New("结果未知")
 // 所以把下一步该怎么做写进结果本身：超时的调用没有返回任何标识，可查的前提不存在。
 const unknownNext = "。这项操作可能有副作用，执行器不会自动重做；这次调用也没有返回任何可用于查询的标识（如 task_id），不要自己构造标识去查询状态。不要重试，直接告诉用户结果未知，由用户决定是否重做"
 
-const interruptedUnknown = "上一个进程在执行这项调用时中断，结果未知：可能已经执行过。需要时先核对，再决定是否重做"
+// 续跑回填用同一套下一步说明：只补“为什么未知”，不让模型自己重做或编造标识去查。
+const interruptedUnknown = "结果未知：上一个进程在执行这项调用时中断，没有完成记录，可能已经执行过" + unknownNext
 
 // 一个逻辑调用最多尝试 1+k 次。按错误类型决定是否重试：
 // 参数错误等确定性失败不重试；结果未知只对可重复的工具重试；其余按暂时故障退避重试。
@@ -478,8 +532,27 @@ func describe(o llm.Observation) string {
 		return "未执行（已取消），可以放心重做"
 	case "unknown":
 		return tried + o.Error
+	case "denied":
+		return "未执行（没有得到用户确认）"
 	}
 	return tried + "失败：" + o.Error
+}
+
+// D20：成功读到私有数据的工具。bash 能读沙箱工作目录（和只读挂载的项目），记忆是用户的私人信息，
+// 子 agent 的结论可能来自它自己的 bash 或记忆。网页、MCP 返回的是外部数据，不算私有。
+func trackPrivate(o llm.Observation) {
+	switch o.Tool {
+	case "bash":
+		markPrivate("bash")
+	case "search_memory":
+		markPrivate("memory")
+	case "spawn_agent":
+		if result, ok := o.Result.(map[string]any); ok {
+			if sources, _ := result["private"].([]string); len(sources) > 0 {
+				markPrivate("subagent")
+			}
+		}
+	}
 }
 
 // B0：一次工具调用是一个 toolCall Item；完成时带上和回填给模型的同一个 Observation。
