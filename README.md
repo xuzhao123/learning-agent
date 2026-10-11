@@ -76,6 +76,7 @@ go build -o bin/learning-agent .
 | Day 18 | 不可信内容与无害注入实验 | [笔记](docs/day-18/day-18-notes.md) | [实践](docs/day-18/day-18-lab.md) | — |
 | Day 19 | 来源标记与工具权限边界 | [笔记](docs/day-19/day-19-notes.md) | [实践](docs/day-19/day-19-lab.md) | — |
 | Day 20 | 高风险操作确认与执行边界 | [笔记](docs/day-20/day-20-notes.md) | [实践](docs/day-20/day-20-lab.md) | — |
+| Day 21 | 审计日志与第三周复盘 | [笔记](docs/day-21/day-21-notes.md) · [复盘](docs/week-03-review.md) | [实践](docs/day-21/day-21-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -83,7 +84,7 @@ go build -o bin/learning-agent .
 
 补充阅读：
 
-- [28 天学习计划](plan.md)：课程安排与长期目标；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链。
+- [28 天学习计划](plan.md)：课程安排与长期目标；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链；[第三周复盘](docs/week-03-review.md)：评测、权限、确认与审计怎样加在同一条路上。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
 - [Agent 工程面试题库](wiki/16-interview-preparation.md)：126 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。
@@ -95,7 +96,7 @@ go build -o bin/learning-agent .
 
 | 阅读顺序 | 文件或模块 | 关注点 |
 | --- | --- | --- |
-| 入口 | [main.go](main.go) | 参数、工具开关、agent / observe / queue / metrics / eval 的入口 |
+| 入口 | [main.go](main.go) | 参数、工具开关、agent / observe / queue / metrics / eval / audit 的入口 |
 | 模型协议 | [internal/llm](internal/llm/) | messages、tools、tool_calls、请求预算与用量 |
 | 执行循环 | [internal/agent/react.go](internal/agent/react.go)、[工具分发](internal/agent/dispatch.go)、[确认与循环检测](internal/agent/approval.go) | 结果回填、并发、分类重试与终止；D20 高风险确认、私有数据标记、结果日志与无进展检测 |
 | 上下文与恢复 | [上下文管理](internal/agent/context_manager.go)、[检查点](internal/agent/checkpoint.go) | Transcript/View、压缩、写前日志、续跑 |
@@ -105,6 +106,7 @@ go build -o bin/learning-agent .
 | 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/)、[netguard](internal/netguard/) | 页面读取、进程隔离、网络与资源边界、出口地址判断 |
 | 观测与实验 | [observer](internal/observer/)、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
 | 评测与归因 | [eval](internal/eval/)、[评测集](eval/cases.jsonl)、[观测台评测页](internal/observer/eval.go) | 题目与打分器、多次尝试与 pass^k、评审模型、消融与基线对比、归因卡片与回放验证 |
+| 审计 | [audit](internal/audit/) | 只追加的审计记录、哈希链与校验；agent 与观测台共同写入 |
 
 一个 agent 进程运行一个任务，功能开关由入口设置。观测台、任务队列和子 agent 用独立子进程执行任务；检索等工具直接在该 agent 进程内调用。具体运行边界见 [PROJECT.md](PROJECT.md)。
 
@@ -178,4 +180,4 @@ go build -o bin/learning-agent .
 
 </details>
 
-观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“D16 评测 · D17 归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。
+观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“D16 评测 · D17 归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“D21 审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。

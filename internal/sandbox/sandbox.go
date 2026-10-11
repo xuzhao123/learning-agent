@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
@@ -104,6 +105,19 @@ func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 		}
 		reason := strings.ReplaceAll(strings.TrimSpace(args.Reason), "\n", " ")
 		fmt.Printf("Network request [%s]: domain=%s reason=%s\n", callID, domain, reason)
+		// D21：联网审批同样写审计。理由是模型写的，可能很长或带数据，只记哈希。
+		record := audit.Record{Actor: "model", Event: "network_request", CallID: callID, Tool: name, Target: domain, Risk: "network"}
+		record.Args(reason)
+		if err := audit.Write(ctx, record); err != nil {
+			return nil, llm.Permanent(fmt.Errorf("审计日志写入失败，不发起联网审批：%w", err))
+		}
+		defer func() {
+			record.Event, record.Actor, record.Detail = "network_decision", "program", ""
+			if record.Decision == "allow" || record.Decision == "deny" {
+				record.Actor, record.Detail = "user", "经界面答复"
+			}
+			audit.Log(ctx, record)
+		}()
 		// B0：向界面发起请求，在这里暂停，等用户点“允许 / 拒绝”。模型不能替用户回答：请求只走界面连接，模型碰不到。
 		waitCtx, cancel := context.WithTimeout(ctx, ApprovalWait)
 		defer cancel()
@@ -113,19 +127,24 @@ func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 		err := protocol.Call(waitCtx, "network/requestApproval", map[string]string{"call_id": callID, "domain": domain, "reason": reason}, &answer)
 		switch {
 		case ctx.Err() != nil:
+			record.Decision = "cancelled"
 			return nil, ctx.Err() // 整轮被中断：交给执行器按“结果未知”处理
 		case err == nil && answer.Decision == "allow":
+			record.Decision = "allow"
 			AllowDomain(domain)
 			fmt.Printf("Network approved [%s]: domain=%s\n", callID, domain)
 			return map[string]string{"domain": domain, "status": "allowed", "message": "用户已批准：本轮接下来的命令就可以经代理访问 " + domain + " 及其子域名。"}, nil
 		case err == nil && answer.Decision == "deny":
+			record.Decision = "deny"
 			fmt.Printf("Network denied [%s]: domain=%s\n", callID, domain)
 			return map[string]string{"domain": domain, "status": "denied", "message": "用户拒绝了这个请求。不要再请求同一个域名，换别的办法，或在回答里说明无法完成的原因。"}, nil
 		case errors.Is(err, protocol.ErrNoClient) || (err == nil && answer.Decision == "unavailable"):
+			record.Decision = "unavailable"
 			// 命令行或队列里没有可以批准的人：保持原来的做法，由用户下次运行时加 -net-allow。
 			return map[string]string{"domain": domain, "status": "pending",
 				"message": "当前没有可以当场批准的界面。用户可以在下次运行时加 -net-allow " + domain + "。请在回答里说明需要访问的原因，然后结束本轮。"}, nil
 		}
+		record.Decision = "timeout"
 		return map[string]string{"domain": domain, "status": "pending",
 			"message": "用户暂时没有答复。之后批准的话，下一轮对话起可以访问。请在回答里说明需要访问的原因，然后结束本轮。"}, nil
 	}

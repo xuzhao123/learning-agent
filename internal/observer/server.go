@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"learning-agent/internal/audit"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tools"
@@ -86,7 +87,12 @@ type run struct {
 	// B0：与正在运行的 agent 之间的协议连接，以及它在等待答复的联网审批（域名 → 请求ID）。
 	conn      *protocol.Conn
 	approvals map[string][]int64
-	toolWaits map[string]int64 // D20：等待确认的高风险操作（调用ID → 请求ID）
+	toolWaits map[string]toolWait // D20：等待确认的高风险操作（调用ID → 请求）
+}
+
+type toolWait struct {
+	rpc                         int64
+	Task, Tool, Risk, Arguments string
 }
 
 type server struct {
@@ -144,6 +150,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.Handle("POST /runs/{id}/network", sameOrigin(http.HandlerFunc(s.decideNetwork)))
 	mux.Handle("POST /runs/{id}/approval", sameOrigin(http.HandlerFunc(s.decideTool)))
+	mux.HandleFunc("GET /audit", s.listAudit)
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
 	mux.HandleFunc("GET /traces/{id}", s.traceSpans)
@@ -439,7 +446,7 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 	stderr, _ := cmd.StderrPipe()
 	conn := protocol.NewConn(stdout, stdin, r.handle)
 	r.mu.Lock()
-	r.conn, r.approvals, r.toolWaits = conn, map[string][]int64{}, map[string]int64{}
+	r.conn, r.approvals, r.toolWaits = conn, map[string][]int64{}, map[string]toolWait{}
 	r.mu.Unlock()
 	// 自己的进程组：停止时向整组发信号。-dev 模式下组里是 go run 和它编译出的 agent，两者都能收到。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -983,6 +990,11 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 		defer file.Close()
 	}
 	r.mu.Unlock()
+	// D21：联网批准同样先写审计；之后的续聊会把它作为 -net-allow 传给 agent，agent 那边再记一条。
+	if err := audit.Write(req.Context(), audit.Record{Actor: "user", Event: "user_network_decision", Task: r.rootTask, Conversation: r.ID, Target: input.Domain, Risk: "network", Decision: kind, Detail: "观测台页面"}); err != nil {
+		http.Error(w, "审计日志写入失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	r.add(event{Kind: kind, Text: input.Domain})
 	// B0：如果 agent 正在等这个域名的审批，当场回复；它会在本轮接着执行。否则只记下来，下一轮续聊时作为 -net-allow 传入。
 	r.mu.Lock()
@@ -1015,7 +1027,7 @@ func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 	}
 	r.mu.Lock()
 	conn := r.conn
-	id, waiting := r.toolWaits[input.CallID]
+	wait, waiting := r.toolWaits[input.CallID]
 	delete(r.toolWaits, input.CallID)
 	r.mu.Unlock()
 	if !waiting || conn == nil {
@@ -1026,9 +1038,34 @@ func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 	if input.Allow {
 		decision = "allow"
 	}
+	// D21：观测台记下“人点了什么”，与 agent 那边的 approval_decision 互相对照；参数哈希应与 agent 的请求记录一致。
+	// 先写审计再回复：审计写不进去，就不把“允许”交给 agent。
+	record := audit.Record{Actor: "user", Event: "user_decision", Task: wait.Task, Conversation: r.ID, CallID: input.CallID, Tool: wait.Tool, Risk: wait.Risk, Decision: decision, Detail: "观测台页面"}
+	record.Args(wait.Arguments)
+	if err := audit.Write(req.Context(), record); err != nil {
+		r.mu.Lock()
+		r.toolWaits[input.CallID] = wait
+		r.mu.Unlock()
+		http.Error(w, "审计日志写入失败，没有回复 agent："+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	r.add(event{Kind: "decision", Text: input.CallID, Body: json.RawMessage(`{"decision":"` + decision + `"}`)})
-	conn.Reply(id, map[string]string{"decision": decision}, nil)
+	conn.Reply(wait.rpc, map[string]string{"decision": decision}, nil)
 	json.NewEncoder(w).Encode(map[string]string{"decision": decision})
+}
+
+// D21：审计页只读。每次都从头校验整条哈希链，返回最近的 500 条（可按任务过滤）。
+func (s *server) listAudit(w http.ResponseWriter, req *http.Request) {
+	result, err := audit.Read(strings.TrimSpace(req.URL.Query().Get("task")))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if n := len(result.Records); n > 500 {
+		result.Records = result.Records[n-500:]
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 // 当前允许的域名：按时间顺序处理 allow/deny，后一次决定覆盖前一次。
@@ -1231,12 +1268,19 @@ func (r *run) handle(m protocol.Message) {
 	if m.IsRequest() {
 		if m.Method == "tool/requestApproval" {
 			var params struct {
-				CallID string `json:"call_id"`
+				CallID    string `json:"call_id"`
+				Task      string `json:"task_id"` // 子 agent 的请求经父进程转发时带上
+				Tool      string `json:"tool"`
+				Risk      string `json:"risk"`
+				Arguments string `json:"arguments"`
 			}
 			json.Unmarshal(m.Params, &params)
 			r.mu.Lock()
+			if params.Task == "" {
+				params.Task = r.rootTask
+			}
 			if r.toolWaits != nil {
-				r.toolWaits[params.CallID] = *m.ID
+				r.toolWaits[params.CallID] = toolWait{*m.ID, params.Task, params.Tool, params.Risk, params.Arguments}
 			}
 			r.mu.Unlock()
 			r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})

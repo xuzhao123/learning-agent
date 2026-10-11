@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
 	"learning-agent/internal/protocol"
@@ -58,9 +59,16 @@ func risk(call llm.ToolCall) (kind, reason string) {
 	return "", ""
 }
 
-// approve 向界面上的人请求确认，返回 allow、deny、unavailable 或 timeout。
+// approve 向界面上的人请求确认，返回 allow、deny、unavailable、timeout 或 audit_error。
+// D21：请求与答复都写审计。请求写不进审计就不发出、不执行：没有记录的高风险动作事后无法追责。
 func approve(ctx context.Context, call llm.ToolCall, kind, reason string) string {
 	fmt.Printf("Approval request [%s]: tool=%s risk=%s reason=%s\n", call.ID, call.Function.Name, kind, reason)
+	record := audit.Record{Actor: "program", Event: "approval_request", CallID: call.ID, Tool: call.Function.Name, Risk: kind, Detail: reason}
+	record.Args(call.Function.Arguments)
+	if err := audit.Write(ctx, record); err != nil {
+		fmt.Printf("Audit error [%s]: %v\n", call.ID, err)
+		return "audit_error"
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, sandbox.ApprovalWait)
 	defer cancel()
 	var answer struct {
@@ -78,6 +86,12 @@ func approve(ctx context.Context, call llm.ToolCall, kind, reason string) string
 		decision = "unavailable"
 	}
 	fmt.Printf("Approval decision [%s]: %s\n", call.ID, decision)
+	// allow / deny 来自界面上的人（观测台另记一条它收到的点击）；unavailable / timeout 是程序按规则处理的。
+	record.Event, record.Decision, record.Actor, record.Detail = "approval_decision", decision, "program", ""
+	if decision == "allow" || decision == "deny" {
+		record.Actor, record.Detail = "user", "经界面答复"
+	}
+	audit.Log(ctx, record)
 	return decision
 }
 
@@ -87,6 +101,7 @@ func denied(call llm.ToolCall, kind, decision string) llm.Observation {
 		"deny":        "用户拒绝了这项操作。",
 		"timeout":     "等待用户确认超时，操作没有执行。",
 		"unavailable": "这项操作需要用户在界面上确认，当前没有可以确认的界面，操作没有执行。",
+		"audit_error": "审计日志写入失败，高风险操作不能在没有记录的情况下执行，操作没有执行。",
 	}[decision]
 	if text == "" {
 		text = "操作没有得到确认，没有执行。"

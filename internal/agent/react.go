@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"learning-agent/internal/audit"
 	"learning-agent/internal/browser"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/memory"
@@ -139,6 +140,35 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	if memory.Active != nil && memory.Active.Recalled > 0 {
 		markPrivate("memory")
 	}
+	// D21：谁启动了这次运行。子任务由父 agent 的模型派出；其余是用户（命令行、观测台、队列里的任务文件）。
+	start := audit.Record{Actor: "user", Event: "task_start", Detail: "new"}
+	start.Args(question)
+	if strings.Contains(CheckpointID, "-sub-") {
+		start.Actor = "model"
+	}
+	switch {
+	case resume != nil:
+		start.Detail = "resume"
+	case history != nil:
+		start.Detail = "continue " + Continues
+	}
+	if len(privateSources) > 0 {
+		start.Detail += "；私有数据来源：" + strings.Join(privateSources, "、")
+	}
+	audit.Log(ctx, start)
+	defer func() {
+		end := audit.Record{Actor: "program", Event: "task_end", Status: "no_tool_calls"}
+		var stop *stopError
+		if errors.As(err, &stop) {
+			end.Status = stop.reason
+		} else if err != nil {
+			end.Status = "error"
+		}
+		if len(privateSources) > 0 {
+			end.Detail = "私有数据来源：" + strings.Join(privateSources, "、")
+		}
+		audit.Log(ctx, end)
+	}()
 	if tid := root.SpanContext().TraceID(); tid.IsValid() && !slices.Contains(cp.Traces, tid.String()) {
 		cp.Traces = append(cp.Traces, tid.String())
 	}
@@ -331,7 +361,17 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
 		defer func() { writeJournal(result) }()
 		// D20：高风险操作先等人确认，再占并发槽位；等人的时间不算进单次工具时限。
-		if kind, reason := risk(call); kind != "" {
+		kind, reason := risk(call)
+		// D21：可能有副作用的调用（不在可重复名单里）和经过确认的调用，结束时写一条审计；只读调用不记，审计不变成第二份 trace。
+		if kind != "" || !repeatable[call.Function.Name] {
+			defer func() {
+				record := audit.Record{Actor: "model", Event: "tool_call", CallID: call.ID, Tool: call.Function.Name, Risk: kind, Status: result.Status,
+					Detail: fmt.Sprintf("attempts=%d", result.Attempts)}
+				record.Args(call.Function.Arguments)
+				audit.Log(ctx, record)
+			}()
+		}
+		if kind != "" {
 			span.SetAttributes(attribute.String("agent.tool.risk", kind))
 			if decision := approve(ctx, call, kind, reason); decision != "allow" {
 				span.SetAttributes(attribute.String("agent.tool.approval", decision))
@@ -380,6 +420,7 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 		if o, ok := readJournal(call); ok {
 			o.Note = "上一个进程已经执行完这项调用，这是当时的结果（取自结果日志，没有重做）。"
 			results[i] = o
+			audit.Log(ctx, audit.Record{Actor: "program", Event: "replay_journal", CallID: call.ID, Tool: call.Function.Name, Status: o.Status, Detail: "续跑：取回结果日志，没有重做"})
 			fmt.Printf("Replay [%s]: %s journal → %s\n", call.ID, call.Function.Name, o.Status)
 			_, span := toolSpan(ctx, call)
 			span.SetAttributes(attribute.Bool("agent.tool.replayed", true), attribute.Bool("agent.tool.journal", true))
@@ -397,6 +438,7 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 		}
 		results[i] = llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "unknown", Error: interruptedUnknown}
 		writeJournal(results[i])
+		audit.Log(ctx, audit.Record{Actor: "program", Event: "replay_unknown", CallID: call.ID, Tool: call.Function.Name, Status: "unknown", Detail: "续跑：没有完成记录、未获准重做，回填结果未知"})
 		fmt.Printf("Replay [%s]: %s not_repeatable → unknown\n", call.ID, call.Function.Name)
 		// 没有执行，但留一个 span：调用链上能看到这一项在续跑时被回填成“结果未知”。
 		_, span := toolSpan(ctx, call)

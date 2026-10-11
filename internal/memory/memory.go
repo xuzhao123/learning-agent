@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
 )
 
@@ -181,6 +182,9 @@ func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, l
 	if saved {
 		for _, e := range logs {
 			memLog(e.kind, "%s", e.text)
+			// D21：记忆的每次变更（写入、刷新、删除、过期、淘汰）写审计；只记编号和类型，不记内容。
+			id, _, _ := strings.Cut(strings.TrimPrefix(e.text, "id="), " ")
+			audit.Log(context.Background(), audit.Record{Actor: "program", Event: "memory_" + e.kind, Target: id})
 		}
 	}
 	return err

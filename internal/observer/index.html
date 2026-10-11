@@ -453,6 +453,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <button id="mcp-hub" class="navbtn"><span class="ico">⇄</span>MCP 中心</button>
     <button id="evals" class="navbtn"><span class="ico">✓</span>D16 评测 · D17 归因</button>
     <button id="security-lab" class="navbtn"><span class="ico">◇</span>D18–19 内容与权限</button>
+    <button id="audit" class="navbtn"><span class="ico">⛓</span>D21 审计日志</button>
     <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">▤ 学习课件</a>
     <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
     <div id="runs"></div>
@@ -2340,6 +2341,44 @@ $("security-lab").onclick = () => {
 };
 $("mem").onchange = () => { syncComposer(); renderChat(); };
 $("memory").onclick = () => openMemory();
+// D21：审计日志只读。服务端每次从头校验哈希链；页面只展示，不提供修改或删除。
+const AUDIT_ACTOR = { user: "人", model: "模型", program: "程序" };
+$("audit").onclick = () => openAudit();
+async function openAudit(task = "") {
+  document.body.classList.remove("nav-open");
+  if (ui.sending) return;
+  $("new-chat").click();
+  const panel = el("div", "mempanel evalpanel");
+  $("thread").replaceChildren(panel);
+  panel.append(el("div", "meta", "读取中…"));
+  let data;
+  try { const res = await fetch("/audit?task=" + encodeURIComponent(task)); if (!res.ok) throw new Error(await res.text()); data = await res.json(); }
+  catch (err) { panel.replaceChildren(el("div", "err", "读取失败：" + err.message)); return; }
+  const records = data.records || [];
+  const form = el("div", "eval-form"), input = el("input");
+  input.placeholder = "按任务ID过滤（含子任务）"; input.value = task; input.style.minWidth = "320px";
+  const go = el("button", "", "过滤"); go.type = "button"; go.onclick = () => openAudit(input.value.trim());
+  input.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
+  form.append(input, go);
+  if (task) { const all = el("button", "", "全部"); all.type = "button"; all.onclick = () => openAudit(); form.append(all); }
+  const status = data.broken_seq ? el("div", "err", `哈希链校验失败：第 ${data.broken_seq} 条，${data.reason}`) : el("div", "meta", `哈希链完整：共 ${data.total || 0} 条记录`);
+  panel.replaceChildren(el("h2", "", "审计日志"), el("p", "meta", ".data/audit/audit.jsonl · 只追加，每条带上一条的哈希。agent 记录程序判断、执行结局与记忆变更，观测台记录你的点击；参数只存哈希，原文在检查点与对话存档里。命令行校验：go run . audit -verify"), status, form);
+  if (!records.length) { panel.append(el("div", "empty", "还没有审计记录。")); return; }
+  const table = el("table", "eval-table"), head = el("tr");
+  for (const h of ["#", "时间", "谁", "事件", "任务", "工具 / 对象", "风险", "决定 / 结局", "说明"]) head.append(el("th", "", h));
+  table.append(head);
+  for (const r of [...records].reverse()) {
+    const tr = el("tr");
+    const taskCell = el("td", "mono");
+    if (r.task) { const a = el("a", "", r.task.length > 22 ? r.task.slice(0, 8) + "…" + r.task.slice(-10) : r.task); a.href = "#"; a.title = r.task; a.onclick = (e) => { e.preventDefault(); openAudit(r.task); }; taskCell.append(a); }
+    if (r.conversation) { const a = el("a", "", " 对话"); a.href = "#"; a.onclick = (e) => { e.preventDefault(); show(r.conversation); }; taskCell.append(a); }
+    tr.append(el("td", "num", String(r.seq)), el("td", "num", new Date(r.time).toLocaleString("zh-CN", { hour12: false })), el("td", "num", AUDIT_ACTOR[r.actor] || r.actor), el("td", "mono", r.event), taskCell,
+      el("td", "mono", [r.tool, r.target].filter(Boolean).join(" · ")), el("td", "", r.risk || ""), el("td", "", [r.decision, r.status].filter(Boolean).join(" / ")),
+      el("td", "", [r.detail, r.args_sha256 ? `参数 sha256 ${r.args_sha256.slice(0, 12)}…（${r.args_bytes} 字节）` : ""].filter(Boolean).join("；")));
+    table.append(tr);
+  }
+  const wrap = el("div", "eval-scroll"); wrap.append(table); panel.append(wrap);
+}
 // 记忆面板只读 .data/memory.json；删除由 agent 的 -memory-forget 执行，与 agent 共用文件锁。
 async function openMemory(focus) {
   document.body.classList.remove("nav-open");

@@ -182,7 +182,9 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 [D18–19 轻量实验](../docs/day-19/day-19-lab.md) 加了两条边界：[react.go](../internal/agent/react.go) 给工具结果写外层 `source` 和 `authority=data_only`，system 说明结果不能授权；[dispatch.go](../internal/agent/dispatch.go) 在实际执行前核对本轮 `llm.Tools`，未提供的工具不执行且不自动重试。正文的可信自述不改变外层权限。标记表达指令权限，不能当作事实可信度评分。
 
-[D20](../docs/day-20/day-20-lab.md) 在执行器加了高风险确认（[approval.go](../internal/agent/approval.go)）：删除记忆、MCP server 声明的破坏性工具、含私有数据后的浏览器与 MCP 调用、续跑时重做中断的副作用，执行前都经协议 `tool/requestApproval` 问界面上的人；没有界面、超时或拒绝都不执行。私有来源（bash、记忆、子 agent、父任务）存进检查点并传给子 agent。MCP 注解只用来收紧。白名单域名内的 bash 外发、值级别数据流与审计日志仍未覆盖。
+[D20](../docs/day-20/day-20-lab.md) 在执行器加了高风险确认（[approval.go](../internal/agent/approval.go)）：删除记忆、MCP server 声明的破坏性工具、含私有数据后的浏览器与 MCP 调用、续跑时重做中断的副作用，执行前都经协议 `tool/requestApproval` 问界面上的人；没有界面、超时或拒绝都不执行。私有来源（bash、记忆、子 agent、父任务）存进检查点并传给子 agent。MCP 注解只用来收紧。白名单域名内的 bash 外发与值级别数据流仍未覆盖。
+
+[D21](../docs/day-21/day-21-lab.md) 补了审计（[audit.go](../internal/audit/audit.go)）：确认请求、人的答复、程序的自动拒绝、有副作用的执行与记忆变更写进同一份只追加的哈希链日志，agent 与观测台各记亲眼所见，用调用 ID 与参数哈希互相核对；确认请求写不进审计就不执行。没有锚定，整链重算发现不了；观测台无登录，记录里的 user 不区分具体的人。概念见 [Day 21 笔记](../docs/day-21/day-21-notes.md)。
 
 实验防护组只给读取固定资料的工具，对照组多一个无害计算器。两组均通过本次简单输入，没有观察到分数提升；来源标记与能力收紧同时变化，不能单独归因。允许列表只限制工具名，菜单内参数、对象权限和外发内容仍需由对应工具校验。学习入口见 [Day 18](../docs/day-18/day-18-notes.md)、[Day 19](../docs/day-19/day-19-notes.md)。
 

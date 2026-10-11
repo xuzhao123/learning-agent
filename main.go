@@ -18,6 +18,7 @@ import (
 	"syscall"
 
 	"learning-agent/internal/agent"
+	"learning-agent/internal/audit"
 	"learning-agent/internal/browser"
 	"learning-agent/internal/eval"
 	"learning-agent/internal/labs"
@@ -37,7 +38,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；go run . eval 跑 D16 评测与 D17 归因；其余用法都是 agent 本身。
+// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；go run . eval 跑 D16 评测与 D17 归因；go run . audit 查看并校验 D21 审计日志；其余用法都是 agent 本身。
 func main() {
 	run := run
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
@@ -57,6 +58,14 @@ func main() {
 	// D16：评测集与回归；D17：归因卡片与回放验证。
 	if len(os.Args) > 1 && os.Args[1] == "eval" {
 		run, service = func() error { return eval.Run(os.Args[2:]) }, "eval"
+	}
+	// D21：列出并校验审计日志；只读 .data/audit，不请求模型。
+	if len(os.Args) > 1 && os.Args[1] == "audit" {
+		if err := audit.Run(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	// D15：只读检查点和 trace，统计 5 个核心指标；不请求模型，也不创建 span。
 	if len(os.Args) > 1 && os.Args[1] == "metrics" {
@@ -319,6 +328,8 @@ func run() error {
 		}
 		if *memoryForget != "" {
 			// 删除不做容量淘汰：一次性命令的默认上限不能顺带删掉其他记忆。
+			// D21：人发起的删除（命令行或观测台记忆页的按钮），先记下是谁要求的，删除本身由记忆模块记录。
+			audit.Log(context.Background(), audit.Record{Actor: "user", Event: "memory_forget_command", Target: *memoryForget})
 			_, err := memory.Active.Forget(*memoryForget, "人工删除")
 			return err
 		}
@@ -538,6 +549,11 @@ func run() error {
 		return err
 	}
 	defer unlock()
+	audit.Task, audit.Conversation = agent.CheckpointID, telemetry.ConversationID
+	// D21：启动参数带进来的联网白名单也是用户授权（命令行，或观测台把之前的批准转成参数），每次运行记一条。
+	for _, domain := range sandbox.Allow {
+		audit.Log(ctx, audit.Record{Actor: "user", Event: "network_allow_flag", Target: domain, Decision: "allow", Detail: "启动参数 -net-allow"})
+	}
 	if _, err := os.Stat(agent.CheckpointPath(agent.CheckpointID)); agent.Resume == nil && err == nil {
 		return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
 	}
