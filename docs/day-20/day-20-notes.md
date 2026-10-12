@@ -2,7 +2,7 @@
 
 ## 学习目标与术语
 
-学完能说明：哪些操作要停下来问人，确认请求该由谁回答，为什么“读过私有数据之后的外发”要单独看，中断后怎样避免重复副作用，循环怎样识别为“没有进展”，以及多租户隔离分哪几层。
+学完能说明：哪些操作要停下来问人，确认请求该由谁回答，为什么“读过私有数据之后的外发”要单独看，中断后怎样避免重复副作用，循环怎样识别为“没有进展”，多租户隔离分哪几层，以及登录、会话与资源访问检查怎样配合。
 
 | 术语 | 通俗解释 |
 | --- | --- |
@@ -14,6 +14,8 @@
 | 结果日志（Journal） | 每个动作一结束就单独记下结果，中断后据此判断“做完了没有” |
 | 无进展循环 | 工具调用没有完全重复，但拿到的结果一直和以前一样 |
 | 租户 | 共用同一套系统的独立客户或用户组，数据与资源彼此隔离 |
+| 会话 | 登录成功后服务端发的一个随机令牌，之后的请求凭它识别是谁 |
+| 越权访问（IDOR） | 改一下请求里的编号，就读到或改了别人的数据 |
 
 ## 1. 哪些操作要停下来问人
 
@@ -157,6 +159,30 @@ AWS 的 SaaS 隔离白皮书把这些归为“孤岛”（每个租户一套资�
 
 人工确认也要考虑租户：确认请求只能发给这个任务所属租户里有权限的人，不能发给任意在线的管理员。
 
+一个容易实现、也容易验证的数据隔离办法是**让路径由租户决定**：每个租户一棵目录，进程启动时就确定租户，之后所有读写都落在这棵目录下。别的租户的任务编号在这里根本找不到，不需要在每个读写点再比对一次租户字段。代价是“跨租户汇总”（比如平台的总体指标）要显式遍历各租户，这正好让跨租户的操作变得显眼、容易审查。
+
+## 7. 登录、会话与每次访问的检查
+
+多租户的前提是知道“这个请求是谁发的”。登录系统要做好四件事。
+
+**存密码**：不存原文，也不用普通哈希（太快，泄露后能被大规模暴力破解）。用专门放慢的密码哈希：PBKDF2、bcrypt、scrypt 或 Argon2。OWASP 对 PBKDF2-HMAC-SHA256 的建议是至少 60 万次迭代，每个账号一个随机盐，盐让同样的密码得到不同的哈希。[资料](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+
+```go
+salt := make([]byte, 16)
+rand.Read(salt)
+key, _ := pbkdf2.Key(sha256.New, password, salt, 600_000, 32) // Go 1.24 起在标准库
+```
+
+校验时用常量时间比较；用户名不存在时也算一遍哈希，否则响应快慢会泄露“这个用户名存在”。连续失败几次就暂时锁定这个用户名，挡住在线猜密码。
+
+**发会话**：登录成功后生成足够长的随机令牌（如 32 字节），放进 Cookie。Cookie 加 `HttpOnly`（页面脚本读不到，被注入脚本也偷不走）、`SameSite=Strict`（别的网站发起的请求不带上它），走 HTTPS 时再加 `Secure`。服务端只存令牌的哈希和过期时间，退出时删掉。[资料](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
+
+**防跨站请求**：用户已登录时，恶意网站可能诱导浏览器向你的服务发请求。`SameSite=Strict` 是第一层；会改变状态的请求再检查 `Origin` 头是不是自己的站点。[资料](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
+
+**每次访问都检查归属**：登录只回答“你是谁”，不回答“这条数据是不是你的”。OWASP Top 10 把“访问控制失效”列为第一位风险，最常见的形式就是越权访问：把 URL 里的对话编号换成别人的，就读到了别人的对话。[资料](https://owasp.org/Top10/A01_2021-Broken_Access_Control/) 做法是每个按编号取数据的接口都核对它属于当前用户的租户；不属于时返回 404 而不是 403，不透露“这个编号存在”。
+
+**服务之间的调用**：有些请求不是浏览器发的，而是系统内部的进程，比如 agent 进程访问模型代理。它没有用户会话，可以在启动时发一个只属于这个进程的随机令牌，请求时带上，服务端核对。没有令牌的本机进程就不能冒充它，往别人的对话里塞记录。
+
 ## 自测
 
 **为什么确认请求不能让模型来回答？**
@@ -183,6 +209,18 @@ AWS 的 SaaS 隔离白皮书把这些归为“孤岛”（每个租户一套资�
 
 共享的数据层，尤其是记忆与检索索引。查询如果漏了租户过滤，就会跨租户召回数据。
 
+**密码为什么不用 SHA-256 直接存？**
+
+SHA-256 很快，泄露后每秒能试几十亿个候选密码。密码哈希故意放慢，并且每个账号加盐，让批量破解的成本高到不划算。
+
+**已经登录了，为什么每个接口还要检查对话属于谁？**
+
+登录只证明身份。编号是可以改的，不检查归属就会越权读到别的租户的数据。
+
+**为什么别的租户访问时返回 404 而不是 403？**
+
+403 等于告诉对方“这个编号存在，只是你没权限”，可以用来探测别人的数据。
+
 ## 参考
 
 - [OWASP LLM06:2025 Excessive Agency](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/)
@@ -191,5 +229,9 @@ AWS 的 SaaS 隔离白皮书把这些归为“孤岛”（每个租户一套资�
 - [MCP 规范：Tools 与 tool annotations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
 - [Stripe：Idempotent requests](https://docs.stripe.com/api/idempotent_requests)
 - [AWS：SaaS Tenant Isolation Strategies](https://docs.aws.amazon.com/whitepapers/latest/saas-tenant-isolation-strategies/saas-tenant-isolation-strategies.html)
+- [OWASP：Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+- [OWASP：Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
+- [OWASP：CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
+- [OWASP Top 10：A01 Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
 
 代码对照与验证见 [Day 20 实践](day-20-lab.md)。

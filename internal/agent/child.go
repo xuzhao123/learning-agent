@@ -29,8 +29,10 @@ import (
 //
 // B0：子进程以 -app-server 启动，父进程就是它的界面：子进程的通知交给 child.Notify（子 agent 包一层转给上级界面，
 // 评测收下来打分，队列不要）；子进程的请求（联网审批）转给上级界面，没有上级界面时如实回答“没人能批准”。
+//
+// 多租户：child.Tenant 决定任务在哪个空间里（检查点、记忆、沙箱目录都在那里），子进程带 -tenant 启动。
 func RunChild(ctx context.Context, id, question string, args []string, child ChildIO) (cp *Checkpoint, replayed bool, err error) {
-	cp, err = LoadCheckpoint(id)
+	cp, err = LoadCheckpointIn(child.Tenant, id)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		args = append([]string{"-task-id", id, "-question", question}, args...)
@@ -46,8 +48,11 @@ func RunChild(ctx context.Context, id, question string, args []string, child Chi
 	default:
 		args = []string{"-resume", id}
 	}
+	if child.Tenant != "" {
+		args = append([]string{"-tenant", child.Tenant}, args...)
+	}
 	// 先试一下锁：别的进程正在跑这个任务就直接返回，不启动第二个。子进程启动后会自己再加锁。
-	unlock, err := LockCheckpoint(id)
+	unlock, err := lockCheckpointIn(child.Tenant, id)
 	if err != nil {
 		return cp, false, llm.Permanent(err)
 	}
@@ -99,7 +104,7 @@ func RunChild(ctx context.Context, id, question string, args []string, child Chi
 	case <-conn.Closed():
 	case <-time.After(2 * time.Second):
 	}
-	cp, err = LoadCheckpoint(id)
+	cp, err = LoadCheckpointIn(child.Tenant, id)
 	if err != nil {
 		// 连检查点都没写出来：多半是参数错误，再启动一次也一样。
 		return nil, false, llm.Permanent(fmt.Errorf("任务 %s 没有留下检查点：%w", id, errors.Join(runErr, err)))
@@ -123,6 +128,7 @@ type ChildIO struct {
 	Out    io.Writer              // 子进程 stderr：给人看的日志
 	Notify func(protocol.Message) // 子进程发来的通知；nil 表示不要
 	Env    []string               // 额外的环境变量，如观测台的代理地址（D16 评测在观测台里运行时）
+	Tenant string                 // 任务所属的租户；空表示平台空间
 }
 
 func firstLine(s string) string {

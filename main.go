@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +32,7 @@ import (
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/telemetry"
+	"learning-agent/internal/tenant"
 	"learning-agent/internal/tools"
 
 	"go.opentelemetry.io/otel/trace"
@@ -142,12 +142,17 @@ func run() error {
 	var netAllow stringList
 	flag.Var(&netAllow, "net-allow", "配合 -bash：沙箱可经代理访问的域名（含子域名，可重复）；由用户批准后添加")
 	flag.BoolVar(&agent.PrivateInput, "private-input", false, "D20：任务输入已含私有数据（父 agent 派出子任务时自动加上）：外发类工具执行前要用户确认")
+	flag.StringVar(&tenant.Current, "tenant", "", "多租户：本任务所属的租户；检查点、记忆、沙箱、浏览器画面与审计都放在 .data/tenants/<租户>/ 下。不给时是平台空间 .data/")
 	subagents := flag.Bool("subagents", false, "增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程）")
 	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
 	flag.Parse()
+	// 多租户：租户决定本进程读写哪棵数据目录（见 internal/tenant），要在读取任何检查点、记忆之前确定。
+	if tenant.Current != "" && !tenant.Valid(tenant.Current) {
+		return errors.New("tenant 只能是小写字母、数字和连字符，最长32")
+	}
 	if *resume != "" {
-		if flag.NFlag() != 1+boolInt(*appServer) || flag.NArg() != 0 {
-			return errors.New("resume须单独使用（可以再加 -app-server）：配置取自检查点里保存的启动参数")
+		if flag.NFlag() != 1+boolInt(*appServer)+boolInt(tenant.Current != "") || flag.NArg() != 0 {
+			return errors.New("resume须单独使用（可以再加 -app-server 与 -tenant）：配置取自检查点里保存的启动参数")
 		}
 		cp, err := agent.LoadCheckpoint(*resume)
 		if err != nil {
@@ -559,10 +564,10 @@ func run() error {
 	}
 	llm.TaskID = agent.CheckpointID
 	if browser.Enabled {
-		browser.FrameDir = filepath.Join(".data", "browser", agent.CheckpointID)
+		browser.FrameDir = tenant.Here("browser", agent.CheckpointID)
 	}
 	// 沙箱工作目录按任务ID分开：同一任务的多次调用、续跑共用；子 agent 有自己的目录。
-	sandbox.Dir = filepath.Join(".data", "sandbox", agent.CheckpointID)
+	sandbox.Dir = tenant.Here("sandbox", agent.CheckpointID)
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	turnStarted(agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)

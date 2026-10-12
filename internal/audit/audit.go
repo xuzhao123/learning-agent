@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"learning-agent/internal/tenant"
+
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -26,18 +28,21 @@ import (
 // 写入方有两个：agent 进程记录程序规则的判断、执行结果与记忆变更；观测台记录人点了什么。
 // 两边写同一个文件，用文件锁保证一次只追加一条，链不会断。参数只存哈希和长度，不存原文，审计本身不成为泄露源；
 // 要核对“批准的是不是这次执行的参数”，用检查点或观测台存档里的原文重新算哈希比对。
-const (
-	Dir  = ".data/audit"
-	path = Dir + "/audit.jsonl"
-)
+//
+// 多租户：每个租户一条自己的链（.data/tenants/<租户>/audit/audit.jsonl），平台一条（.data/audit/audit.jsonl）。
+// 记录写进哪条链由 Record.Tenant 决定：agent 进程默认是自己的租户，观测台按对话所属的租户填。
+func path(space string) string { return tenant.Path(space, "audit", "audit.jsonl") }
 
 // 由 main 设置：本进程的任务ID 与对话ID；观测台写入时在记录里自己填。
-var Task, Conversation string
+// User 是发起本次运行的登录用户（观测台经环境变量 AGENT_USER 传入），命令行运行时为空。
+var Task, Conversation, User = "", "", os.Getenv("AGENT_USER")
 
 type Record struct {
 	Seq          int64  `json:"seq"`
 	Time         string `json:"time"`
-	Actor        string `json:"actor"` // user：人；model：模型提议；program：程序规则或模块自己做的
+	Actor        string `json:"actor"`          // user：人；model：模型提议；program：程序规则或模块自己做的
+	User         string `json:"user,omitempty"` // 登录用户名：观测台里的操作才有
+	Tenant       string `json:"tenant,omitempty"`
 	Event        string `json:"event"`
 	Task         string `json:"task,omitempty"`
 	Conversation string `json:"conversation,omitempty"`
@@ -75,16 +80,25 @@ func Write(ctx context.Context, r Record) error {
 	if r.Task == "" {
 		r.Task = Task
 	}
+	if r.Tenant == "" {
+		r.Tenant = tenant.Current
+	}
+	if r.User == "" && r.Actor == "user" {
+		r.User = User
+	}
+	if r.Tenant != "" && !tenant.Valid(r.Tenant) {
+		return errors.New("审计记录的租户ID无效")
+	}
 	if r.Conversation == "" {
 		r.Conversation = Conversation
 	}
 	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() && r.Trace == "" {
 		r.Trace = sc.TraceID().String()
 	}
-	if err := os.MkdirAll(Dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path(r.Tenant)), 0o700); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, err := os.OpenFile(path(r.Tenant), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
@@ -134,7 +148,7 @@ func lastRecord(file *os.File) (Record, error) {
 	var r Record
 	if err := json.Unmarshal(lines[len(lines)-1], &r); err != nil || r.Hash == "" {
 		// 最后一行坏了（例如写到一半被截断）：不在坏记录后面继续接链，交给人检查。
-		return Record{}, errors.New(path + " 最后一条记录损坏，请先运行 go run . audit -verify 检查")
+		return Record{}, errors.New(file.Name() + " 最后一条记录损坏，请先运行 go run . audit -verify 检查")
 	}
 	return r, nil
 }
@@ -147,10 +161,10 @@ type Result struct {
 	Reason  string   `json:"reason,omitempty"`
 }
 
-// Read 读出全部记录并逐条校验；task 不为空时只返回这个任务（及其子任务）的记录，但校验始终覆盖整条链。
-func Read(task string) (Result, error) {
+// Read 读出一个空间的全部记录并逐条校验；task 不为空时只返回这个任务（及其子任务）的记录，但校验始终覆盖整条链。
+func Read(space, task string) (Result, error) {
 	var result Result
-	file, err := os.Open(path)
+	file, err := os.Open(path(space))
 	if os.IsNotExist(err) {
 		return result, nil
 	}
@@ -197,18 +211,22 @@ func Read(task string) (Result, error) {
 func Run(args []string) error {
 	flags := flag.NewFlagSet("audit", flag.ContinueOnError)
 	task := flags.String("task", "", "只列出这个任务（及其子任务）的记录；校验仍覆盖整条链")
+	space := flags.String("tenant", "", "读哪个租户的链；不给时是平台的链")
 	verify := flags.Bool("verify", false, "只校验，不列出记录")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	result, err := Read(*task)
+	if *space != "" && !tenant.Valid(*space) {
+		return errors.New("tenant 只能是小写字母、数字和连字符")
+	}
+	result, err := Read(*space, *task)
 	if err != nil {
 		return err
 	}
 	if !*verify {
 		for _, r := range result.Records {
 			line := fmt.Sprintf("#%d %s %-7s %-18s", r.Seq, r.Time[:19], r.Actor, r.Event)
-			for _, kv := range [][2]string{{"task", r.Task}, {"tool", r.Tool}, {"target", r.Target}, {"risk", r.Risk}, {"decision", r.Decision}, {"status", r.Status}, {"detail", r.Detail}} {
+			for _, kv := range [][2]string{{"user", r.User}, {"task", r.Task}, {"tool", r.Tool}, {"target", r.Target}, {"risk", r.Risk}, {"decision", r.Decision}, {"status", r.Status}, {"detail", r.Detail}} {
 				if kv[1] != "" {
 					line += " " + kv[0] + "=" + kv[1]
 				}
@@ -219,6 +237,6 @@ func Run(args []string) error {
 	if result.Broken != 0 {
 		return fmt.Errorf("审计链校验失败：第 %d 条，%s（共 %d 条）", result.Broken, result.Reason, result.Total)
 	}
-	fmt.Printf("审计链完整：共 %d 条记录，文件 %s\n", result.Total, filepath.Clean(path))
+	fmt.Printf("审计链完整：共 %d 条记录，文件 %s\n", result.Total, path(*space))
 	return nil
 }

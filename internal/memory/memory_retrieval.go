@@ -19,6 +19,7 @@ import (
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/retrieval"
 	"learning-agent/internal/telemetry"
+	"learning-agent/internal/tenant"
 
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
@@ -30,8 +31,9 @@ import (
 // 查询：向量召回 + BM25 召回 → 按记忆去重、RRF 融合 → LLM 重排 → 过滤 → 按条数和 token 预算注入。
 // memory.json 是依据；这里的背景、切块和向量都是派生数据，删掉 .data/memory-index/ 可以重建。
 
-const memoryIndexDir = ".data/memory-index"
-const memoryIndexPath = memoryIndexDir + "/contexts.json"
+func memoryIndexDir() string  { return tenant.Here("memory-index") }
+func memoryIndexPath() string { return filepath.Join(memoryIndexDir(), "contexts.json") }
+
 const memoryIndexVersion = "contextual-v2" // 改切块、拼接方式或提示词时递增，旧派生数据自动失效
 
 // 工程初始值，不是 Anthropic 的实验配置；都需要用本项目的真实记忆校准。
@@ -204,7 +206,7 @@ func (s *Store) logRetrieval(r *Retrieval) {
 		degraded = "无"
 	}
 	if r.Phase == "recall" {
-		memLog("load", "phase=recall path=%s total=%d injected=%d", memoryPath, r.Total, r.Selected)
+		memLog("load", "phase=recall path=%s total=%d injected=%d", memoryPath(), r.Total, r.Selected)
 	}
 	memLog("retrieve", "phase=%s mode=%s vector=%d bm25=%d fused=%d rerank=%s selected=%d tokens=%d/%d content=%s",
 		r.Phase, r.Mode, r.Vector, r.BM25, r.Fused, r.Rerank, r.Selected, r.Tokens, s.tokens, degraded)
@@ -429,7 +431,7 @@ func (s *Store) ensureIndex(ctx context.Context, phase string, list []Memory, pl
 			}
 		}
 		var file memoryFile
-		data, err := os.ReadFile(memoryPath)
+		data, err := os.ReadFile(memoryPath())
 		if err == nil {
 			err = json.Unmarshal(data, &file)
 		}
@@ -482,7 +484,7 @@ func (s *Store) contextualize(ctx context.Context, m Memory, c memoryChunk, plan
 
 func loadIndex() (memoryIndex, error) {
 	index := memoryIndex{Version: memoryIndexVersion, Chunks: map[string]memoryChunk{}}
-	data, err := os.ReadFile(memoryIndexPath)
+	data, err := os.ReadFile(memoryIndexPath())
 	if os.IsNotExist(err) {
 		return index, nil
 	}
@@ -499,14 +501,14 @@ func loadIndex() (memoryIndex, error) {
 }
 
 func saveIndex(index memoryIndex) error {
-	if err := os.MkdirAll(memoryIndexDir, 0o700); err != nil {
+	if err := os.MkdirAll(memoryIndexDir(), 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(index, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFile(memoryIndexPath, append(data, '\n'))
+	return writeFile(memoryIndexPath(), append(data, '\n'))
 }
 
 // 调用方持有锁。删除、过期、淘汰后，派生的块、背景和向量都清掉；向量只保留仍被某个块引用的文本。
@@ -536,7 +538,7 @@ func pruneDerived(list []Memory, blocksChanged bool) error {
 	if !changed && !blocksChanged {
 		return nil
 	}
-	paths, _ := filepath.Glob(filepath.Join(memoryIndexDir, "vectors-*.json"))
+	paths, _ := filepath.Glob(filepath.Join(memoryIndexDir(), "vectors-*.json"))
 	for _, path := range paths {
 		var cache vectorCache
 		data, err := os.ReadFile(path)
@@ -578,7 +580,7 @@ type chunkScore struct {
 }
 
 func vectorPath(emb *retrieval.Embedder) string {
-	return filepath.Join(memoryIndexDir, "vectors-"+hashText(memoryIndexVersion, emb.Key)[:12]+".json")
+	return filepath.Join(memoryIndexDir(), "vectors-"+hashText(memoryIndexVersion, emb.Key)[:12]+".json")
 }
 
 func (s *Store) vectorSearch(ctx context.Context, emb *retrieval.Embedder, query string, chunks []memoryChunk, r *Retrieval) []chunkScore {
@@ -649,7 +651,7 @@ func (s *Store) vectorSearch(ctx context.Context, emb *retrieval.Embedder, query
 					current.Vectors[key] = vector
 				}
 			}
-			if err := os.MkdirAll(memoryIndexDir, 0o700); err != nil {
+			if err := os.MkdirAll(memoryIndexDir(), 0o700); err != nil {
 				return err
 			}
 			data, err := json.Marshal(current)

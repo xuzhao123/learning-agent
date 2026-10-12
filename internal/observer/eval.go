@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -227,11 +225,12 @@ func (s *server) evalAction(w http.ResponseWriter, req *http.Request) {
 func (s *server) evalAttach(evalID string) eval.Attach {
 	return func(ctx context.Context, t *eval.Trial, c eval.Case) (context.Context, agent.ChildIO, string, func(bool)) {
 		id := uuid.NewString()
-		file, err := os.OpenFile(filepath.Join(s.runsDir, id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		// 评测与归因只在平台空间运行（路由只给平台账号）；试次的 agent 同样凭令牌访问模型代理。
+		file, err := s.createRunFile("", id)
 		if err != nil {
 			return ctx, agent.ChildIO{Out: discard{}}, "", func(bool) {}
 		}
-		r := &run{ID: id, Query: c.Question, Eval: evalID, changed: make(chan struct{}), file: file}
+		r := &run{ID: id, Query: c.Question, Eval: evalID, changed: make(chan struct{}), file: file, token: newToken()}
 		s.mu.Lock()
 		s.runs = append(s.runs, r)
 		s.mu.Unlock()
@@ -249,7 +248,7 @@ func (s *server) evalAttach(evalID string) eval.Attach {
 		r.add(event{Kind: "start", Text: c.Question, Eval: label, Subagents: slices.Contains(args, "-subagents"), Browser: slices.Contains(args, "-browser"),
 			Bash: slices.Contains(args, "-bash"), Provider: provider, Embedding: "ark", Trace: span.SpanContext().TraceID().String(), Protocol: true})
 		out := &lines{r: r}
-		child := agent.ChildIO{Out: out, Notify: r.handle, Env: []string{"LLM_API_URL=http://" + s.addr + "/llm/" + id, "AGENT_CONVERSATION_ID=" + id}}
+		child := agent.ChildIO{Out: out, Notify: r.handle, Env: []string{"LLM_API_URL=http://" + s.addr + "/llm/" + id, "AGENT_CONVERSATION_ID=" + id, "AGENT_PROXY_TOKEN=" + r.token}}
 		done := func(ok bool) {
 			out.flush()
 			text := "exit 0"
@@ -305,9 +304,8 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // attributeRun 对一段对话的最后一轮自动归因（见 eval.Attribute）：诊断、评分、回放验证都在后台进行，
 // 返回归因记录的ID，页面打开它的详情即可看到进度。回放的每次尝试同样是一条可打开的对话。
 func (s *server) attributeRun(w http.ResponseWriter, req *http.Request) {
-	r := s.find(req.PathValue("id"))
+	r := s.runOf(w, req)
 	if r == nil {
-		http.Error(w, "找不到这条对话", http.StatusNotFound)
 		return
 	}
 	r.mu.Lock()

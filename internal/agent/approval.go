@@ -17,6 +17,7 @@ import (
 	"learning-agent/internal/mcp"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/sandbox"
+	"learning-agent/internal/tenant"
 )
 
 // D20：高风险操作的人工确认。执行器在执行前按程序规则判断风险，命中就经协议向界面上的人发 tool/requestApproval，
@@ -115,7 +116,7 @@ func denied(call llm.ToolCall, kind, decision string) llm.Observation {
 // 剩下的窗口是“工具已经做完、记录还没写下”的一瞬间：这时仍按结果未知处理。
 func journalPath(callID string) string {
 	sum := sha256.Sum256([]byte(callID)) // 调用ID来自模型供应商，不直接拼进路径
-	return filepath.Join(checkpointDir, CheckpointID+".calls", hex.EncodeToString(sum[:8])+".json")
+	return filepath.Join(checkpointDir(tenant.Current), CheckpointID+".calls", hex.EncodeToString(sum[:8])+".json")
 }
 
 func writeJournal(o llm.Observation) {

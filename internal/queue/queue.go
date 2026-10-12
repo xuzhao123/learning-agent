@@ -21,6 +21,7 @@ import (
 	"learning-agent/internal/agent"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/telemetry"
+	"learning-agent/internal/tenant"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -35,6 +36,7 @@ type Task struct {
 	ID       string   `json:"id"`       // 幂等键；不给时用问题和参数的哈希
 	Question string   `json:"question"` // 交给 agent 的问题
 	Args     []string `json:"args"`     // 这个任务额外的 agent 参数，如 ["-lab-tools"]
+	Tenant   string   `json:"tenant"`   // 多租户：任务所属的租户；检查点、记忆、日志都在它的目录下。不给时是平台空间
 }
 
 type Outcome struct {
@@ -49,12 +51,13 @@ func Run(arguments []string) error {
 	flags := flag.NewFlagSet("queue", flag.ContinueOnError)
 	workers := flags.Int("workers", 3, "同时运行的任务数，1到8")
 	attempts := flags.Int("attempts", 3, "每个任务最多启动几次子进程（含续跑），1到5")
+	perTenant := flags.Int("per-tenant", 1, "多租户：同一个租户同时运行的任务数上限，不让一个租户占满全部 worker")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	rest := flags.Args()
-	if len(rest) == 0 || *workers < 1 || *workers > 8 || *attempts < 1 || *attempts > 5 {
-		return errors.New("用法：go run . queue [-workers 3] [-attempts 3] 任务文件.jsonl [-- 公共agent参数]")
+	if len(rest) == 0 || *workers < 1 || *workers > 8 || *attempts < 1 || *attempts > 5 || *perTenant < 1 {
+		return errors.New("用法：go run . queue [-workers 3] [-attempts 3] [-per-tenant 1] 任务文件.jsonl [-- 公共agent参数]")
 	}
 	file, extra := rest[0], rest[1:]
 	if len(extra) > 0 && extra[0] == "--" {
@@ -70,15 +73,28 @@ func Run(arguments []string) error {
 	ctx, span := telemetry.Begin(ctx, "invoke_workflow queue", trace.SpanKindInternal, semconv.GenAIOperationNameInvokeWorkflow,
 		attribute.String("gen_ai.workflow.name", "queue"), attribute.Int("queue.tasks", len(tasks)), attribute.Int("queue.workers", *workers))
 	defer span.End()
-	fmt.Printf("Queue: tasks=%d workers=%d attempts=%d common_args=%q logs=%s\n", len(tasks), *workers, *attempts, extra, filepath.Join(".data", "checkpoints", "<id>.log"))
+	fmt.Printf("Queue: tasks=%d workers=%d attempts=%d common_args=%q logs=%s\n", len(tasks), *workers, *attempts, extra, filepath.Join(".data", "[tenants/<租户>/]checkpoints", "<id>.log"))
 	started := time.Now()
 	results := make([]Outcome, len(tasks))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	// 有界并发：worker 数就是同时在跑的子进程数（也就是同时在请求模型的任务数）的上限。
+	// 多租户：每个租户再有一个信号量，一个租户的任务再多，也只能同时占 per-tenant 个 worker；平台任务不受这一层限制。
+	slots := map[string]chan struct{}{}
+	for _, t := range tasks {
+		if t.Tenant != "" && slots[t.Tenant] == nil {
+			slots[t.Tenant] = make(chan struct{}, *perTenant)
+		}
+	}
 	for range *workers {
 		wg.Go(func() {
 			for i := range jobs {
+				if slot := slots[tasks[i].Tenant]; slot != nil {
+					slot <- struct{}{}
+					results[i] = runTask(ctx, tasks[i], extra, *attempts)
+					<-slot
+					continue
+				}
 				results[i] = runTask(ctx, tasks[i], extra, *attempts)
 			}
 		})
@@ -128,6 +144,9 @@ func load(path string) ([]Task, error) {
 		if !agent.ValidID(t.ID) {
 			return nil, fmt.Errorf("%s 第%d行：任务ID只能包含字母、数字和 ._-", path, line)
 		}
+		if t.Tenant != "" && !tenant.Valid(t.Tenant) {
+			return nil, fmt.Errorf("%s 第%d行：tenant 只能是小写字母、数字和连字符", path, line)
+		}
 		if first, ok := seen[t.ID]; ok {
 			fmt.Printf("Queue duplicate: id=%s line=%d 与第%d行重复，只入队一次\n", t.ID, line, first)
 			continue
@@ -140,13 +159,13 @@ func load(path string) ([]Task, error) {
 
 func runTask(ctx context.Context, t Task, extra []string, attempts int) Outcome {
 	// 10 个任务的过程输出混在终端里没法读：每个任务写自己的日志，终端只打印状态变化。
-	_ = os.MkdirAll(filepath.Join(".data", "checkpoints"), 0o700)
-	log, err := os.OpenFile(filepath.Join(".data", "checkpoints", t.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	_ = os.MkdirAll(tenant.Path(t.Tenant, "checkpoints"), 0o700)
+	log, err := os.OpenFile(tenant.Path(t.Tenant, "checkpoints", t.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return Outcome{Status: "failed", Detail: err.Error()}
 	}
 	defer log.Close()
-	return RunTask(ctx, t, extra, attempts, agent.ChildIO{Out: log})
+	return RunTask(ctx, t, extra, attempts, agent.ChildIO{Out: log, Tenant: t.Tenant})
 }
 
 // RunTask 执行一个任务：暂时性失败退避后续跑，最多启动 attempts 次子进程。队列与 D16 评测共用。

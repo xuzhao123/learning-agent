@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"learning-agent/internal/llm"
+	"learning-agent/internal/tenant"
 )
 
 // D9 检查点：一次运行的全部可恢复状态。每到一个边界就整份原子写回 .data/checkpoints/<id>.json：
@@ -57,7 +58,8 @@ var (
 	Resume         *Checkpoint
 )
 
-const checkpointDir = ".data/checkpoints"
+// 检查点在本进程所属租户的空间里（见 internal/tenant）；RunChild 替别的空间启动任务时用 …In 版本。
+func checkpointDir(space string) string { return tenant.Path(space, "checkpoints") }
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
@@ -68,19 +70,26 @@ func ValidID(id string) bool { return validID.MatchString(id) && id != "." && id
 // 子任务ID在它后面加 -sub- 和 task 哈希（见 subagent.go），仍是确定性的，续跑时能找回同一个子任务。
 func NewCheckpointID() string { return uuid.NewString() }
 
-func CheckpointPath(id string) string { return filepath.Join(checkpointDir, id+".json") }
+func CheckpointPath(id string) string { return checkpointPathIn(tenant.Current, id) }
 
-func LoadCheckpoint(id string) (*Checkpoint, error) {
+func checkpointPathIn(space, id string) string {
+	return filepath.Join(checkpointDir(space), id+".json")
+}
+
+func LoadCheckpoint(id string) (*Checkpoint, error) { return LoadCheckpointIn(tenant.Current, id) }
+
+// LoadCheckpointIn 读某个空间里的检查点。别的租户的任务ID在这里读不到：路径不同。
+func LoadCheckpointIn(space, id string) (*Checkpoint, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("任务ID %q 只能包含字母、数字和 ._-，最长128", id)
 	}
-	data, err := os.ReadFile(CheckpointPath(id))
+	data, err := os.ReadFile(checkpointPathIn(space, id))
 	if err != nil {
 		return nil, err
 	}
 	cp := &Checkpoint{}
 	if err := json.Unmarshal(data, cp); err != nil {
-		return nil, fmt.Errorf("%s 不是有效的检查点：%w", CheckpointPath(id), err)
+		return nil, fmt.Errorf("%s 不是有效的检查点：%w", checkpointPathIn(space, id), err)
 	}
 	return cp, nil
 }
@@ -93,7 +102,7 @@ func (cp *Checkpoint) write() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+	if err := os.MkdirAll(checkpointDir(tenant.Current), 0o700); err != nil {
 		return err
 	}
 	path := CheckpointPath(cp.ID)
@@ -108,10 +117,14 @@ var ErrBusy = errors.New("这个任务正在另一个进程中运行")
 // 同一个任务同一时刻只允许一个进程执行：非阻塞 flock 一直持有到进程退出。
 // 进程无论怎么退出（包括 kill -9），内核都会释放锁，所以“状态是 running 但锁空着”就说明上个进程已经死了。
 func LockCheckpoint(id string) (unlock func(), err error) {
-	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+	return lockCheckpointIn(tenant.Current, id)
+}
+
+func lockCheckpointIn(space, id string) (unlock func(), err error) {
+	if err := os.MkdirAll(checkpointDir(space), 0o700); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(filepath.Join(checkpointDir, id+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(filepath.Join(checkpointDir(space), id+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

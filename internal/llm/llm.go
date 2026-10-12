@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,10 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		}
 		// 模型路由：告诉代理这次请求本该发往哪家供应商；代理按它转发，观测台不必知道路由表。
 		request.Header.Set("X-Agent-Upstream", config.Upstream)
+		// 多租户：观测台启动 agent 时发的令牌，代理据此确认请求来自这条对话的 agent。
+		if token := os.Getenv("AGENT_PROXY_TOKEN"); token != "" {
+			request.Header.Set("X-Agent-Token", token)
+		}
 		// D13：W3C traceparent 头写着这次 chat span 的ID，观测台把截获的原始请求和 span 对上。
 		// 只发给本机代理，不发给供应商：第三方 API 用不上它（Claude Code 默认也只对自家 API 发送）。
 		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(request.Header))

@@ -16,11 +16,13 @@ cp .env.example .env
 go run . -question '计算 1231+23123'
 ```
 
-不带 `-question` 时从终端交互输入。启动观测台：
+不带 `-question` 时从终端交互输入。启动观测台前先添加登录账号（密码从标准输入读）：
 
 ```sh
+go run . observe -add-user admin                  # 平台账号：看到 .data/ 下原有的数据
+go run . observe -add-user alice -tenant acme     # 租户账号：只看到 .data/tenants/acme/ 下的数据
 go run . observe
-# 打开 http://127.0.0.1:8090
+# 打开 http://127.0.0.1:8090 登录
 ```
 
 观测台支持新对话、续聊、停止，以及每个模型 Step 的完整输入输出。开发时用 `go run . observe -dev`，每次对话从当前源码启动 agent；默认使用当前程序，修改 agent 后需要重启观测台。使用方法见 [观测台说明](docs/observer/observer-notes.md)。
@@ -44,6 +46,7 @@ go build -o bin/learning-agent .
 | 本地向量模型 | 不需要 embedding API 密钥；首次使用会下载模型 | `-embedding local`；聊天请求仍使用选定的线上模型 |
 | 浏览器 | 本机安装 Chrome/Chromium；`CHROME_PATH` 可指定可执行文件 | `-browser`；仅环境变量读取浏览器配置 |
 | Bash 沙箱 | Linux、bubblewrap；cgroup 资源限制依赖 systemd 用户会话 | `-bash`；缺少资源限制时的行为见 [Day 12 实践](docs/day-12/day-12-lab.md) |
+| 观测台登录 | 账号在 `.data/users.json`，用 `go run . observe -add-user` 添加；平台账号与租户账号的区别见 [Day 20 实践](docs/day-20/day-20-lab.md#6-多租户与登录补充) | 没有账号时观测台拒绝启动 |
 | 调用链追踪 | 无需配置，span 写入 `.data/traces/`；`OTEL_EXPORTER_OTLP_ENDPOINT` 另发给 Jaeger 等 OTLP 平台；`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` 采集提示词与工具内容 | 默认只记元数据；接入步骤见 [Day 13 实践](docs/day-13/day-13-lab.md#4-接入外部平台) |
 
 默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器和 Bash 按需开启。
@@ -107,6 +110,7 @@ go build -o bin/learning-agent .
 | 观测与实验 | [observer](internal/observer/)、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
 | 评测与归因 | [eval](internal/eval/)、[评测集](eval/cases.jsonl)、[观测台评测页](internal/observer/eval.go) | 题目与打分器、多次尝试与 pass^k、评审模型、消融与基线对比、归因卡片与回放验证 |
 | 审计 | [audit](internal/audit/) | 只追加的审计记录、哈希链与校验；agent 与观测台共同写入 |
+| 多租户与登录 | [tenant](internal/tenant/)、[观测台登录](internal/observer/auth.go) | 按租户决定数据路径；账号、密码哈希、会话、租户策略与访问检查 |
 
 一个 agent 进程运行一个任务，功能开关由入口设置。观测台、任务队列和子 agent 用独立子进程执行任务；检索等工具直接在该 agent 进程内调用。具体运行边界见 [PROJECT.md](PROJECT.md)。
 
@@ -170,6 +174,7 @@ go build -o bin/learning-agent .
 | `-task-id` | 随机 UUID | Day 9：检查点ID（字母、数字和 `._-`）；已存在时拒绝启动，提示改用 `-resume` |
 | `-resume` | 空 | Day 9：从该ID的检查点续跑，配置取自检查点；须单独使用；已完成的直接返回存档答案 |
 | `-subagents` | false | 增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程），每次运行最多4个 |
+| `-tenant` | 空 | 多租户：本任务所属的租户，数据都在 `.data/tenants/<租户>/` 下；观测台和带 `tenant` 的队列任务自动加上；可与 `-resume` 一起用 |
 | `-private-input` | false | D20：任务输入已含私有数据，外发类工具执行前要确认；父 agent 派出子任务时自动加上，一般不手动使用 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
 | `-provider` | ark | 模型路由：`ark`（豆包，方舟）或 `deepseek`；子 agent 继承，续跑沿用 |
@@ -180,4 +185,4 @@ go build -o bin/learning-agent .
 
 </details>
 
-观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“D16 评测 · D17 归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“D21 审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。
+观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-tenant 租户] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“D16 评测 · D17 归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-tenant 租户] [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“D21 审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。

@@ -16,6 +16,7 @@ import (
 
 	"learning-agent/internal/llm"
 	"learning-agent/internal/protocol"
+	"learning-agent/internal/tenant"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -93,7 +94,7 @@ func spawnAgent(ctx context.Context, call llm.ToolCall) (any, error) {
 		// D20：task 是父 agent 写的，可能带着它读到的私有数据；子 agent 从一开始就按含私有数据处理，外发同样要确认。
 		childArgs = append(childArgs, "-private-input")
 	}
-	cp, replayed, err := RunChild(ctx, id, task, childArgs, ChildIO{Out: out, Notify: relay})
+	cp, replayed, err := RunChild(ctx, id, task, childArgs, ChildIO{Out: out, Notify: relay, Tenant: tenant.Current})
 	out.flush()
 	if err != nil {
 		fmt.Printf("Subagent stop [%s]: %s\n", call.ID, err)

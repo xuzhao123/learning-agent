@@ -96,6 +96,76 @@ go run . -resume j1
 - **白名单内的外发**：bash 仍可向用户批准过的域名发送数据（Day 12 的白名单不区分路径与内容），这里没有额外确认。
 - **MCP 注解**：不可信 server 可以不声明 `destructiveHint`，破坏性工具因此不需确认；它只在含私有数据后受外发检查约束。
 - **审计**：D21 起确认请求与决定写进独立的审计日志（哈希链），见 [Day 21 实践](../day-21/day-21-lab.md)。
-- **多租户**：本项目是单用户本地运行，没有租户身份、按租户的数据隔离和配额；只在笔记中学习概念。
+- **多租户**：已补做，见下面第 6 节；那里另列了多租户部分没有覆盖的范围。
 - **结果日志窗口**：工具已生效、日志还没写下时被 kill，仍是结果未知；续跑重新执行可重复工具时不再询问。
 - **repeatable 名单**：内置工具是否可重复仍按工具名写死，误标仍会静默重做；结果日志降低了它的触发机会。
+
+## 6. 多租户与登录（补充）
+
+最初只在笔记里讲了多租户概念，之后按用户要求补做：观测台加真正的登录，数据按租户隔离，功能与并发按租户限制。
+
+```text
+浏览器 ──登录（PBKDF2 校验）──▶ 观测台：会话 Cookie（HttpOnly、SameSite=Strict）
+   │ 每个请求：protect 查会话 → 改状态的请求再查同源 → runOf 核对对话属于本租户（否则 404）
+   ▼
+观测台启动 agent：-tenant <租户> + AGENT_USER（进审计）+ AGENT_PROXY_TOKEN（模型代理只认这个进程）
+   ▼
+agent 所有读写落在 .data/tenants/<租户>/：checkpoints · memory.json · sandbox · browser · runs · audit
+   └ 子 agent、续跑、续聊沿用同一个租户；别的租户的任务ID、子任务、记忆编号在这里找不到
+```
+
+| 改动 | 代码 | 作用 |
+| --- | --- | --- |
+| 数据空间 | [tenant.go](../../internal/tenant/tenant.go) | `tenant.Path(租户, …)`：平台是 `.data/…`，租户是 `.data/tenants/<租户>/…`；agent 用 `-tenant` 确定本进程的空间 |
+| agent 各模块 | [checkpoint.go](../../internal/agent/checkpoint.go)、[child.go](../../internal/agent/child.go)、[memory.go](../../internal/memory/memory.go)、[main.go](../../main.go) | 检查点、结果日志、记忆与索引、沙箱和浏览器目录都按空间取路径；`RunChild` 按 `ChildIO.Tenant` 读写并给子进程带上 `-tenant`；`-resume` 可与 `-tenant` 一起用 |
+| 审计 | [audit.go](../../internal/audit/audit.go) | 每个空间一条链；记录增加 `user`、`tenant`；`go run . audit -tenant 租户` |
+| 登录 | [auth.go](../../internal/observer/auth.go) | 账号在 `.data/users.json`（PBKDF2-SHA256 60 万次、每账号随机盐）；会话令牌只存哈希、12 小时过期；连续 5 次失败锁定 1 分钟；未知用户名也算一遍哈希；登录、失败与退出写审计 |
+| 观测台 | [server.go](../../internal/observer/server.go)、[eval.go](../../internal/observer/eval.go)、[index.html](../../internal/observer/index.html) | 对话带租户；列表、事件流、续聊、停止、确认、联网审批、画面、调用链都只对本租户可见；评测、归因、Skills/MCP 修改与全局指标只给平台账号；页面显示账号、可退出，隐藏没开通的功能 |
+| 租户策略与配额 | [auth.go](../../internal/observer/auth.go)、[queue.go](../../internal/queue/queue.go) | `tenants` 里的 `features` 与 `max_running`（默认全部功能、2 个）；队列任务可带 `tenant`，`-per-tenant` 限制每个租户同时占用的 worker |
+| 模型代理 | [llm.go](../../internal/llm/llm.go)、[server.go](../../internal/observer/server.go) | 每次启动 agent 生成令牌，经 `X-Agent-Token` 核对；没有令牌的本机进程不能往别人的对话里写请求记录 |
+
+### 账号与启动
+
+```bash
+go run . observe -add-user admin                                  # 平台账号：看到原有的 .data/ 数据，可用评测与归因
+go run . observe -add-user alice -tenant acme -max-running 1      # 租户账号，并设置租户策略
+go run . observe -add-user bob -tenant globex -features memory    # 只开通长期记忆
+go run . observe                                                   # 没有账号时拒绝启动
+```
+
+密码从标准输入读（终端里不回显，也可以用管道传入），不出现在命令行和 shell 历史里。改账号后重启观测台生效。
+
+队列任务加 `"tenant": "acme"` 即在该租户空间里执行：
+
+```bash
+go run . queue -workers 3 -per-tenant 1 tasks.jsonl
+go run . metrics -tenant acme
+```
+
+### 验证记录
+
+2026-10-11 使用 DeepSeek，三个测试账号（平台 admin、acme 的 alice、globex 的 bob），验证后已删除测试账号与租户数据。
+
+| 场景 | 结果 |
+| --- | --- |
+| 登录 | 未登录访问首页 303 跳登录页、接口 401；错误密码 401；Cookie 带 HttpOnly；跨站 Origin 的 POST 403；账号文件里只有盐和 PBKDF2 哈希；密码少于 8 位拒绝保存 |
+| 记忆隔离 | alice 记住“内部项目代号是蓝鲸”，写进 `tenants/acme/memory.json`；bob 开记忆问同一问题，召回 0 条，模型回答“不知道” |
+| 越权访问 | bob 访问 alice 的对话：列表里没有；事件流、续聊、确认、停止、调用链全部 404；按对话看指标 403；alice 自己访问 200。平台 admin 的列表里也没有租户对话，读事件流同样 404 |
+| 平台功能 | bob 访问评测、修改 Skills、全局指标 403；admin 访问评测 200 |
+| 功能策略与配额 | bob 发起带 bash 的对话 403（未开通）；alice 运行中再发起一个，429（上限 1） |
+| 模型代理 | 不带令牌或令牌错误调用 `/llm/<对话>`，403 |
+| 命令行跨租户 | `-tenant globex -resume <acme 的任务>`：globex 目录下找不到检查点；`-tenant acme` 才取回存档 |
+| 租户内的确认与子 agent | alice 的对话里子 agent 外发请求确认；bob 抢答 404，alice 允许后执行；子任务的检查点、浏览器画面、沙箱目录都在 acme 下；acme 的审计链记录 `user=alice`，globex 的链里只有 bob 的记录 |
+| 队列 | acme 两个任务、globex 一个，`-per-tenant 1`：acme 第二个在第一个结束后才开始，globex 与之并行 |
+| 页面 | bob 登录后侧栏显示“bob · 租户 globex”和退出按钮；评测、实验入口与未开通的开关都不显示 |
+
+### 多租户部分没有覆盖的范围
+
+- **单机、单进程观测台**：会话存在内存里，观测台重启要重新登录；没有多实例共享会话。
+- **没有 HTTPS**：只监听本机，Cookie 没有 `Secure`；部署到网络上必须先加 TLS。
+- **账号管理**：只有命令行添加与重设密码，没有删除、改名、自助改密码，也没有多因素认证；角色只有“平台/租户”两种。
+- **共享的部分**：模型密钥与配额、调用链文件、Skills/MCP 配置、知识库索引由所有租户共用；平台账号的全局指标会汇总所有租户的 trace（不含内容）。
+- **文件系统层面**：隔离靠路径，所有租户的数据仍属同一个系统用户，能登录服务器的人可以直接读；没有按租户加密或分系统用户。
+- **令牌传递**：第三方 stdio MCP server 继承 agent 的环境变量，会拿到模型代理令牌（沙箱里的 bash 不会，bwrap 清空了环境）。
+- **资源配额**：只限制同时运行的对话数，没有按租户限制 token 用量、磁盘与模型费用。
+

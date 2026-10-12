@@ -27,6 +27,8 @@ button { cursor: pointer; }
 /* 左侧：对话列表 */
 #sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--side); border-right: 1px solid var(--line); }
 .brand { padding: 14px 16px 8px; font-weight: 650; letter-spacing: .01em; }
+.whoami { display: flex; align-items: center; gap: 8px; padding: 0 16px 10px; color: var(--muted); font-size: 12px; }
+.whoami button { margin-left: auto; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; font-size: 12px; }
 .navbtn { display: flex; align-items: center; gap: 8px; margin: 2px 8px; padding: 7px 10px; border: 0; border-radius: 8px; background: none; text-align: left; }
 .navbtn:hover { background: var(--soft); }
 .navbtn .ico { width: 18px; text-align: center; color: var(--muted); }
@@ -445,6 +447,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 <div id="app">
   <aside id="sidebar">
     <div class="brand">Learning Agent</div>
+    <div class="whoami"><span id="whoami"></span><button id="logout" type="button">退出</button></div>
     <button id="new-chat" class="navbtn"><span class="ico">＋</span>新对话</button>
     <button id="lab" class="navbtn"><span class="ico">⚗</span>Day 3 上下文实验</button>
     <button id="rag-lab" class="navbtn"><span class="ico">⌕</span>Day 4 检索对比</button>
@@ -2855,6 +2858,34 @@ $("use-web").onchange = () => { save("useWeb", $("use-web").checked ? "1" : "0")
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };
 $("query").oninput = () => { autosize(); syncComposer(); };
 window.addEventListener("popstate", restoreRunURL);
+// 多租户：会话过期或被注销时，接口返回 401，回到登录页。
+const rawFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await rawFetch(...args);
+  if (res.status === 401) location.href = "/login";
+  return res;
+};
+// 当前账号：显示名字与租户；租户账号隐藏没开通的功能和平台专用入口（评测、归因）。服务端同样会拒绝，这里只是不让人点到。
+const FEATURE_INPUTS = { rag: ["rag"], memory: ["mem", "mem-ttl"], skills: ["use-skills", "skills-hub"], mcp: ["use-mcp", "mcp-hub"], subagents: ["use-sub"], browser: ["use-web"], bash: ["use-bash"], labs: ["lab", "rag-lab", "security-lab"] };
+async function loadMe() {
+  const res = await fetch("/me");
+  if (!res.ok) return;
+  ui.me = await res.json();
+  $("whoami").textContent = ui.me.platform ? `${ui.me.name} · 平台` : `${ui.me.name} · 租户 ${ui.me.tenant}`;
+  for (const [feature, ids] of Object.entries(FEATURE_INPUTS)) {
+    if (ui.me.features.includes(feature)) continue;
+    for (const id of ids) {
+      const node = $(id);
+      if (!node) continue;
+      if (node.type === "checkbox") node.checked = false;
+      (node.closest("label") || node).hidden = true;
+    }
+  }
+  if (!ui.me.platform) for (const id of ["evals", "attribute"]) $(id).hidden = true;
+  syncComposer();
+}
+$("logout").onclick = async () => { await fetch("/logout", { method: "POST" }); location.href = "/login"; };
+loadMe();
 restoreRunURL();
 loadEnabled();
 </script>

@@ -21,6 +21,7 @@ import (
 
 	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
+	"learning-agent/internal/tenant"
 )
 
 // Day 5 长期记忆：跨进程保存在 .data/memory.json。
@@ -50,7 +51,9 @@ type memoryFile struct {
 	Memories []Memory `json:"memories"`
 }
 
-const memoryPath = ".data/memory.json"
+// 记忆文件按租户分开（见 internal/tenant）：同一台机器上，一个租户召回不到另一个租户的记忆。
+func memoryPath() string { return tenant.Here("memory.json") }
+
 const recallLimit = 5
 const failureTTL = 7 * 24 * time.Hour
 const sourceLimit = 2000 // 来源摘录上限（字）；背景生成只需定位主体、时间和话题
@@ -109,10 +112,10 @@ const Rules = "\n已启用跨会话长期记忆。用户明确要你记住某件
 func (s *Store) locked(fn func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(memoryPath), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(memoryPath()), 0o700); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(memoryPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(memoryPath()+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
@@ -133,13 +136,13 @@ func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, l
 	saved := false
 	err := s.locked(func() error {
 		var file memoryFile
-		data, err := os.ReadFile(memoryPath)
+		data, err := os.ReadFile(memoryPath())
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		// 文件损坏时停止，而不是用空列表覆盖全部记忆。
 		if len(data) > 0 && json.Unmarshal(data, &file) != nil {
-			return errors.New(memoryPath + " 不是有效JSON，请手动检查后再运行")
+			return errors.New(memoryPath() + " 不是有效JSON，请手动检查后再运行")
 		}
 		now := time.Now()
 		file.Memories = slices.DeleteFunc(file.Memories, func(m Memory) bool {
@@ -171,7 +174,7 @@ func (s *Store) update(limit int, change func(file *memoryFile, now time.Time, l
 		}
 		out = append(out, '\n')
 		if !bytes.Equal(out, data) { // 只读快照不改写文件
-			if err := writeFile(memoryPath, out); err != nil {
+			if err := writeFile(memoryPath(), out); err != nil {
 				return err
 			}
 		}

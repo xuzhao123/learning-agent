@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ import (
 	"learning-agent/internal/audit"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
+	"learning-agent/internal/tenant"
 	"learning-agent/internal/tools"
 
 	"github.com/google/uuid"
@@ -73,6 +75,7 @@ type event struct {
 
 type run struct {
 	ID, Query string
+	Tenant    string // 对话所属的租户；空是平台。只有同一租户的账号能看到和操作它
 	Eval      string // D16：评测发起的试次，见 event.Eval
 	Done      bool
 
@@ -84,6 +87,7 @@ type run struct {
 	proc     *os.Process // 正在运行的 agent 进程；强制结束时向它的进程组发 SIGKILL
 	stopping bool        // 已请求过一次停止；再按一次强制结束
 	rootTask string      // 本次启动的父 agent 任务ID：启动后第一个带任务ID的请求一定来自父 agent
+	token    string      // 本次启动的 agent 进程访问模型代理用的令牌（AGENT_PROXY_TOKEN），每次启动重新生成
 	// B0：与正在运行的 agent 之间的协议连接，以及它在等待答复的联网审批（域名 → 请求ID）。
 	conn      *protocol.Conn
 	approvals map[string][]int64
@@ -96,12 +100,13 @@ type toolWait struct {
 }
 
 type server struct {
-	agentDir, addr    string
-	mu                sync.Mutex
-	runs              []*run
-	runsDir, agentBin string     // 存档目录 .data/runs；agentBin 为空表示 -dev（go run .）
-	hubMu             sync.Mutex // 保护 .data/hub.json 的读改写
-	evals             evals      // D16/D17 评测记录（见 eval.go）
+	agentDir, addr string
+	mu             sync.Mutex
+	runs           []*run
+	agentBin       string     // 为空表示 -dev（go run .）
+	auth           *auth      // 账号与会话（见 auth.go）
+	hubMu          sync.Mutex // 保护 .data/hub.json 的读改写
+	evals          evals      // D16/D17 评测记录（见 eval.go）
 }
 
 // Run 启动观测台：go run . observe [-addr …] [-dev]，须在项目根目录运行。
@@ -111,11 +116,18 @@ func Run(args []string, mcpHandler http.Handler) error {
 	flags := flag.NewFlagSet("observe", flag.ContinueOnError)
 	addr := flags.String("addr", "127.0.0.1:8090", "观测页面地址")
 	dev := flags.Bool("dev", false, "每次对话用 go run . 启动 agent：改完 agent 代码不必重启观测台，代价是每次多一次编译")
+	addUserName := flags.String("add-user", "", "添加或重设一个登录账号（密码从标准输入读）后退出")
+	userTenant := flags.String("tenant", "", "配合 -add-user：账号所属的租户；不给时是平台账号")
+	features := flags.String("features", "", "配合 -add-user -tenant：这个租户可用的功能，逗号分隔（"+strings.Join(allFeatures, ",")+"）；不给时不改")
+	maxRunning := flags.Int("max-running", 0, "配合 -add-user -tenant：这个租户同时运行的对话上限；0 表示不改（默认 2）")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("observe 只接受 -addr 与 -dev")
+		return errors.New("observe 只接受 -addr、-dev，或 -add-user [-tenant -features -max-running]")
+	}
+	if *addUserName != "" {
+		return addUser(*addUserName, *userTenant, *features, *maxRunning)
 	}
 	// agent 读 .env、skills/、docs/、.data/ 都相对项目根目录，所以观测台以当前目录为准。
 	dir, err := os.Getwd()
@@ -131,11 +143,11 @@ func Run(args []string, mcpHandler http.Handler) error {
 			return err
 		}
 	}
-	runsDir := filepath.Join(dir, ".data", "runs")
-	if err := os.MkdirAll(runsDir, 0o700); err != nil {
+	authState, err := loadAuth()
+	if err != nil {
 		return err
 	}
-	s := &server{agentDir: dir, addr: *addr, runsDir: runsDir, agentBin: agentBin, evals: evals{jobs: map[string]*evalJob{}}}
+	s := &server{agentDir: dir, addr: *addr, agentBin: agentBin, auth: authState, evals: evals{jobs: map[string]*evalJob{}}}
 	s.loadRuns()
 	mux := http.NewServeMux()
 	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
@@ -143,36 +155,41 @@ func Run(args []string, mcpHandler http.Handler) error {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(page)
 	})
+	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /login", s.loginPage)
+	mux.HandleFunc("POST /logout", s.logoutUser)
+	mux.HandleFunc("GET /me", s.me)
 	mux.HandleFunc("GET /runs", s.listRuns)
 	mux.HandleFunc("POST /runs", s.startRun)
 	mux.HandleFunc("POST /runs/{id}/messages", s.continueRun)
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
-	mux.Handle("POST /runs/{id}/network", sameOrigin(http.HandlerFunc(s.decideNetwork)))
-	mux.Handle("POST /runs/{id}/approval", sameOrigin(http.HandlerFunc(s.decideTool)))
+	mux.HandleFunc("POST /runs/{id}/network", s.decideNetwork)
+	mux.HandleFunc("POST /runs/{id}/approval", s.decideTool)
 	mux.HandleFunc("GET /audit", s.listAudit)
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
 	mux.HandleFunc("GET /browser/{task}/{call}", s.browserFrame)
 	mux.HandleFunc("GET /traces/{id}", s.traceSpans)
 	mux.HandleFunc("GET /trace-metrics", s.traceMetrics)
-	mux.HandleFunc("GET /evals", s.listEvals)
-	mux.HandleFunc("GET /evals/cases", s.evalCases)
-	mux.HandleFunc("GET /evals/{id}", s.getEval)
-	mux.Handle("POST /evals", sameOrigin(http.HandlerFunc(s.startEval)))
-	mux.Handle("POST /evals/{id}/{action}", sameOrigin(http.HandlerFunc(s.evalAction)))
-	mux.Handle("POST /runs/{id}/attribute", sameOrigin(http.HandlerFunc(s.attributeRun)))
+	// 评测与归因读写平台空间（.data/eval、平台检查点），只给平台账号。
+	mux.HandleFunc("GET /evals", platform(s.listEvals))
+	mux.HandleFunc("GET /evals/cases", platform(s.evalCases))
+	mux.HandleFunc("GET /evals/{id}", platform(s.getEval))
+	mux.HandleFunc("POST /evals", platform(s.startEval))
+	mux.HandleFunc("POST /evals/{id}/{action}", platform(s.evalAction))
+	mux.HandleFunc("POST /runs/{id}/attribute", platform(s.attributeRun))
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
-	hub := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, sameOrigin(handler)) }
-	hub("GET /hub", s.listHub)
-	hub("GET /hub/enabled", s.enabledHub)
-	hub("POST /hub/skills", s.createSkill)
-	hub("DELETE /hub/skills/{name}", s.deleteSkill)
-	hub("POST /hub/skills/{name}/enabled", s.toggleSkill)
-	hub("POST /hub/mcp", s.addMCP)
-	hub("DELETE /hub/mcp/{name}", s.deleteMCP)
-	hub("POST /hub/mcp/{name}/enabled", s.toggleMCP)
-	hub("POST /hub/mcp/{name}/test", s.testMCP)
+	// Skills/MCP 是平台配置：所有账号可以查看、使用已开启的；只有平台账号能修改。
+	mux.HandleFunc("GET /hub", s.listHub)
+	mux.HandleFunc("GET /hub/enabled", s.enabledHub)
+	mux.HandleFunc("POST /hub/skills", platform(s.createSkill))
+	mux.HandleFunc("DELETE /hub/skills/{name}", platform(s.deleteSkill))
+	mux.HandleFunc("POST /hub/skills/{name}/enabled", platform(s.toggleSkill))
+	mux.HandleFunc("POST /hub/mcp", platform(s.addMCP))
+	mux.HandleFunc("DELETE /hub/mcp/{name}", platform(s.deleteMCP))
+	mux.HandleFunc("POST /hub/mcp/{name}/enabled", platform(s.toggleMCP))
+	mux.HandleFunc("POST /hub/mcp/{name}/test", platform(s.testMCP))
 	// 内置远程 MCP：同一进程直接处理，不另开端口、不转发；同样只接受本机同源请求。
 	mux.Handle("/mcp", sameOrigin(mcpHandler))
 	mode := "直接执行当前程序（改了 agent 代码需重启观测台）"
@@ -180,7 +197,8 @@ func Run(args []string, mcpHandler http.Handler) error {
 		mode = "go run .（每次读取最新源码）"
 	}
 	fmt.Printf("观测页面：http://%s\n远程 MCP：http://%s/mcp（内置 calculator，Streamable HTTP）\nAgent：项目根目录 · %s\n模型上游：由每个 agent 按 -provider 在请求头声明\n", *addr, *addr, mode)
-	return http.ListenAndServe(*addr, mux)
+	fmt.Printf("登录账号：%s（%d 个）\n", usersPath, len(authState.accounts))
+	return http.ListenAndServe(*addr, s.protect(mux))
 }
 
 // agent 子进程：默认执行当前程序本身，与观测台同一份代码、不需要编译、在哪台机器运行就是哪台机器的格式；
@@ -198,7 +216,8 @@ func (s *server) browserFrame(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(w, req, filepath.Join(s.agentDir, ".data", "browser", task, call+".jpg"))
+	// 只在当前账号的空间里找：别的租户的任务ID拼不出它的画面路径。
+	http.ServeFile(w, req, filepath.Join(s.agentDir, tenant.Path(current(req).Tenant, "browser", task, call+".jpg")))
 }
 
 func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
@@ -259,6 +278,21 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "memory_ttl须为正的时长（如1m），且需开启长期记忆", http.StatusBadRequest)
 		return
 	}
+	// 多租户：功能按租户策略放行，再看同时运行的对话数有没有到上限。
+	u := current(req)
+	if !u.platform() {
+		p := s.auth.policy(u.Tenant)
+		for feature, on := range map[string]bool{"rag": input.RAG, "memory": input.Memory, "skills": input.Skills, "mcp": input.MCP,
+			"subagents": input.Subagents, "browser": input.Browser, "bash": input.Bash, "labs": lab} {
+			if on && !p.allows(feature) {
+				http.Error(w, "租户 "+u.Tenant+" 没有开通功能："+feature, http.StatusForbidden)
+				return
+			}
+		}
+	}
+	if !s.underQuota(w, u) {
+		return
+	}
 	args := []string{}
 	if input.RAG {
 		args = append(args, "-rag")
@@ -317,12 +351,12 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	// 对话 ID：随机 UUID（v4），不含时间，与观测台在哪个时区启动无关。
 	// 早期存档的 ID 是“20261006-213820.763”这样的本地时间，照常读回，不改名，旧链接仍能打开。
 	id := uuid.NewString()
-	file, err := os.OpenFile(filepath.Join(s.runsDir, id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	file, err := s.createRunFile(u.Tenant, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	r := &run{ID: id, Query: strings.TrimSpace(input.Query), changed: make(chan struct{}), file: file}
+	r := &run{ID: id, Tenant: u.Tenant, Query: strings.TrimSpace(input.Query), changed: make(chan struct{}), file: file}
 	s.mu.Lock()
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
@@ -332,15 +366,61 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if !input.ContextLab && !input.RAGLab {
 		turn = map[string]any{"question": input.Query}
 	}
-	s.launch(ctx, r, args, turn, "")
+	s.launch(ctx, r, args, turn, "", u.Name)
 	json.NewEncoder(w).Encode(r.summary())
+}
+
+// 对话存档按租户放：.data/tenants/<租户>/runs/<对话ID>.jsonl；平台是 .data/runs。
+func (s *server) runsDir(space string) string {
+	return filepath.Join(s.agentDir, tenant.Path(space, "runs"))
+}
+
+func (s *server) createRunFile(space, id string) (*os.File, error) {
+	if err := os.MkdirAll(s.runsDir(space), 0o700); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(filepath.Join(s.runsDir(space), id+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+}
+
+// 同一租户同时运行的对话数有上限；平台账号不限。到上限时返回 429，页面提示稍后再试。
+func (s *server) underQuota(w http.ResponseWriter, u *user) bool {
+	if u.platform() {
+		return true
+	}
+	limit, running := s.auth.policy(u.Tenant).maxRunning(), 0
+	s.mu.Lock()
+	for _, r := range s.runs {
+		r.mu.Lock()
+		if r.Tenant == u.Tenant && r.proc != nil {
+			running++
+		}
+		r.mu.Unlock()
+	}
+	s.mu.Unlock()
+	if running >= limit {
+		http.Error(w, fmt.Sprintf("租户 %s 已有 %d 个对话在运行（上限 %d），请等其中一个结束", u.Tenant, running, limit), http.StatusTooManyRequests)
+		return false
+	}
+	return true
+}
+
+// runOf 取路径里的对话，只返回当前账号所属租户的：别的租户的对话一律当作不存在（404），不透露它是否存在。
+func (s *server) runOf(w http.ResponseWriter, req *http.Request) *run {
+	r := s.find(req.PathValue("id"))
+	if r == nil || r.Tenant != current(req).Tenant {
+		http.Error(w, "找不到这条对话", http.StatusNotFound)
+		return nil
+	}
+	return r
 }
 
 // 同一条对话一次只处理一个提问；恢复历史不会重新执行已经完成的工具。
 func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
-	r := s.find(req.PathValue("id"))
+	r := s.runOf(w, req)
 	if r == nil {
-		http.Error(w, "找不到这条对话", http.StatusNotFound)
+		return
+	}
+	if !s.underQuota(w, current(req)) {
 		return
 	}
 	var input struct {
@@ -362,7 +442,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	file, err := os.OpenFile(filepath.Join(s.runsDir, r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := os.OpenFile(filepath.Join(s.runsDir(r.Tenant), r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		r.mu.Unlock()
 		http.Error(w, "无法追加对话记录", http.StatusInternalServerError)
@@ -411,7 +491,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	// 问题、续聊上下文与续接关系放进 turn/start。每一轮都用新的检查点ID，旧检查点保持原样（“一个ID一个问题”），
 	// 续接关系让模型可以按 task_id 续跑之前各轮的子任务。
 	turn := map[string]any{"question": strings.TrimSpace(input.Query), "history": history, "continues": history.Continues}
-	s.launch(ctx, r, args, turn, history.Model)
+	s.launch(ctx, r, args, turn, history.Model, current(req).Name)
 	json.NewEncoder(w).Encode(r.summary())
 }
 
@@ -433,10 +513,17 @@ func (r *run) beginTurn(query string) (context.Context, trace.Span) {
 
 // B0：agent 以 -app-server 启动，stdout 是协议，stderr 是给人看的终端输出。
 // turn 为 nil 时（上下文、检索实验）由命令行参数决定要做什么，不发 turn/start。
-func (s *server) launch(ctx context.Context, r *run, args []string, turn map[string]any, model string) {
+//
+// 多租户：租户对话的 agent 带 -tenant 启动，读写都落在租户目录下；发起人的用户名经 AGENT_USER 进审计。
+// 每次启动生成一个代理令牌：模型代理只接受带着本对话当前令牌的请求，别的进程不能往这条对话里塞记录。
+func (s *server) launch(ctx context.Context, r *run, args []string, turn map[string]any, model, userName string) {
 	span := trace.SpanFromContext(ctx)
+	if r.Tenant != "" {
+		args = append([]string{"-tenant", r.Tenant}, args...)
+	}
+	token := newToken()
 	cmd := s.agentCommand(context.Background(), append([]string{"-app-server"}, args...)...)
-	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID)
+	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID, "AGENT_USER="+userName, "AGENT_PROXY_TOKEN="+token)
 	cmd.Env = append(cmd.Env, telemetry.Env(ctx)...)
 	if model != "" {
 		cmd.Env = append(cmd.Env, "LLM_MODEL="+model)
@@ -446,7 +533,7 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 	stderr, _ := cmd.StderrPipe()
 	conn := protocol.NewConn(stdout, stdin, r.handle)
 	r.mu.Lock()
-	r.conn, r.approvals, r.toolWaits = conn, map[string][]int64{}, map[string]toolWait{}
+	r.conn, r.approvals, r.toolWaits, r.token = conn, map[string][]int64{}, map[string]toolWait{}, token
 	r.mu.Unlock()
 	// 自己的进程组：停止时向整组发信号。-dev 模式下组里是 go run 和它编译出的 agent，两者都能收到。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -499,8 +586,9 @@ func appendMemoryArgs(args []string, memory bool, ttl string) []string {
 
 // 记忆文件由 agent 写入；观测台只读展示。删除走 agent 的 -memory-forget，与 agent 共用文件锁和事务。
 // 派生索引（背景说明、块状态）只用来展示，缺失或损坏时显示为空，不影响原始记忆。
-func (s *server) listMemory(w http.ResponseWriter, _ *http.Request) {
-	data, err := os.ReadFile(filepath.Join(s.agentDir, ".data", "memory.json"))
+func (s *server) listMemory(w http.ResponseWriter, req *http.Request) {
+	space := current(req).Tenant
+	data, err := os.ReadFile(filepath.Join(s.agentDir, tenant.Path(space, "memory.json")))
 	if errors.Is(err, os.ErrNotExist) {
 		data, err = []byte(`{"next":0,"memories":[]}`), nil
 	}
@@ -508,12 +596,12 @@ func (s *server) listMemory(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "无法读取 .data/memory.json", http.StatusInternalServerError)
 		return
 	}
-	index, err := os.ReadFile(filepath.Join(s.agentDir, ".data", "memory-index", "contexts.json"))
+	index, err := os.ReadFile(filepath.Join(s.agentDir, tenant.Path(space, "memory-index", "contexts.json")))
 	if err != nil || !json.Valid(index) {
 		index = []byte(`{"chunks":{}}`)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"path": ".data/memory.json", "now": time.Now(), "file": json.RawMessage(data), "index": json.RawMessage(index)})
+	json.NewEncoder(w).Encode(map[string]any{"path": tenant.Path(space, "memory.json"), "now": time.Now(), "file": json.RawMessage(data), "index": json.RawMessage(index)})
 }
 
 var memoryID = regexp.MustCompile(`^M[0-9]{1,9}$`)
@@ -526,7 +614,13 @@ func (s *server) forgetMemory(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "记忆编号格式为M加数字", http.StatusBadRequest)
 		return
 	}
-	cmd := s.agentCommand(req.Context(), "-memory-forget", id)
+	u := current(req)
+	args := []string{"-memory-forget", id}
+	if u.Tenant != "" {
+		args = append([]string{"-tenant", u.Tenant}, args...)
+	}
+	cmd := s.agentCommand(req.Context(), args...)
+	cmd.Env = append(os.Environ(), "AGENT_USER="+u.Name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, strings.TrimSpace(string(output)), http.StatusConflict)
@@ -640,7 +734,7 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 // 中途停下的对话从 agent 的检查点接着聊：检查点里有被打断那一轮的完整记录，
 // 包括写成“未执行”“结果未知”的工具结果；存档里只能找到最后一个完整回答之前的请求。
 func (r *run) checkpointHistory(id string) (*resumeInput, error) {
-	data, err := os.ReadFile(filepath.Join(".data", "checkpoints", id+".json"))
+	data, err := os.ReadFile(filepath.Join(tenant.Path(r.Tenant, "checkpoints"), id+".json"))
 	if err != nil {
 		return nil, errors.New("找不到这次运行的检查点，无法接着聊：" + id)
 	}
@@ -748,14 +842,28 @@ func (r *run) canContinue() bool {
 }
 
 // 启动时读回 runs/*.jsonl，重启后仍能查看、回放和对比历史运行。
+// 平台的存档在 .data/runs，各租户的在 .data/tenants/<租户>/runs；所属租户由目录决定。
 func (s *server) loadRuns() {
-	paths, _ := filepath.Glob(filepath.Join(s.runsDir, "*.jsonl"))
+	spaces := []string{""}
+	dirs, _ := os.ReadDir(filepath.Join(s.agentDir, ".data", "tenants"))
+	for _, d := range dirs {
+		if d.IsDir() && tenant.Valid(d.Name()) {
+			spaces = append(spaces, d.Name())
+		}
+	}
+	for _, space := range spaces {
+		s.loadSpace(space)
+	}
+}
+
+func (s *server) loadSpace(space string) {
+	paths, _ := filepath.Glob(filepath.Join(s.runsDir(space), "*.jsonl"))
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		r := &run{ID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), Done: true, changed: make(chan struct{})}
+		r := &run{ID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), Tenant: space, Done: true, changed: make(chan struct{})}
 		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 			var e event
 			if json.Unmarshal([]byte(line), &e) != nil {
@@ -823,6 +931,14 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	r := s.find(req.PathValue("id"))
 	if r == nil {
 		http.Error(w, "未知运行", http.StatusNotFound)
+		return
+	}
+	// 模型代理不走登录：调用方是 agent 进程。凭启动时发给它的令牌确认是这条对话的 agent（子 agent 继承同一个环境变量）。
+	r.mu.Lock()
+	token := r.token
+	r.mu.Unlock()
+	if token == "" || subtle.ConstantTimeCompare([]byte(req.Header.Get("X-Agent-Token")), []byte(token)) != 1 {
+		http.Error(w, "代理令牌无效", http.StatusForbidden)
 		return
 	}
 	body, err := io.ReadAll(req.Body)
@@ -920,9 +1036,8 @@ func (r *run) add(e event) {
 
 // SSE：先回放已有事件，再推送新事件，运行结束后关闭。
 func (s *server) streamEvents(w http.ResponseWriter, req *http.Request) {
-	r := s.find(req.PathValue("id"))
+	r := s.runOf(w, req)
 	if r == nil {
-		http.Error(w, "未知运行", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -960,9 +1075,8 @@ func (s *server) streamEvents(w http.ResponseWriter, req *http.Request) {
 var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
 func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
-	r := s.find(req.PathValue("id"))
+	r := s.runOf(w, req)
 	if r == nil {
-		http.Error(w, "找不到这条对话", http.StatusNotFound)
 		return
 	}
 	var input struct {
@@ -980,7 +1094,7 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	if r.Done {
 		// 已结束的对话，记录文件已经关了：临时以追加方式打开，写完再关，保证重启后审批仍在。
-		file, err := os.OpenFile(filepath.Join(s.runsDir, r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+		file, err := os.OpenFile(filepath.Join(s.runsDir(r.Tenant), r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			r.mu.Unlock()
 			http.Error(w, "无法写入对话记录", http.StatusInternalServerError)
@@ -991,7 +1105,7 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 	}
 	r.mu.Unlock()
 	// D21：联网批准同样先写审计；之后的续聊会把它作为 -net-allow 传给 agent，agent 那边再记一条。
-	if err := audit.Write(req.Context(), audit.Record{Actor: "user", Event: "user_network_decision", Task: r.rootTask, Conversation: r.ID, Target: input.Domain, Risk: "network", Decision: kind, Detail: "观测台页面"}); err != nil {
+	if err := audit.Write(req.Context(), audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_network_decision", Task: r.rootTask, Conversation: r.ID, Target: input.Domain, Risk: "network", Decision: kind, Detail: "观测台页面"}); err != nil {
 		http.Error(w, "审计日志写入失败："+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1012,9 +1126,9 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 // D20：高风险操作确认。agent 发来 tool/requestApproval 后暂停；用户在页面上点“允许 / 拒绝”，这里当场回复。
 // 只对正在等待的调用有效，不留到下一轮：下一轮的操作要重新确认。决定记进对话记录，页面重开后仍能看到。
 func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
-	r := s.find(req.PathValue("id"))
+	// 确认请求只能由同一租户的账号回答：别的租户连这条对话都找不到。
+	r := s.runOf(w, req)
 	if r == nil {
-		http.Error(w, "找不到这条对话", http.StatusNotFound)
 		return
 	}
 	var input struct {
@@ -1040,7 +1154,7 @@ func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 	}
 	// D21：观测台记下“人点了什么”，与 agent 那边的 approval_decision 互相对照；参数哈希应与 agent 的请求记录一致。
 	// 先写审计再回复：审计写不进去，就不把“允许”交给 agent。
-	record := audit.Record{Actor: "user", Event: "user_decision", Task: wait.Task, Conversation: r.ID, CallID: input.CallID, Tool: wait.Tool, Risk: wait.Risk, Decision: decision, Detail: "观测台页面"}
+	record := audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_decision", Task: wait.Task, Conversation: r.ID, CallID: input.CallID, Tool: wait.Tool, Risk: wait.Risk, Decision: decision, Detail: "观测台页面"}
 	record.Args(wait.Arguments)
 	if err := audit.Write(req.Context(), record); err != nil {
 		r.mu.Lock()
@@ -1056,7 +1170,7 @@ func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 
 // D21：审计页只读。每次都从头校验整条哈希链，返回最近的 500 条（可按任务过滤）。
 func (s *server) listAudit(w http.ResponseWriter, req *http.Request) {
-	result, err := audit.Read(strings.TrimSpace(req.URL.Query().Get("task")))
+	result, err := audit.Read(current(req).Tenant, strings.TrimSpace(req.URL.Query().Get("task")))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1085,9 +1199,8 @@ func (r *run) netAllow() []string {
 }
 
 func (s *server) stopRun(w http.ResponseWriter, req *http.Request) {
-	r := s.find(req.PathValue("id"))
+	r := s.runOf(w, req)
 	if r == nil {
-		http.Error(w, "找不到这条对话", http.StatusNotFound)
 		return
 	}
 	r.mu.Lock()
@@ -1125,9 +1238,10 @@ func (s *server) stopRun(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *server) listRuns(w http.ResponseWriter, _ *http.Request) {
+func (s *server) listRuns(w http.ResponseWriter, req *http.Request) {
+	space := current(req).Tenant
 	s.mu.Lock()
-	runs := append([]*run(nil), s.runs...)
+	runs := slices.DeleteFunc(append([]*run(nil), s.runs...), func(r *run) bool { return r.Tenant != space })
 	s.mu.Unlock()
 	// 从旧到新（页面再倒过来显示）：最近有活动的对话在最上面，续聊过的旧对话也会回到顶部。
 	slices.SortStableFunc(runs, func(a, b *run) int { return a.updated().Compare(b.updated()) })
@@ -1156,7 +1270,7 @@ var spanPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 // 运行中也可以读：span 结束一个写一行，还没结束的 span（包括根 span）暂时不在文件里。
 func (s *server) traceSpans(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
-	if !telemetry.ValidTraceID(id) {
+	if !telemetry.ValidTraceID(id) || !s.ownsTrace(current(req).Tenant, id) {
 		http.NotFound(w, req)
 		return
 	}
@@ -1167,6 +1281,25 @@ func (s *server) traceSpans(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(spans)
+}
+
+// 调用链文件是平台数据（不按租户分），但每个 trace 都由某一次对话产生：只能看自己空间里对话的 trace。
+func (s *server) ownsTrace(space, id string) bool {
+	s.mu.Lock()
+	runs := append([]*run(nil), s.runs...)
+	s.mu.Unlock()
+	for _, r := range runs {
+		if r.Tenant != space {
+			continue
+		}
+		r.mu.Lock()
+		found := slices.ContainsFunc(r.events, func(e event) bool { return e.Trace == id })
+		r.mu.Unlock()
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func readSpans(path string) ([]telemetry.Record, error) {
@@ -1186,6 +1319,13 @@ func readSpans(path string) ([]telemetry.Record, error) {
 // conversation 参数只统计这个对话的 trace；不给时统计全部。
 func (s *server) traceMetrics(w http.ResponseWriter, req *http.Request) {
 	conversation := req.URL.Query().Get("conversation")
+	// 不带对话时汇总全部 trace（含各租户），只给平台账号；租户账号只能看自己的某个对话。
+	if u := current(req); !u.platform() {
+		if r := s.find(conversation); r == nil || r.Tenant != u.Tenant {
+			http.Error(w, "租户账号只能查看自己对话的指标", http.StatusForbidden)
+			return
+		}
+	}
 	paths, _ := filepath.Glob(filepath.Join(s.agentDir, telemetry.Dir, "*.jsonl"))
 	type series struct {
 		Name     string  `json:"name"`
