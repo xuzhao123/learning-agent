@@ -195,7 +195,9 @@ TTL 与容量淘汰不同：TTL 表示是否仍有效，淘汰表示存储不足
 
 [Memory、Store.locked/update、retention](../internal/memory/memory.go)提供来源、两层锁、原子替换和衰减；[chunkKey、ensureIndex、vectorSearch、touch](../internal/memory/memory_retrieval.go)维护派生键、候选和提交时核查。
 
-当前工程通过内容/配置指纹和当前索引键核查派生数据，未采用上面通用 Revision 结构；同一来源中的复杂事实冲突、留出集质量评估与多租户事务尚未完成。
+当前工程通过内容/配置指纹和当前索引键核查派生数据，未采用上面通用 Revision 结构；同一来源中的复杂事实冲突与留出集质量评估尚未完成。
+
+D20–21 起：记忆文件与索引按租户分目录（[memoryPath、memoryIndexDir](../internal/memory/memory.go)，路径由 [tenant](../internal/tenant/tenant.go) 决定），一个租户的记忆不会被另一个租户召回；`forget_memory` 属于不可撤回操作，执行前要界面上的人确认；检索到记忆后任务被标记为“含私有数据”，之后的外发要确认；写入、刷新、删除、过期、淘汰都写审计，只记编号不记原文。见 [17 · 权限、确认与审计](17-permissions-approval-audit.md)。
 
 ### 进阶推演
 
@@ -219,7 +221,11 @@ TTL 与容量淘汰不同：TTL 表示是否仍有效，淘汰表示存储不足
 
 ## 延伸阅读
 
-- [Day 5 笔记](../docs/day-05/day-05-notes.md)
-- [Day 5 动手](../docs/day-05/day-05-lab.md)
+- Packer 等，[MemGPT: Towards LLMs as Operating Systems](https://arxiv.org/abs/2310.08560)（2023）：把上下文当内存、外部存储当磁盘，由模型自己调度换入换出。
+- Park 等，[Generative Agents](https://arxiv.org/abs/2304.03442)（UIST 2023）：记忆流，以及按“近期、重要、相关”三项打分取回记忆。
+- Chhikara 等，[Mem0](https://arxiv.org/abs/2504.19413)（2025）：记忆的提取、更新、删除与评测，偏生产实践。
+- LangGraph 文档，[Memory](https://docs.langchain.com/oss/python/langgraph/memory)：短期（一次对话内）与长期（跨对话）记忆的划分与常见存储方式。
+
+本项目课程：[Day 5 笔记](../docs/day-05/day-05-notes.md) · [Day 5 动手](../docs/day-05/day-05-lab.md)
 
 [上一篇：检索与 RAG](05-retrieval-rag.md) · [下一篇：MCP 工具协议](07-mcp.md) · [术语表](TERMS.md)

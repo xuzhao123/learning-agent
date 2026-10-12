@@ -132,7 +132,44 @@
 | Recall，召回率 | 应找到的相关资料中，实际找到了多少 |
 | Precision，精确率 | 取回的资料中，真正相关的占多少 |
 
-继续阅读：[浏览与执行](13-browser-and-execution.md)、[安全](14-security-and-isolation.md)、[观测与评估](15-observability-and-evaluation.md)。
+继续阅读：[浏览与执行](13-browser-and-execution.md)、[安全](14-security-and-isolation.md)、[观测](15-observability-and-evaluation.md)。
+
+## 权限、确认与审计
+
+| 术语 | 通俗解释 |
+| --- | --- |
+| Allowlist，允许列表 | 执行器只执行本轮提供的工具，没列出的一律拒绝 |
+| Source tag，来源标记 | 程序在工具结果外层写明来源和“只是资料”，正文改不了 |
+| Human-in-the-loop，人工确认 | 高风险动作执行前暂停，交给界面上的人决定 |
+| Fail closed，失败即关闭 | 没人确认、超时或出错时按拒绝处理 |
+| Taint，数据流标记 | 记下任务已接触过的私有来源，之后的外发都要确认 |
+| Lethal trifecta，致命三要素 | 私有数据、不可信内容、对外通信同时具备时可被诱导外发 |
+| Journal，结果日志 | 每项调用一结束就单独落盘的结果，续跑时判断做完没有 |
+| Tenant，租户 | 共用系统、数据彼此隔离的客户或用户组 |
+| Session，会话 | 登录后服务端发的随机令牌，之后的请求凭它认人 |
+| IDOR，越权访问 | 改请求里的编号就能读到或改动别人的数据 |
+| Audit log，审计日志 | 记录谁、何时、对什么、做了什么决定，不能丢也不能改 |
+| Hash chain，哈希链 | 每条记录带上一条的哈希，局部篡改会让后面对不上 |
+| Anchoring，锚定 | 把最新哈希存到别处，用来发现整条链被重算 |
+
+继续阅读：[权限、确认与审计](17-permissions-approval-audit.md)。
+
+## 评测与界面协议
+
+| 术语 | 通俗解释 |
+| --- | --- |
+| Grader，打分器 | 判断某一方面是否达标的逻辑：程序检查、模型评审或人工 |
+| Trial，尝试 | 对一道评测题的一次运行 |
+| Outcome，结果 | 尝试结束时外部世界的最终状态，区别于轨迹里说了什么 |
+| pass^k | 同一题 k 次全部成功的概率，衡量一致性 |
+| Holdout，留出集 | 调试时不看、只在最后报告时运行的题 |
+| Ablation，消融 | 开 / 关某个能力各跑一遍，看分差 |
+| Counterfactual replay，反事实回放 | 从中间状态恢复、只改一处再跑，看结局是否翻转 |
+| JSON-RPC | 请求、响应、通知三种消息的简单协议格式 |
+| Thread / Turn / Item | 一段对话 / 一次提问 / 一轮里的一个工作单元 |
+| 反向请求 | Agent 主动向界面发请求并等待回复，如审批 |
+
+继续阅读：[评测与失败归因](18-evaluation-and-attribution.md)、[Agent 与界面的协议](19-agent-client-protocol.md)。
 
 ## 技术展开中的术语
 

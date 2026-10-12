@@ -43,7 +43,7 @@
 | 整理说明 | 使用已核查的规则与金额回答或生成文件 | Skills、受限代码执行 |
 | 处理异常 | 查询失败、超时或取消时反馈真实状态 | 运行时 |
 | 保存进度 | 留下可以恢复的消息和调用状态 | 检查点 |
-| 检查过程与答案 | 看是否查了对的制度、算对金额、引用正确 | 观测与评估 |
+| 检查过程与答案 | 看是否查了对的制度、算对金额、引用正确 | 观测、评测与归因 |
 
 不必一次装上所有模块。一个简单查询可能只需要模型、一个工具和循环。模块的价值在于处理任务出现的新要求。
 
@@ -152,7 +152,12 @@ ready → model_pending → model_replied
 
 ## 延伸阅读
 
-- [Week 1 复盘](../docs/week-01-review.md)
-- [Day 1 笔记](../docs/day-01/day-01-notes.md)
+- Anthropic，[Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)（2024）：先分清固定流程与 Agent，再看几种常用编排模式；核心建议是“能简单就别复杂”。
+- Lilian Weng，[LLM Powered Autonomous Agents](https://lilianweng.github.io/posts/2023-06-23-agent/)（2023）：规划、记忆、工具三部分的经典综述，很多后来的文章都从这里出发。
+- Chip Huyen，[Agents](https://huyenchip.com/2025/01/07/agents.html)（2025）：从工程视角讲工具、规划、失败模式与评估。
+- OpenAI，[A practical guide to building agents](https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf)（2025，PDF）：何时值得用 Agent、单 Agent 与多 Agent 编排、护栏。
+- HumanLayer，[12-factor agents](https://github.com/humanlayer/12-factor-agents)：把 Agent 当普通软件管理：自己掌控循环、上下文与状态，和本项目“手写 loop”的思路一致。
+
+本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Week 1 复盘](../docs/week-01-review.md)
 
 [学习目录](README.md) · [下一篇：模型调用与执行循环](02-models-and-loop.md) · [术语表](TERMS.md)

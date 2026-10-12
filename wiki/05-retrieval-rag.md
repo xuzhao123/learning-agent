@@ -220,8 +220,11 @@ Day 4 基础知识库使用向量检索；BM25/RRF/LLM 重排在 Day 5 记忆层
 
 ## 延伸阅读
 
-- [Day 4 笔记](../docs/day-04/day-04-notes.md)
-- [Day 5 检索进阶](../docs/day-05/day-05-notes.md)
-- [Day 4 动手](../docs/day-04/day-04-lab.md)
+- Lewis 等，[Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401)（NeurIPS 2020）：RAG 这个名字的来源。
+- Anthropic，[Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval)（2024）：给每个块补一段上下文说明，再结合 BM25 与重排，对照本篇的“小抄”。
+- Cormack 等，[Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)（SIGIR 2009，PDF）：RRF 原始论文，公式只有一行。
+- Jason Liu，[Levels of Complexity: RAG Applications](https://jxnl.co/writing/2024/02/28/levels-of-complexity-rag-applications/)（2024）：从最简单的实现到生产系统，按层次列出要补的能力。
+
+本项目课程：[Day 4 笔记](../docs/day-04/day-04-notes.md) · [Day 5 检索进阶](../docs/day-05/day-05-notes.md) · [Day 4 动手](../docs/day-04/day-04-lab.md)
 
 [上一篇：上下文管理](04-context-management.md) · [下一篇：长期记忆](06-memory.md) · [术语表](TERMS.md)

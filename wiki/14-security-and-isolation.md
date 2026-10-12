@@ -16,7 +16,7 @@
 | seccomp | 控制进程可用的系统调用 |
 | NoNewPrivs | 不允许执行过程通过相关机制获得新的更高权限 |
 | Egress | 把数据送出系统的通道 |
-| Audit | 记录谁批准、执行了什么、依据与结果是什么 |
+| Audit | 记录谁批准、执行了什么、依据与结果是什么（见第 17 篇） |
 
 ## 提示词和权限限制负责不同事情
 
@@ -83,7 +83,7 @@ Shell 读取了私有文件
 
 可以减少它们的组合：限定文件范围，给子任务更少权限，控制所有出口，高风险动作要求人确认。审批应展示具体目标、数据范围和操作，不只是“允许继续”。
 
-一个可直接实现的粗粒度做法是数据流标记：任务读到私有数据后记下来源，之后每个外发通道都要人工确认；标记随续跑、续聊和子任务传递。它不知道参数里是否真的带了私有值，所以会多问，但不会漏。值级别的追踪（如 CaMeL）更精细，实现也更复杂。概念与取舍见 [Day 20 笔记](../docs/day-20/day-20-notes.md)。
+一个可直接实现的粗粒度做法是数据流标记：任务读到私有数据后记下来源，之后每个外发通道都要人工确认；标记随续跑、续聊和子任务传递。它不知道参数里是否真的带了私有值，所以会多问，但不会漏。值级别的追踪（如 CaMeL）更精细，实现也更复杂。传播规则与取舍见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#外发风险看组合不看单个工具)。
 
 ## 技术展开
 
@@ -180,15 +180,7 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 ### 对照已有实现
 
-[D18–19 轻量实验](../docs/day-19/day-19-lab.md) 加了两条边界：[react.go](../internal/agent/react.go) 给工具结果写外层 `source` 和 `authority=data_only`，system 说明结果不能授权；[dispatch.go](../internal/agent/dispatch.go) 在实际执行前核对本轮 `llm.Tools`，未提供的工具不执行且不自动重试。正文的可信自述不改变外层权限。标记表达指令权限，不能当作事实可信度评分。
-
-[D20](../docs/day-20/day-20-lab.md) 在执行器加了高风险确认（[approval.go](../internal/agent/approval.go)）：删除记忆、MCP server 声明的破坏性工具、含私有数据后的浏览器与 MCP 调用、续跑时重做中断的副作用，执行前都经协议 `tool/requestApproval` 问界面上的人；没有界面、超时或拒绝都不执行。私有来源（bash、记忆、子 agent、父任务）存进检查点并传给子 agent。MCP 注解只用来收紧。白名单域名内的 bash 外发与值级别数据流仍未覆盖。
-
-多租户（[D20 补充](../docs/day-20/day-20-lab.md#6-多租户与登录补充)）：数据按租户分目录、由 [tenant](../internal/tenant/tenant.go) 决定路径，观测台登录后每个按编号访问的接口核对租户；模型密钥、调用链与 Skills/MCP 配置仍共享，所有租户同属一个系统用户。
-
-[D21](../docs/day-21/day-21-lab.md) 补了审计（[audit.go](../internal/audit/audit.go)）：确认请求、人的答复、程序的自动拒绝、有副作用的执行与记忆变更写进同一份只追加的哈希链日志，agent 与观测台各记亲眼所见，用调用 ID 与参数哈希互相核对；确认请求写不进审计就不执行。没有锚定，整链重算发现不了；观测台无登录，记录里的 user 不区分具体的人。概念见 [Day 21 笔记](../docs/day-21/day-21-notes.md)。
-
-实验防护组只给读取固定资料的工具，对照组多一个无害计算器。两组均通过本次简单输入，没有观察到分数提升；来源标记与能力收紧同时变化，不能单独归因。允许列表只限制工具名，菜单内参数、对象权限和外发内容仍需由对应工具校验。学习入口见 [Day 18](../docs/day-18/day-18-notes.md)、[Day 19](../docs/day-19/day-19-notes.md)。
+执行器里的关口（来源标记、允许列表、高风险确认、私有数据标记、结果日志）、多租户登录与审计，单独在 [17 · 权限、确认与审计](17-permissions-approval-audit.md) 展开，那里有对照源码与当前缺口。本篇只保留与沙箱和网络相关的部分。
 
 [bwrapArgs与run](../internal/sandbox/sandbox.go)、[网络代理与dialChecked](../internal/sandbox/network.go)、[seccompProgram](../internal/sandbox/seccomp.go)提供当前边界；[browser.guard](../internal/browser/browser.go)检查页面请求。
 
@@ -221,9 +213,11 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 ## 延伸阅读
 
-- [Day 7 信任边界](../docs/day-07/day-07-notes.md)
-- [Day 11 浏览器安全](../docs/day-11/day-11-notes.md)
-- [Day 12 隔离](../docs/day-12/day-12-notes.md)
-- [组合风险 Q12](../docs/deep-questions.md#q12)
+- containers，[bubblewrap](https://github.com/containers/bubblewrap)：本项目沙箱用的工具，README 说明了它提供什么、不提供什么。
+- Agache 等，[Firecracker: Lightweight Virtualization for Serverless Applications](https://www.usenix.org/conference/nsdi20/presentation/agache)（NSDI 2020）：AWS Lambda 用的微虚拟机：多租户执行为什么不只靠容器。
+- OWASP，[SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)：内网地址、重定向、DNS 重绑定的防护清单。
+- Simon Willison，[The lethal trifecta for AI agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)（2025）：私有数据、不可信内容、对外通信三者同时具备时的外发风险。
 
-[上一篇：浏览器与代码执行](13-browser-and-execution.md) · [下一篇：观测与评估](15-observability-and-evaluation.md) · [术语表](TERMS.md)
+本项目课程：[Day 7 信任边界](../docs/day-07/day-07-notes.md) · [Day 11 浏览器安全](../docs/day-11/day-11-notes.md) · [Day 12 隔离](../docs/day-12/day-12-notes.md) · [组合风险 Q12](../docs/deep-questions.md#q12)
+
+[上一篇：浏览器与代码执行](13-browser-and-execution.md) · [下一篇：权限、确认与审计](17-permissions-approval-audit.md) · [术语表](TERMS.md)

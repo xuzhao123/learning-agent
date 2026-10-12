@@ -191,6 +191,8 @@ Writer.Write即使丢弃内容，也返回原len(p)
 
 上面的队列与命令分类片段是通用设计，不是当前函数的逐行副本；会话隔离、协议覆盖与资源回收仍应结合实际运行检查。
 
+D20 起，任务读过私有数据后，`web_search` 与 `open_page` 都算外发，要界面上的人确认才执行；`bash` 的成功输出会把任务标记为含私有数据。多租户补充后浏览器画面与沙箱工作目录放在租户目录下（`tenant.Here`），观测台只给本租户看。
+
 ### 进阶推演
 
 1. 固定睡三秒改成“每100ms看一次”，是否就一定正确？  
@@ -213,9 +215,11 @@ Writer.Write即使丢弃内容，也返回原len(p)
 
 ## 延伸阅读
 
-- [Day 11 浏览器](../docs/day-11/day-11-notes.md)
-- [Day 12 执行沙箱](../docs/day-12/day-12-notes.md)
-- [浏览器动手](../docs/day-11/day-11-lab.md)
-- [Bash 动手](../docs/day-12/day-12-lab.md)
+- Zhou 等，[WebArena](https://arxiv.org/abs/2307.13854)（ICLR 2024）：在真实网站环境里评测浏览器 Agent，看它们常在哪里失败。
+- Chrome，[DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)：chromedp 底层用的协议，查页面事件、网络拦截与截图。
+- Anthropic，[Making Claude Code more secure and autonomous with sandboxing](https://www.anthropic.com/engineering/claude-code-sandboxing)（2025）：一个 coding agent 的文件系统与网络两层隔离，用的也是 bubblewrap。
+- gVisor，[What is gVisor?](https://gvisor.dev/docs/)：用户态内核：比共享内核的容器隔离更强、比虚拟机更轻。
+
+本项目课程：[Day 11 浏览器](../docs/day-11/day-11-notes.md) · [Day 12 执行沙箱](../docs/day-12/day-12-notes.md) · [浏览器动手](../docs/day-11/day-11-lab.md) · [Bash 动手](../docs/day-12/day-12-lab.md)
 
 [上一篇：子 Agent](12-subagents.md) · [下一篇：安全与隔离](14-security-and-isolation.md) · [术语表](TERMS.md)

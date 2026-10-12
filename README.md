@@ -89,7 +89,7 @@ go build -o bin/learning-agent .
 
 - [28 天学习计划](plan.md)：课程安排与长期目标；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链；[第三周复盘](docs/week-03-review.md)：评测、权限、确认与审计怎样加在同一条路上。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
-- [Agent 工程面试题库](wiki/16-interview-preparation.md)：126 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
+- [Agent 工程面试题库](wiki/16-interview-preparation.md)：134 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。
 - [课件入口](docs/slides/index.html)：当前覆盖 Day 1–5。
 

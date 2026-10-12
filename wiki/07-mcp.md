@@ -198,6 +198,8 @@ clientCapabilities 声明功能支持，不证明当前用户有操作权限。s
 
 动态 list_changed、通用远程鉴权与第三方进程环境最小化仍是现有边界。新的协议版本或 SDK 内容块应按实际协商结果处理。
 
+D20 起，MCP 工具注解只用来收紧：server 声明 `destructiveHint` 的工具执行前要人确认（[mcp.Destructive](../internal/mcp/mcp.go)、[risk](../internal/agent/approval.go)）；声明只读也不免检，任务读过私有数据后，所有 MCP 调用都算外发、需要确认。stdio 方式启动的第三方 server 继承 agent 的环境变量，包括多租户补充里发给 agent 的模型代理令牌，这是当前的已知缺口。
+
 ### 进阶推演
 
 1. 为什么在 schema 校验关闭后，数字 expression 能让第二层真正触发？  
@@ -220,8 +222,11 @@ clientCapabilities 声明功能支持，不证明当前用户有操作权限。s
 
 ## 延伸阅读
 
-- [Day 6 client](../docs/day-06/day-06-notes.md)
-- [Day 7 server](../docs/day-07/day-07-notes.md)
-- [MCP 动手与校验](../docs/day-07/day-07-lab.md)
+- Model Context Protocol，[Specification](https://modelcontextprotocol.io/specification)：协议原文，遇到争议以它为准。
+- Anthropic，[Introducing the Model Context Protocol](https://www.anthropic.com/news/model-context-protocol)（2024）：MCP 要解决的问题：每个应用和每个工具两两对接。
+- Invariant Labs，[MCP Security Notification: Tool Poisoning Attacks](https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks)（2025）：把指令藏在工具描述里的攻击方式。
+- Simon Willison，[Model Context Protocol has prompt injection security problems](https://simonwillison.net/2025/Apr/9/mcp-prompt-injection/)（2025）：为什么第三方 server 的描述与返回都不能当作可信。
+
+本项目课程：[Day 6 client](../docs/day-06/day-06-notes.md) · [Day 7 server](../docs/day-07/day-07-notes.md) · [MCP 动手与校验](../docs/day-07/day-07-lab.md)
 
 [上一篇：长期记忆](06-memory.md) · [下一篇：Skills 知识与流程](08-skills.md) · [术语表](TERMS.md)

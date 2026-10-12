@@ -162,6 +162,8 @@ queued → running(owner, lease_until, generation)
 
 当前是单机文件任务队列，主要核对 Question；没有多机租约、fencing、死信持久化或全局模型速率控制。前面的状态结构是工程设计边界，不是已经部署的分布式队列。
 
+多租户补充后，任务可以带 `tenant` 字段，在该租户的目录里运行；`-per-tenant` 给每个租户一个信号量，限制它同时占用的 worker 数，避免一个租户占满全部槽位。观测台对每个租户限制同时运行的对话数（`underQuota`），计数与启动之间有窗口，见 [17 篇对照](17-permissions-approval-audit.md#对照已有实现)。两者都只限并发，不限 token 用量与磁盘。
+
 ### 进阶推演
 
 1. 三个worker空闲，但供应商TPM超限，继续增加worker有什么用？  
@@ -184,7 +186,11 @@ queued → running(owner, lease_until, generation)
 
 ## 延伸阅读
 
-- [Day 10 笔记](../docs/day-10/day-10-notes.md)
-- [Day 10 动手](../docs/day-10/day-10-lab.md)
+- AWS Builders' Library，[Avoiding insurmountable queue backlogs](https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/)：队列积压怎样形成、怎样按租户隔离与限流。
+- AWS Builders' Library，[Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/)：至少一次投递下怎样避免重复副作用。
+- Google SRE Book，[Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/)：排队、重试与过载怎样连锁放大。
+- Martin Kleppmann，[How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)（2016）：多机执行权与租约的坑。
+
+本项目课程：[Day 10 笔记](../docs/day-10/day-10-notes.md) · [Day 10 动手](../docs/day-10/day-10-lab.md)
 
 [上一篇：持久化与恢复](10-checkpoints-and-recovery.md) · [下一篇：子 Agent](12-subagents.md) · [术语表](TERMS.md)

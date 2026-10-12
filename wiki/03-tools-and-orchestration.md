@@ -191,6 +191,8 @@ action_key = 工具名 + ":" + 规范化参数
 
 当前规范化主要处理 JSON 表示，不是完整业务等价判断；也没有按任意资源键生成执行 DAG。上述算法用于理解改造边界。
 
+D19–20 起，执行器在这条路径上多了几道关口：[runTool](../internal/agent/dispatch.go) 先核对本轮 `llm.Tools`（允许列表），菜单外的工具不执行、不重试；`ExecuteBatch` 在占并发槽位之前按 [风险规则](../internal/agent/approval.go) 问人确认，等人的时间不占槽位、不计入单次时限；每项调用一结束就写结果日志。关口的顺序与取舍见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#关口的实际顺序会影响谁先被打扰)。
+
 ### 进阶推演
 
 1. p=2 的批次里，第一项正在退避等待，这个许可要不要释放？  
@@ -213,8 +215,11 @@ action_key = 工具名 + ":" + 规范化参数
 
 ## 延伸阅读
 
-- [Day 1 笔记](../docs/day-01/day-01-notes.md)
-- [Day 7 校验](../docs/day-07/day-07-notes.md)
-- [Day 2 动手](../docs/day-02/day-02-lab.md)
+- Anthropic，[Writing effective tools for agents — with agents](https://www.anthropic.com/engineering/writing-tools-for-agents)（2025）：工具命名、返回内容、错误信息怎样写，以及怎样用评测迭代工具。
+- Anthropic，[Code execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp)（2025）：工具很多时让模型写代码调用工具，减少工具定义和中间结果占用的上下文。
+- UC Berkeley，[Berkeley Function Calling Leaderboard](https://gorilla.cs.berkeley.edu/leaderboard.html)：比较不同模型在单次、并行、多轮函数调用上的表现，了解“模型会不会调工具”有多大差异。
+- Go Blog，[Go Concurrency Patterns: Pipelines and cancellation](https://go.dev/blog/pipelines)：扇出、扇入与取消的标准写法，对应并行工具执行。
+
+本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Day 2 动手](../docs/day-02/day-02-lab.md) · [Day 7 校验](../docs/day-07/day-07-notes.md)
 
 [上一篇：模型调用与执行循环](02-models-and-loop.md) · [下一篇：上下文管理](04-context-management.md) · [术语表](TERMS.md)

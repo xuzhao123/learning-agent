@@ -206,8 +206,11 @@ delta 2：工具索引0，arguments = "3*180"}
 
 ## 延伸阅读
 
-- [Day 1 笔记](../docs/day-01/day-01-notes.md)
-- [模型路由笔记](../docs/bonus-routing/routing-notes.md)
-- [Day 1 动手](../docs/day-01/day-01-lab.md)
+- Yao 等，[ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629)（ICLR 2023）：“想一步、做一步、看结果”循环的原始论文。
+- OpenAI，[Function calling](https://platform.openai.com/docs/guides/function-calling)：工具定义、模型发起调用、程序回填结果的官方流程；本项目接的方舟与 DeepSeek 都兼容这套格式。
+- Simon Willison，[Designing agentic loops](https://simonwillison.net/2025/Sep/30/designing-agentic-loops/)（2025）：设计循环的关键是给哪些工具、在什么环境里运行、怎样限制风险。
+- HumanLayer，[12-factor agents](https://github.com/humanlayer/12-factor-agents)：“自己掌控控制流”“把错误压缩进上下文”等几条与执行循环直接相关。
+
+本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Day 1 动手](../docs/day-01/day-01-lab.md) · [模型路由笔记](../docs/bonus-routing/routing-notes.md)
 
 [上一篇：Agent 全景](01-agent-overview.md) · [下一篇：工具与编排](03-tools-and-orchestration.md) · [术语表](TERMS.md)

@@ -196,6 +196,8 @@ func atomicWrite(path string, data []byte) error {
 
 当前写入没有文件/目录 fsync、状态版本迁移或分布式 fencing；模型请求计费也不是独立耐久账本。上述更强写入和状态结构是学习用设计，不作为当前实现保证。
 
+D20 起缩小了“结果未知”的范围：每项调用一结束就写 `.calls/` 下的结果日志（[writeJournal](../internal/agent/approval.go)），续跑时 [replayBatch](../internal/agent/react.go) 按“日志里有 → 取回；可重复 → 重做；其余 → 问人要不要重做，拒绝或没人答就回填未知”处理。私有数据来源、动作窗口与无进展计数也存进检查点，换进程不清零。多租户补充后检查点放在租户目录下（[checkpointDir](../internal/agent/checkpoint.go)），别的租户用同一个任务ID续跑找不到它。细节见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#结果日志与做完没有)。
+
 ### 进阶推演
 
 1. rename 成功、目录Sync失败，能不能删掉新文件并说回滚了？  
@@ -221,7 +223,12 @@ func atomicWrite(path string, data []byte) error {
 
 ## 延伸阅读
 
-- [Day 9 笔记](../docs/day-09/day-09-notes.md)
-- [Day 9 动手](../docs/day-09/day-09-lab.md)
+- Temporal，[The definitive guide to Durable Execution](https://temporal.io/blog/what-is-durable-execution)：“持久化执行”的思路：每一步落盘、崩溃后从断点继续，和检查点同源。
+- LangGraph 文档，[Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)：一个框架怎样做每步检查点、线程与从历史分叉。
+- Brandur Leach，[Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency)（Stripe，2017）：幂等键怎样让“结果未知”的请求可以安全重试。
+- Martin Kleppmann，[How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)（2016）：锁会过期，为什么需要 fencing token。
+- Dan Luu，[Files are hard](https://danluu.com/file-consistency/)：fsync、rename 与文件系统真实的一致性保证。
+
+本项目课程：[Day 9 笔记](../docs/day-09/day-09-notes.md) · [Day 9 动手](../docs/day-09/day-09-lab.md)
 
 [上一篇：运行时与可靠性](09-runtime-reliability.md) · [下一篇：任务调度](11-task-scheduling.md) · [术语表](TERMS.md)

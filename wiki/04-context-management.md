@@ -197,7 +197,12 @@ D = 新摘要
 
 ## 延伸阅读
 
-- [Day 3 笔记](../docs/day-03/day-03-notes.md)
-- [Day 3 动手](../docs/day-03/day-03-lab.md)
+- Manus，[Context Engineering for AI Agents: Lessons from Building Manus](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)（2025）：目标团队自己的经验：围绕 KV 缓存设计上下文、遮蔽而不删除工具、把文件系统当外部记忆、保留错误。
+- Anthropic，[Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)（2025）：长任务的三种手段：压缩、结构化笔记、子 Agent。
+- Liu 等，[Lost in the Middle](https://arxiv.org/abs/2307.03172)（TACL 2024）：关键信息放在长上下文中间时，模型利用得最差。
+- Chroma，[Context Rot](https://research.trychroma.com/context-rot)（2025）：即使任务很简单，输入变长后效果也会下降。
+- Drew Breunig，[How Long Contexts Fail](https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html)（2025）：上下文中毒、分心、混淆、冲突四种失败方式。
+
+本项目课程：[Day 3 笔记](../docs/day-03/day-03-notes.md) · [Day 3 动手](../docs/day-03/day-03-lab.md)
 
 [上一篇：工具与编排](03-tools-and-orchestration.md) · [下一篇：检索与 RAG](05-retrieval-rag.md) · [术语表](TERMS.md)

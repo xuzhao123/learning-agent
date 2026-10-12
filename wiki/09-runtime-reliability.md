@@ -210,8 +210,12 @@ D20 起（[实践](../docs/day-20/day-20-lab.md)）：熔断改为最近 6 个�
 
 ## 延伸阅读
 
-- [Day 2 护栏](../docs/day-02/day-02-notes.md)
-- [Day 8 运行时](../docs/day-08/day-08-notes.md)
-- [Day 8 动手](../docs/day-08/day-08-lab.md)
+- AWS Builders' Library，[Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)：超时怎么定、重试为什么会放大故障、退避为什么要加随机抖动。
+- Marc Brooker，[Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)（AWS Architecture Blog）：几种抖动算法的模拟对比。
+- Google SRE Book，[Handling Overload](https://sre.google/sre-book/handling-overload/)：客户端限流、按重要性丢弃请求、重试预算。
+- Martin Fowler，[CircuitBreaker](https://martinfowler.com/bliki/CircuitBreaker.html)：熔断器的原始描述，对照本篇“相同动作熔断”与它的区别。
+- Go Blog，[Go Concurrency Patterns: Context](https://go.dev/blog/context)：context 取消与超时的设计本意。
+
+本项目课程：[Day 2 护栏](../docs/day-02/day-02-notes.md) · [Day 8 运行时](../docs/day-08/day-08-notes.md) · [Day 8 动手](../docs/day-08/day-08-lab.md)
 
 [上一篇：Skills 知识与流程](08-skills.md) · [下一篇：持久化与恢复](10-checkpoints-and-recovery.md) · [术语表](TERMS.md)

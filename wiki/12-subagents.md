@@ -175,6 +175,8 @@ Setpgid 可把子进程分到独立进程组，避免它同时收到终端和父
 
 当前交付主要是 answer、model_calls 与 replayed，未强制上述结构化证据契约；预算是父子各自管理。父被kill -9后的全部后代回收、全局费用额度与复杂权限衰减也仍需加强。
 
+D20 起，子 Agent 继承两样安全状态：父任务已含私有数据时，子进程带 `-private-input` 启动，从一开始就算“已接触私有数据”；子任务读过私有数据，交回的结论会让父任务也被标记。子进程发出的确认请求经 [RunChild](../internal/agent/child.go) 转给父进程、再到界面，只能由人回答。多租户补充后子进程带同一个 `-tenant`，检查点与记忆都在父任务的租户目录里。见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#私有标记的传播规则)；事件与请求怎样经父进程逐级转发见 [19 · Agent 与界面的协议](19-agent-client-protocol.md#确认请求的完整链路)。
+
 ### 进阶推演
 
 1. 为什么给子任务全新上下文，不等于完成安全隔离？  
@@ -200,7 +202,10 @@ Setpgid 可把子进程分到独立进程组，避免它同时收到终端和父
 
 ## 延伸阅读
 
-- [子 Agent 笔记](../docs/bonus-subagents/subagents-notes.md)
-- [子 Agent 动手](../docs/bonus-subagents/subagents-lab.md)
+- Anthropic，[How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)（2025）：主 Agent 派子 Agent 并行调研的设计、成本与评测。
+- Cognition，[Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents)（2025）：反方观点：子 Agent 看不到彼此的上下文，决策会互相冲突。
+- Cemri 等，[Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/abs/2503.13657)（2025）：对 1600 多条多 Agent 轨迹归纳出的 14 种失败方式。
+
+本项目课程：[子 Agent 笔记](../docs/bonus-subagents/subagents-notes.md) · [子 Agent 动手](../docs/bonus-subagents/subagents-lab.md) · [19 · 父子进程间的协议](19-agent-client-protocol.md)
 
 [上一篇：任务调度](11-task-scheduling.md) · [下一篇：浏览器与代码执行](13-browser-and-execution.md) · [术语表](TERMS.md)

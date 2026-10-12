@@ -196,7 +196,10 @@ func readResource(dir, relativeName string) ([]byte, error) {
 
 ## 延伸阅读
 
-- [Skills 笔记](../docs/bonus-skills/skills-notes.md)
-- [Skills 动手](../docs/bonus-skills/skills-lab.md)
+- Anthropic，[Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)（2025）：Skills 的设计说明：索引常驻、正文与资源按需加载。
+- Simon Willison，[Claude Skills are awesome, maybe a bigger deal than MCP](https://simonwillison.net/2025/Oct/16/claude-skills/)（2025）：为什么“几个 Markdown 文件”可能比工具协议更省上下文。
+- Anthropic，[Code execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp)（2025）：同样是渐进加载的思路，用在大量工具上。
+
+本项目课程：[Skills 笔记](../docs/bonus-skills/skills-notes.md) · [Skills 动手](../docs/bonus-skills/skills-lab.md)
 
 [上一篇：MCP 工具协议](07-mcp.md) · [下一篇：运行时与可靠性](09-runtime-reliability.md) · [术语表](TERMS.md)
