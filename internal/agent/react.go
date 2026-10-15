@@ -258,9 +258,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			}
 			conversation.RecordReply(response)
 			reply := response.Message
-			if reply.Content != "" {
-				fmt.Println(reply.Content)
-			}
+			// 正文已在模型请求里边收边打印（B1 流式），这里不再整段重复打印。
 			if len(reply.ToolCalls) == 0 {
 				completed, cp.Answer = step, reply.Content
 				fmt.Println("Termination: no_tool_calls")

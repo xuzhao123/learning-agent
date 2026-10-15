@@ -205,7 +205,9 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 
 评测与队列也用这套协议启动子进程，但上面没有界面：通知不转发，审批如实回答 unavailable。
 
-当前边界：模型请求是非流式的，Item 只有开始和完成，没有增量；观测台重启后不能接管正在运行的 Agent；给人看的日志仍是文本；等待表按调用 ID 区分，依赖模型供应商给出的调用 ID 在一个对话里不重复。
+B1 之后，模型调用进行中多了 `item/delta`（正文与推理的增量），只用于实时显示、不写进运行记录，权威结果仍是 completed 与存档的完整响应，见 [B1 实践](../docs/bonus-streaming/streaming-lab.md)。
+
+当前边界：增量不落盘，观测台在生成中途重启看不到半段；观测台重启后不能接管正在运行的 Agent；给人看的日志仍是文本；等待表按调用 ID 区分，依赖模型供应商给出的调用 ID 在一个对话里不重复。
 
 ### 进阶推演
 
@@ -245,6 +247,6 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 - Zed 等，[Agent Client Protocol](https://agentclientprotocol.com)：编辑器与 coding agent 之间的开放协议，本地 Agent 作为编辑器的子进程、经 stdio 用 JSON-RPC 通信。
 - Microsoft，[Language Server Protocol](https://microsoft.github.io/language-server-protocol/)：同类思路的成熟先例：一个语言服务、多个编辑器共用一套协议。
 
-本项目课程：[结构化协议笔记](../docs/bonus-protocol/protocol-notes.md) · [结构化协议实践](../docs/bonus-protocol/protocol-lab.md) · [17 · 确认请求的规则](17-permissions-approval-audit.md) · [12 · 子 Agent](12-subagents.md)
+本项目课程：[结构化协议笔记](../docs/bonus-protocol/protocol-notes.md) · [结构化协议实践](../docs/bonus-protocol/protocol-lab.md) · [流式输出实践](../docs/bonus-streaming/streaming-lab.md) · [17 · 确认请求的规则](17-permissions-approval-audit.md) · [12 · 子 Agent](12-subagents.md)
 
 [上一篇：评测与失败归因](18-evaluation-and-attribution.md) · [回学习目录](README.md) · [术语表](TERMS.md)

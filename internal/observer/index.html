@@ -599,7 +599,7 @@ function rawIO(c, runID) {
     const grid = el("div", "raw-grid");
     const output = c.end ? c.rawBody !== undefined ? c.rawBody : c.errorText || c.res : undefined;
     grid.append(rawCard("input", c.req, `${(c.req.messages || []).length} 条 messages · ${(c.req.tools || []).length} 个工具 · ${c.req.model || ""}`),
-      rawCard("output", output, c.end ? `HTTP ${c.status} · ${sec(c.ms)}${c.choice ? " · " + c.choice.finish_reason : ""}` : "请求进行中"));
+      rawCard("output", output, c.end ? `HTTP ${c.status} · ${sec(c.ms)}${c.choice ? " · " + c.choice.finish_reason : ""}${c.chunks ? ` · 流式 ${c.chunks} 个 chunk，按 chunk 拼回` : ""}` : "请求进行中（流式，结束后显示拼好的完整响应）"));
     const note = el("div", "raw-note"); note.append(el("span", "raw-dot"), "模型调用的完整请求体与响应体 · 格式化展示");
     panel.append(note, grid);
   };
@@ -697,7 +697,7 @@ function apply(r, e) {
     if (!c) return;
     const body = e.body || {};
     Object.assign(c, { res: body, rawBody: e.body, end: time, ms: e.ms, status: e.status, errorText: e.text,
-      choice: (body.choices || [])[0], usage: body.usage || {} });
+      choice: (body.choices || [])[0], usage: body.usage || {}, chunks: e.chunks || 0, firstToken: e.first_token_ms || 0, live: null });
     const m = (c.choice && c.choice.message) || {};
     c.invalidSummary = c.compact && (m.tool_calls || []).length > 0;
     if (c.aux) return;
@@ -706,7 +706,7 @@ function apply(r, e) {
     r.logs.push(e);
     if (!r.protocol) legacyLine(r, e, time);
   }
-  else if (e.kind === "notify") applyNotify(r, e.method, e.body || {}, time);
+  else if (e.kind === "notify" || e.kind === "delta") applyNotify(r, e.method, e.body || {}, time);
   else if (e.kind === "approval") {
     const p = e.body || {};
     if (e.method === "tool/requestApproval") r.approvals[p.call_id] = { ...p, state: "waiting" };
@@ -739,6 +739,9 @@ function applyNotify(r, method, p, time) {
   else if (method === "subagent/log") subRun(r, p.task_id).logs.push({ kind: "stdout", text: p.text, time });
   // 子 agent 转发上来的通知，原样应用到它自己的运行状态上（任务ID、浏览器地址、结局……），和父 agent 走同一套处理。
   else if (method === "subagent/message" && p.message?.method) applyNotify(subRun(r, p.task_id), p.message.method, p.message.params || {}, time);
+  // B1：流式增量只拼到正在进行的这次请求上做实时显示；响应到达后以完整响应为准（live 清空）。
+  // 主任务的模型请求一次只有一个在进行，增量一定属于最后一次请求；晚到的增量直接丢弃。
+  else if (method === "item/delta") { const c = r.calls.at(-1); if (c && !c.end) { const live = c.live ??= {}; live[p.field] = (live[p.field] || "") + p.delta; } }
   else if (method === "turn/completed") r.termination = p.outcome === "no_tool_calls" ? "" : p.outcome + (p.error ? "：" + p.error : "");
   else if (method === "lab/case") {
     r.caseLabel = p.id + (p.mode === "rag" ? " · 有检索" : " · 无检索");
@@ -1447,7 +1450,8 @@ function renderInspector(it) {
     const u = c.usage, p = tokenParts(u), m = (c.choice && c.choice.message) || {};
     add("用途", c.aux ? `${AUX_LABEL[c.purpose]}（${c.purpose}，无工具，不是用户回合或最终回答）` : c.compact ? "上下文摘要（不执行工具）" : "任务决策");
     add("公共前缀", `${c.shared || 0} 条消息（实际缓存看usage）`);
-    add("耗时", c.ms ? `${c.ms} ms（非流式，无 TTFT 拆分）` : "等待响应");
+    add("耗时", c.ms ? `${c.ms} ms` + (c.firstToken ? `（首字 ${c.firstToken} ms，生成 ${c.ms - c.firstToken} ms）` : c.chunks ? "" : "（非流式，无首字拆分）") : "等待响应");
+    if (c.chunks) add("流式", `${c.chunks} 个 chunk；响应 JSON 由观测台按 chunk 拼回`);
     if (c.status) add("HTTP", String(c.status));
     if (u.total_tokens) { add("输入", `${u.prompt_tokens}（缓存 ${p.cached}）`); add("输出", `${u.completion_tokens}（推理 ${p.reasoning}）`); }
     if (c.choice) add("finish_reason", c.choice.finish_reason);
@@ -1709,7 +1713,13 @@ function renderCall(box, r, c, last) {
   const m = (c.choice && c.choice.message) || {};
   const raw = rawIO(c, r.id), head = el("div", "raw-call");
   head.append(el("span", "", `${callPosition(c)} · 请求 #${c.n}`), raw.button); box.append(head, raw.panel);
-  if (!c.end) return box.append(el("div", "shimmer", "思考中…"));
+  if (!c.end) {
+    // B1：流式输出进行中：推理与正文边收边显示，完整响应到达后换成下面的正式渲染。
+    const live = c.live || {};
+    if (live.reasoning) box.append(step("r" + c.n, [el("span", "ico", "✻"), el("span", "", `思考中 · ${live.reasoning.length} 字`)], [el("div", "reason", live.reasoning)]));
+    if (live.content) box.append(md(live.content));
+    return box.append(el("div", "shimmer", live.content ? "生成中…" : "思考中…"));
+  }
   if (!c.choice) {
     if (c.status === 499) return box.append(step("e" + c.n, [el("span", "ico", "■"), el("span", "", `请求已取消（agent 停止）· ${sec(c.ms)}`)], [el("pre", "", c.errorText || "")]));
     return box.append(step("e" + c.n, [el("span", "ico bad", "!"), el("span", "bad", `模型请求失败 · HTTP ${c.status}`)], [el("pre", "err", c.errorText || pretty(c.res))]));
@@ -2068,6 +2078,7 @@ function renderCompact(c) {
   const body = el("div", "body");
   body.append(c.choice && m.content ? md(m.content) : el("pre", "err", c.errorText || pretty(c.res || "")));
   if (c.end) box.append(body);
+  else if (c.live?.content) box.append(md(c.live.content)); // B1：摘要边生成边显示
   return box;
 }
 function welcome() {

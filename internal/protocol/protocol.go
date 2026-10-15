@@ -168,7 +168,9 @@ func Call(ctx context.Context, method string, params any, result any) error {
 	return Client.Call(ctx, method, params, result)
 }
 
-// Item 是一轮里的一个工作单元，有 started、completed 两个阶段（流式输出时再加 delta，见 B1）。
+// Item 是一轮里的一个工作单元，有 started、completed 两个阶段。
+// B1：模型调用进行中还会发 item/delta（item_id、field 为 content 或 reasoning、delta 文本片段），
+// 只用于实时显示；完整内容以 item/completed、检查点和观测台留档的响应为准，界面漏收几条 delta 也不影响结果。
 type Item struct {
 	ID   string `json:"id"`
 	Type string `json:"type"` // userMessage、modelCall、toolCall、compaction

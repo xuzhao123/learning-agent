@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,21 +33,26 @@ type Usage struct {
 	} `json:"prompt_tokens_details"`
 }
 type Reply struct {
-	Message Message
-	Usage   *Usage
+	Message    Message
+	Usage      *Usage
+	FirstToken time.Duration // B1：从发出请求到收到第一段正文或推理的时间（首字延迟）；没有收到为0
 }
 
 var ErrContextLength = errors.New("模型服务报告上下文过长")
 var ErrModelBudget = errors.New("模型请求次数预算已用完（包含摘要和超窗重试）")
 
 // 普通请求和摘要共享模型、工具定义和推理配置；摘要额外通过tool_choice禁用工具。
-func callModel(ctx context.Context, config Config, history []Message, withTools bool, output int, purpose string) (Reply, error) {
+// B1：请求一律流式，onDelta 收到每一段正文与推理增量（可以为 nil）；返回的仍是拼好的完整回复，
+// 是否截断、有没有回答等检查都等流结束后对完整回复做，和非流式时一样。
+func callModel(ctx context.Context, config Config, history []Message, withTools bool, output int, purpose string, onDelta func(content, reasoning string)) (Reply, error) {
 	endpoint, err := url.Parse(config.APIURL)
 	local := endpoint != nil && endpoint.Scheme == "http" && endpoint.Hostname() == "127.0.0.1"
 	if err != nil || (endpoint.Scheme != "https" && !local) || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" {
 		return Reply{}, errors.New("模型地址需要是完整的HTTPS URL，或本机http://127.0.0.1观测代理")
 	}
-	body := map[string]any{"model": config.Model, "messages": history, "stream": false, "reasoning_effort": config.Effort}
+	body := map[string]any{"model": config.Model, "messages": history, "stream": true, "reasoning_effort": config.Effort,
+		// 流式默认不返回用量；要了它，[DONE] 前会多一个只有 usage 的 chunk，检查点与 D15 的成本才有数据。
+		"stream_options": map[string]bool{"include_usage": true}}
 	// 0表示使用供应商默认值，不在客户端把推理与回答一起截在4096。
 	if output > 0 {
 		body["max_completion_tokens"] = output
@@ -85,6 +91,7 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		// 只发给本机代理，不发给供应商：第三方 API 用不上它（Claude Code 默认也只对自家 API 发送）。
 		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(request.Header))
 	}
+	start := time.Now()
 	client := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
@@ -109,26 +116,42 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		}
 		return Reply{}, fmt.Errorf("模型API返回HTTP %d", response.StatusCode)
 	}
-	var result struct {
-		Usage   *Usage `json:"usage"`
-		Choices []struct {
-			Message      Message `json:"message"`
-			FinishReason string  `json:"finish_reason"`
-		} `json:"choices"`
+	// 上限按原始流算：每个 chunk 都带一层 JSON 外壳，同样的回答比非流式响应大很多。
+	scanner := bufio.NewScanner(io.LimitReader(response.Body, 32<<20))
+	scanner.Buffer(make([]byte, 64*1024), 2<<20)
+	var stream Stream
+	reply := Reply{}
+	for scanner.Scan() {
+		content, reasoning, err := stream.Add(scanner.Text())
+		if err != nil {
+			return Reply{Usage: stream.Usage}, err
+		}
+		if content == "" && reasoning == "" {
+			continue
+		}
+		if reply.FirstToken == 0 {
+			reply.FirstToken = time.Since(start)
+		}
+		if onDelta != nil {
+			onDelta(content, reasoning)
+		}
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result); err != nil {
-		return Reply{}, errors.New("模型响应不是有效JSON")
+	reply.Usage = stream.Usage
+	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			return reply, ctx.Err()
+		}
+		return reply, errors.New("模型流式响应读取中断")
 	}
-	reply := Reply{Usage: result.Usage}
-	if len(result.Choices) == 0 {
-		return reply, errors.New("模型没有返回消息")
+	if stream.Chunks == 0 {
+		return reply, errors.New("模型没有返回流式数据")
 	}
-	choice := result.Choices[0]
-	if choice.FinishReason != "stop" && choice.FinishReason != "tool_calls" {
+	// 流结束后再检查：finish_reason 只在最后出现，没出现说明流在中途断了。
+	if stream.FinishReason != "stop" && stream.FinishReason != "tool_calls" {
 		return reply, errors.New("模型响应被截断或未完成；请检查显式输出上限或服务端默认限制")
 	}
-	reply.Message = choice.Message
-	if len(reply.Message.ToolCalls) == 0 && (strings.TrimSpace(reply.Message.Content) == "" || choice.FinishReason == "tool_calls") {
+	reply.Message = stream.Message
+	if len(reply.Message.ToolCalls) == 0 && (strings.TrimSpace(reply.Message.Content) == "" || stream.FinishReason == "tool_calls") {
 		return reply, errors.New("模型没有返回回答或工具调用")
 	}
 	if !withTools && len(reply.Message.ToolCalls) > 0 {
@@ -200,8 +223,33 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 	// B0：一次模型调用是一个 modelCall Item。完整的请求与响应原文仍由观测台的代理记录，这里只给结构化摘要。
 	item := protocol.Item{ID: fmt.Sprintf("model-%d", n), Type: "modelCall", Data: map[string]any{"purpose": purpose, "number": n, "input_estimate": ContextTokens(history, withTools)}}
 	protocol.ItemStarted(TaskID, item)
-	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose)
+	// B1：主任务与摘要的增量实时发给界面（item/delta，只用于显示，权威结果仍是 item/completed 与检查点）；
+	// 主任务的正文同时边收边打印到终端。记忆辅助、评审这类调用的输出是给程序读的，不发增量。
+	var onDelta func(content, reasoning string)
+	printed := false
+	if purpose == "main" || purpose == "compact" {
+		onDelta = func(content, reasoning string) {
+			if reasoning != "" {
+				protocol.Notify("item/delta", map[string]any{"turn_id": TaskID, "item_id": item.ID, "purpose": purpose, "field": "reasoning", "delta": reasoning})
+			}
+			if content != "" {
+				protocol.Notify("item/delta", map[string]any{"turn_id": TaskID, "item_id": item.ID, "purpose": purpose, "field": "content", "delta": content})
+			}
+			if purpose == "main" && content != "" {
+				fmt.Print(content)
+				printed = true
+			}
+		}
+	}
+	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose, onDelta)
+	if printed {
+		fmt.Println()
+	}
 	done := map[string]any{"purpose": purpose, "number": n, "tool_calls": len(reply.Message.ToolCalls)}
+	if reply.FirstToken > 0 {
+		done["first_token_ms"] = reply.FirstToken.Milliseconds()
+		span.SetAttributes(attribute.Int64("agent.response.first_token_ms", reply.FirstToken.Milliseconds()))
+	}
 	if u := reply.Usage; u != nil {
 		done["usage"] = u
 	}

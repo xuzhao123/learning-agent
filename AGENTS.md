@@ -31,6 +31,7 @@
 - Day 12 沙箱用 bubblewrap + seccomp（纯 Go 生成 BPF）+ systemd-run cgroup，不用 Docker；每次 bash 调用一个新沙箱，工作目录 `.data/sandbox/<任务ID>`；默认断网，联网只经 agent 内的白名单代理，白名单只能由用户（`-net-allow` 或观测台审批）添加。安全验证用真实模型执行检查命令，不写测试文件。
 - Day 13 调用链用 OpenTelemetry Go SDK（版本须兼容 go.mod 的 Go 版本），属性按 GenAI 语义约定；每次交互一个 trace，同一对话用 gen_ai.conversation.id 归组；跨进程用 TRACEPARENT、traceparent 头与 MCP _meta。span 写 `.data/traces/<trace_id>.jsonl`，不提交；外部平台只通过 OTEL_* 环境变量接入；提示词与工具内容默认不采集。指标从 span 汇总，不引入 Prometheus。
 - B0 结构化协议：agent 以 `-app-server` 运行时 stdout 只走 JSON-RPC（一行一条），日志改走 stderr；观测台和 RunChild 是界面。界面需要的信息只读协议通知，不再解析终端文本；B0 之前的存档经页面的兼容层还原。审批请求（network/requestApproval）只能由界面上的人回答；没有界面时如实回答 unavailable。检查点不保存 `-app-server`。
+- B1 流式输出（用户要求）：模型请求一律 `stream: true` 并要 usage；拼接逻辑只有 `llm.Stream` 一份，agent 与观测台代理共用；截断等检查在流结束后对完整回复做，工具仍在整次回复结束后执行。`item/delta` 只发主任务与摘要，只用于显示；观测台代理逐行转发不缓冲，存档是拼回的完整响应，delta 不落盘。
 - 续聊每轮用新的检查点ID，以 `continues` 串成续接链，旧检查点不覆盖；`spawn_agent(task_id)` 只接受续接链上派出的子任务。浏览器与沙箱代理的出口判断共用 `internal/netguard`。
 - Day 15 指标的结局、耗时与成本以检查点为准，trace 只用于工具层归因；`go run . metrics` 只读 `.data/`，不请求模型。完成率不等于答对率，答对率要等 D16 的评测集与打分。
 - Day 16–17 评测集放 `eval/cases.jsonl`（提交，属于任务输入）：固定题目、参考答案与打分器，不写死模型回答或工具顺序；运行记录、人工归因备注与回放放 `.data/eval/`，不提交。打分先用确定性检查，开放题由与被测模型不同的供应商（默认 DeepSeek）三票评审；每个试次是一个新任务，经 `agent.RunChild` 执行，过程取自 B0 协议事件，结局与用量以检查点为准。留出题调试时不跑。回放验证从检查点分叉（`agent.ForkCheckpoint`），不改原检查点。观测台的“D16 评测”页面与 `go run . eval` 读写同一份记录，每个试次在观测台里是一条可打开的对话。对话的“归因”按钮：诊断读观测台重建的完整轨迹与当时的工具列表（不许编造轨迹外的事实），写评分标准并给出初判；失败时从那次决定的请求快照分叉（`agent.ForkSnapshot`），以“纠正 3 次 + 安慰剂 3 次”回放验证，结论以回放为准。

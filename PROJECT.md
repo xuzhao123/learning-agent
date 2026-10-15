@@ -10,7 +10,7 @@
 
 一个 Go 模块、一个入口（观测台需要登录，数据按租户分目录）：`go run .` 运行 agent，`go run . observe` 运行观测台，`go run . queue` 运行队列，`go run . metrics` 统计指标，`go run . eval` 跑评测与归因，`go run . audit` 查看并校验审计日志。一个 agent 进程执行一个任务；检索与记忆在任务进程内调用，观测台、队列和子 agent 通过子进程执行任务。
 
-已覆盖 Day 1–21 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱、OpenTelemetry 调用链、D15 指标采集、D16 评测集与回归、D17 失败归因与回放验证、D18–19 无害资料实验与工具权限边界、D20 高风险操作确认（含跨工具外发检查、结果日志与无进展检测）、D21 审计日志与第三周复盘；agent 与界面之间改为结构化协议（B0，仿 Codex app-server）。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。D18–19 按用户要求缩小为知识学习，不代表完成通用注入检测或外发防护。
+已覆盖 Day 1–21 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱、OpenTelemetry 调用链、D15 指标采集、D16 评测集与回归、D17 失败归因与回放验证、D18–19 无害资料实验与工具权限边界、D20 高风险操作确认（含跨工具外发检查、结果日志与无进展检测）、D21 审计日志与第三周复盘；agent 与界面之间改为结构化协议（B0，仿 Codex app-server）；模型请求改为流式（B1），观测台逐行转发并实时显示。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。D18–19 按用户要求缩小为知识学习，不代表完成通用注入检测或外发防护。
 
 ## 课程进度
 
@@ -41,6 +41,7 @@
 | Day 20：高风险确认 | 执行器按程序规则判断四类风险（删除记忆、MCP 声明的破坏性工具、含私有数据后的浏览器/MCP 外发、续跑重做），经 `tool/requestApproval` 只由界面上的人回答，没有界面或拒绝都不执行；私有来源存检查点并传给子 agent；每项调用结束写结果日志，续跑先取回；熔断改为 6 动作窗口，加结果指纹的无进展检测。DeepSeek 真实运行：外发拒绝（CLI）与允许（观测台接口）、子 agent 继承、删除记忆拒绝、kill -9 续跑取回日志、无进展提示 2/2 触发且 4 次正常任务无误触发；方舟仍 403。多租户见下一行 | 待用户复述：确认为什么不能交给模型、粗粒度标记的取舍 | [Day 20 笔记](docs/day-20/day-20-notes.md)、[实践](docs/day-20/day-20-lab.md) |
 | Day 21：审计日志 | `.data/audit/audit.jsonl` 只追加、哈希链、文件锁、写后 fsync；agent 记任务起止、确认请求与程序决定、有副作用的执行、续跑取回与回填、联网请求与决定、记忆变更，观测台记人的点击；参数只存哈希；确认与联网审批写不进审计就不执行。`go run . audit` 与观测台审计页只读校验。DeepSeek 真实运行：三进程并发写链完整、观测台批准链四条参数哈希一致、记忆写入与人工删除、子 agent 记录按父任务归组；改内容、删一条、重算单条哈希三种篡改均被发现。第三周复盘已完成 | 待用户复述：调用链为何不能兼作审计、哈希链发现不了哪种篡改 | [Day 21 笔记](docs/day-21/day-21-notes.md)、[实践](docs/day-21/day-21-lab.md)、[复盘](docs/week-03-review.md) |
 | 扩展：结构化协议（B0） | `-app-server` 模式，JSON-RPC 双向：turn/start、turn/interrupt、item/turn 通知、联网审批请求；观测台与 RunChild 作为界面，去掉终端文本解析；审批当轮生效、续接链、队列、页面新旧存档均用真实模型验证 | 待反馈 | [B0 实践](docs/bonus-protocol/protocol-lab.md) |
+| 扩展：流式输出（B1） | 所有模型请求 `stream: true` + `include_usage`，`llm.Stream` 按 index 重组工具调用，流结束后再做截断与空回答检查；主任务正文边收边打印；协议加 `item/delta`（只发主任务与摘要），completed 带首字延迟；观测台代理逐行转发并 flush，用同一份拼接逻辑存档完整响应（记 chunk 数与首字延迟），delta 只在内存不落盘；页面实时显示推理与正文。DeepSeek 真实运行：命令行工具参数重组与用量、协议 220 条 delta 拼接与答案一致、观测台 delta 先于 response 且存档无 delta、存档续聊正确、生成中停止记 499 与 cancelled；方舟仍 403 | 待用户复述：流式为什么不让工具更早执行、代理为什么不能整段缓冲 | [B1 笔记](docs/bonus-streaming/streaming-notes.md)、[实践](docs/bonus-streaming/streaming-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
 | 扩展：子 agent | 独立上下文、子进程、权限继承、幂等与父任务恢复已有验证 | 用户追问换措辞导致哈希失配，回答见 [Q15](docs/deep-questions.md#q15)；复述待确认 | [子 agent 实践](docs/bonus-subagents/subagents-lab.md) |
 | 扩展：模型路由 | 方舟/DeepSeek 手动路由、工具调用、子 agent 继承与续聊已有记录 | 待反馈 | [路由实践](docs/bonus-routing/routing-lab.md) |
@@ -78,7 +79,8 @@
 | 审计 | 没有锚定，能写文件的人重算整条链本地发现不了；命令行运行的记录没有用户名（只有观测台发起的才有）；单文件无轮转与保留期限；参数哈希未加盐；没有定期校验与告警 | 定期把最新哈希存到别处；认证后记录用户 ID；轮转、归档与校验告警，见 [Day 21 实践](docs/day-21/day-21-lab.md#5-当前没有覆盖的范围) |
 | 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span（D15 指标已改以检查点为准）；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；长 span 开始时落记录，见 [Q19](docs/deep-questions.md#q19)；告警按评测课程补齐 |
 | 评测 | 主分 17 题，95% 区间约 ±13 个百分点；评审模型与人工判断没有系统校准；留出 4 题已在修正打分器时看过；一次回归约 20 分钟，未接 CI | 从真实失败持续补题与新留出题；抽样做评审一致率；冒烟子集接 CI（进阶计划 B6） |
-| 结构化协议 | 观测台重启后不能接管正在运行的 agent；模型请求非流式，Item 没有 delta；旧存档仍靠兼容层的正则还原 | 事件落盘与按序号补读（进阶计划 B2/B3）；流式（B1） |
+| 结构化协议 | 观测台重启后不能接管正在运行的 agent；旧存档仍靠兼容层的正则还原 | 事件落盘与按序号补读（进阶计划 B2/B3） |
+| 流式输出 | delta 不落盘，观测台中途重启看不到半段；存档是按 chunk 还原的完整响应，不是逐字原文；只解析 OpenAI 兼容格式；首字延迟未进 `go run . metrics`；取消后上游中止时延未单独测量 | 指标汇总 TTFT；其他协议适配 |
 
 ## 理解确认
 

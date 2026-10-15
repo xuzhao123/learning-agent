@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"learning-agent/internal/audit"
+	"learning-agent/internal/llm"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tenant"
@@ -44,33 +45,35 @@ const ragLabTitle = "Day 4 检索实验（10题无检索 / 有检索对比）"
 
 // 观测系统不读取 agent 源码：它代理模型请求、转发终端输出，从协议数据还原过程。
 type event struct {
-	Seq       int             `json:"seq"`
-	Time      time.Time       `json:"time"`
-	Kind      string          `json:"kind"` // request、response、stdout、stderr、exit
-	Call      int             `json:"call,omitempty"`
-	Status    int             `json:"status,omitempty"`
-	Millis    int64           `json:"ms,omitempty"`
-	Body      json.RawMessage `json:"body,omitempty"`
-	Text      string          `json:"text,omitempty"`
-	Embedding string          `json:"embedding,omitempty"`
-	Purpose   string          `json:"purpose,omitempty"` // 请求用途：main、compact、memory_contextualize、memory_rerank
-	Memory    bool            `json:"memory,omitempty"`
-	MemoryTTL string          `json:"memory_ttl,omitempty"`
-	Skills    []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
-	MCP       []mcpServer     `json:"mcp,omitempty"`
-	Subagents bool            `json:"subagents,omitempty"` // 本对话允许 spawn_agent，续聊沿用
-	Browser   bool            `json:"browser,omitempty"`   // 本对话启用浏览器工具，续聊沿用
-	Provider  string          `json:"provider,omitempty"`  // 本对话的模型供应商（-provider），续聊沿用
-	Bash      bool            `json:"bash,omitempty"`      // 本对话启用 bash 沙箱，续聊沿用
-	NetAllow  []string        `json:"net_allow,omitempty"` // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
-	Task      string          `json:"task,omitempty"`      // 发出这次请求的 agent 任务ID（X-Agent-Task）
-	Sub       bool            `json:"sub,omitempty"`       // 请求来自子 agent：不进入父对话流、不参与续聊恢复
-	Trace     string          `json:"trace,omitempty"`     // D13：start/continue 上记这次交互的 trace_id
-	Span      string          `json:"span,omitempty"`      // D13：request 上记 agent 的 chat span ID（来自 traceparent 头）
-	Method    string          `json:"method,omitempty"`    // B0：notify / approval 事件的协议方法名，参数在 Body
-	RPC       int64           `json:"rpc,omitempty"`       // B0：agent 发来的请求ID（approval），回复时带回
-	Protocol  bool            `json:"protocol,omitempty"`  // B0：start/continue 上标记这一轮经协议运行；之前的存档没有，页面据此启用旧存档兼容
-	Eval      string          `json:"eval,omitempty"`      // D16：由评测发起的试次（评测ID · 用例 #序号），对话列表里不显示
+	Seq        int             `json:"seq"`
+	Time       time.Time       `json:"time"`
+	Kind       string          `json:"kind"` // request、response、stdout、stderr、exit、notify、delta 等
+	Call       int             `json:"call,omitempty"`
+	Status     int             `json:"status,omitempty"`
+	Millis     int64           `json:"ms,omitempty"`
+	Body       json.RawMessage `json:"body,omitempty"`
+	Text       string          `json:"text,omitempty"`
+	Embedding  string          `json:"embedding,omitempty"`
+	Purpose    string          `json:"purpose,omitempty"` // 请求用途：main、compact、memory_contextualize、memory_rerank
+	Memory     bool            `json:"memory,omitempty"`
+	MemoryTTL  string          `json:"memory_ttl,omitempty"`
+	Skills     []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
+	MCP        []mcpServer     `json:"mcp,omitempty"`
+	Subagents  bool            `json:"subagents,omitempty"`      // 本对话允许 spawn_agent，续聊沿用
+	Browser    bool            `json:"browser,omitempty"`        // 本对话启用浏览器工具，续聊沿用
+	Provider   string          `json:"provider,omitempty"`       // 本对话的模型供应商（-provider），续聊沿用
+	Bash       bool            `json:"bash,omitempty"`           // 本对话启用 bash 沙箱，续聊沿用
+	NetAllow   []string        `json:"net_allow,omitempty"`      // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
+	Task       string          `json:"task,omitempty"`           // 发出这次请求的 agent 任务ID（X-Agent-Task）
+	Sub        bool            `json:"sub,omitempty"`            // 请求来自子 agent：不进入父对话流、不参与续聊恢复
+	Trace      string          `json:"trace,omitempty"`          // D13：start/continue 上记这次交互的 trace_id
+	Span       string          `json:"span,omitempty"`           // D13：request 上记 agent 的 chat span ID（来自 traceparent 头）
+	Method     string          `json:"method,omitempty"`         // B0：notify / approval 事件的协议方法名，参数在 Body
+	RPC        int64           `json:"rpc,omitempty"`            // B0：agent 发来的请求ID（approval），回复时带回
+	Chunks     int             `json:"chunks,omitempty"`         // B1：流式响应的 chunk 数；Body 是按 chunk 拼回的完整响应
+	FirstToken int64           `json:"first_token_ms,omitempty"` // B1：从转发请求到收到第一段正文或推理的毫秒数
+	Protocol   bool            `json:"protocol,omitempty"`       // B0：start/continue 上标记这一轮经协议运行；之前的存档没有，页面据此启用旧存档兼容
+	Eval       string          `json:"eval,omitempty"`           // D16：由评测发起的试次（评测ID · 用例 #序号），对话列表里不显示
 }
 
 type run struct {
@@ -989,6 +992,10 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 		var response *http.Response
 		if response, err = http.DefaultClient.Do(upstream); err == nil {
 			defer response.Body.Close()
+			if response.StatusCode == http.StatusOK && strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+				s.relayStream(w, req, r, response, event{Kind: "response", Call: call, Status: response.StatusCode, Purpose: purpose, Task: task, Sub: sub}, start)
+				return
+			}
 			data, readErr := io.ReadAll(response.Body)
 			r.add(event{Kind: "response", Call: call, Status: response.StatusCode, Millis: time.Since(start).Milliseconds(), Body: raw(data), Purpose: purpose, Task: task, Sub: sub})
 			if readErr == nil {
@@ -1009,6 +1016,46 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	http.Error(w, err.Error(), http.StatusBadGateway)
 }
 
+// B1：流式响应边收边转发，每行原样写给 agent 并立刻 flush；整段缓冲再转发，agent 就看不到流式了。
+// 转发的同时用 agent 的同一份拼接逻辑（llm.Stream）还原完整响应：存档仍是 choices[0].message 的结构，
+// 页面、续聊恢复和归因不必区分流式与非流式。逐个 chunk 的原文不留档，只记 chunk 数与首字延迟。
+func (s *server) relayStream(w http.ResponseWriter, req *http.Request, r *run, response *http.Response, e event, start time.Time) {
+	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(response.StatusCode)
+	flusher, _ := w.(http.Flusher)
+	var stream llm.Stream
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64*1024), 2<<20)
+	var err error
+	for scanner.Scan() {
+		line := scanner.Text()
+		if _, err = io.WriteString(w, line+"\n"); err != nil {
+			break // agent 断开了（停止按钮、超时）
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// 解析失败不影响转发：判断这次回复能不能用是 agent 的事，存档只是尽量还原。
+		if content, reasoning, _ := stream.Add(line); (content != "" || reasoning != "") && e.FirstToken == 0 {
+			e.FirstToken = time.Since(start).Milliseconds()
+		}
+	}
+	if err == nil {
+		err = scanner.Err()
+	}
+	e.Millis, e.Chunks = time.Since(start).Milliseconds(), stream.Chunks
+	e.Body, _ = json.Marshal(stream.Response())
+	if err != nil {
+		// 流在中途断了：已转发的部分 agent 收到了，这里如实记下断开原因，499 同样表示 agent 先取消。
+		e.Text = err.Error()
+		if req.Context().Err() != nil {
+			e.Status = 499
+		}
+	}
+	r.add(e)
+}
+
 func raw(data []byte) json.RawMessage {
 	if json.Valid(data) {
 		return data
@@ -1023,7 +1070,7 @@ func (r *run) add(e event) {
 	defer r.mu.Unlock()
 	e.Seq, e.Time = len(r.events)+1, time.Now().UTC() // 统一存 UTC：换时区启动观测台、或别人打开页面，时间都不会错
 	r.events = append(r.events, e)
-	if line, err := json.Marshal(e); err == nil {
+	if line, err := json.Marshal(e); err == nil && e.Kind != "delta" {
 		r.file.Write(append(line, '\n'))
 	}
 	if e.Kind == "exit" {
@@ -1447,5 +1494,22 @@ func (r *run) handle(m protocol.Message) {
 		r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})
 		return
 	}
-	r.add(event{Kind: "notify", Method: m.Method, Body: m.Params})
+	kind := "notify"
+	if isDelta(m) {
+		kind = "delta"
+	}
+	r.add(event{Kind: kind, Method: m.Method, Body: m.Params})
+}
+
+// B1：item/delta（子 agent 的经 subagent/message 包一层）只给正在看的页面实时显示，不写进运行记录：
+// 一次回答会有成百上千条，完整内容已在 response 事件里。重新打开已结束的对话时直接显示完整回答。
+func isDelta(m protocol.Message) bool {
+	for m.Method == "subagent/message" {
+		var p struct{ Message protocol.Message }
+		if json.Unmarshal(m.Params, &p) != nil {
+			return false
+		}
+		m = p.Message
+	}
+	return m.Method == "item/delta"
 }
