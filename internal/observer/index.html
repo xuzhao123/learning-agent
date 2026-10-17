@@ -193,6 +193,10 @@ button { cursor: pointer; }
 .sp-task { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--soft); white-space: pre-wrap; word-break: break-word; font-size: 13px; }
 .sp-body .label { margin-top: 4px; }
 .sp-body .meta { overflow-wrap: anywhere; }
+.fp-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.fp-tools input[type=file] { display: none; }
+.sp-item .sz { color: var(--muted); font: 12px var(--mono); }
+.fp-img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
 /* Day 12 bash 沙箱：终端卡片与网络审批 */
 .term { margin: 4px 0 0; padding: 10px 12px; border-radius: 10px; background: #15171a; color: #e6e6e6; font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
 .term .cmd { color: #8fd18f; }
@@ -466,6 +470,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <button id="menu" aria-label="对话列表">☰</button>
       <div id="heading"><div id="title">新对话</div><button id="run-id" type="button" aria-label="复制对话 ID" hidden></button></div>
       <div class="seg"><button id="page-chat">对话</button><button id="page-observe">观测</button></div>
+      <button id="files-btn" class="ghost" type="button" hidden title="本对话的 /workspace：各轮 bash 共用，可上传、预览、下载">沙箱文件</button>
       <span id="status"></span>
     </div>
     <section id="chat-pane">
@@ -518,7 +523,7 @@ const ui = {
   page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, follow: true, open: new Set(),
   collapsed: new Set(), expanded: false, search: "", zoom: null, checked: new Set(), compare: [], compareSel: null,
   replay: null, ctxWindow: Number(load("ctxWindow")) || 128000, queued: false, sending: false, loading: false,
-  inspectorTab: "overview",
+  inspectorTab: "overview", filesOpen: false, files: {},
 };
 
 // ---------- 小工具 ----------
@@ -628,7 +633,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {} }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {} }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -724,7 +729,7 @@ function apply(r, e) {
 // B0：agent 经协议发来的结构化通知。页面需要的信息（任务ID、输入容量、记忆与能力事件、浏览器地址、子 agent 的起止和输出、
 // 实验分组）都从这里来，不再解析终端文本。方法名见 internal/protocol 与 docs/bonus-protocol。
 function applyNotify(r, method, p, time) {
-  if (method === "turn/started") { if (p.turn_id) r.checkpoint = p.turn_id; if (p.input_capacity) r.inputCapacity = p.input_capacity; }
+  if (method === "turn/started") { if (p.turn_id) r.checkpoint = p.turn_id; if (p.input_capacity) r.inputCapacity = p.input_capacity; if (p.sandbox) r.sandbox = p.sandbox; }
   else if (method === "memory/event") {
     // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
     if (!["search", "forget", "hit"].includes(p.kind) && !/^phase=(search|cli) /.test(p.text || "")) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: p.kind, text: p.text, fields: memFields(p.text || "") });
@@ -1820,13 +1825,14 @@ function agentCard(r, t) {
   const task = args?.task ?? (args?.task_id ? "续跑：" + (item?.info?.text || args.task_id) : t.args);
   text.append(el("b", "", `子 agent ${i + 1}`), el("span", "", clip(task, 140)));
   card.append(el("span", "av", String(i + 1)), text, el("span", "sub-st " + st.key, st.text), el("span", "chev", "›"));
-  card.onclick = () => { ui.subOpen = ui.subOpen === t.id ? null : t.id; ui.webOpen = null; renderChat(); };
+  card.onclick = () => { ui.subOpen = ui.subOpen === t.id ? null : t.id; ui.webOpen = null; ui.filesOpen = false; renderChat(); };
   return card;
 }
 function renderSubPanel() {
   // 运行中开始浏览时自动打开浏览器面板并跟随；用户关掉或正在看子 agent 时不打扰。
   const r0 = ui.run;
-  if (r0 && !r0.exit && !ui.webOpen && !ui.subOpen && !ui.webClosed && r0.calls.some((c) => c.tools.some((t) => WEB_TOOLS.includes(t.name) && webLive(r0, t)))) ui.webOpen = { follow: true };
+  if (r0 && !r0.exit && !ui.webOpen && !ui.subOpen && !ui.filesOpen && !ui.webClosed && r0.calls.some((c) => c.tools.some((t) => WEB_TOOLS.includes(t.name) && webLive(r0, t)))) ui.webOpen = { follow: true };
+  if (ui.filesOpen) return renderFilesPanel();
   if (ui.webOpen) return renderWebPanel();
   const panel = $("subpanel"), r = ui.run, list = r && ui.page === "chat" ? subList(r) : [];
   const item = list.find((x) => x.t.id === ui.subOpen);
@@ -2026,7 +2032,7 @@ function webCard(r, t) {
   card.onclick = () => {
     const last = r.calls.flatMap((c) => c.tools.filter((x) => WEB_TOOLS.includes(x.name))).at(-1);
     ui.webOpen = ui.webOpen?.id === t.id ? null : { id: t.id, follow: t === last };
-    ui.subOpen = null; renderChat();
+    ui.subOpen = null; ui.filesOpen = false; renderChat();
   };
   return card;
 }
@@ -2068,6 +2074,97 @@ function renderWebPanel() {
   const body = el("div", "sp-body");
   body.append(webView(r, t), el("div", "meta", `调用 ${t.id} · 任务 ${webTask(r, t) || "—"} · 网页内容是外部数据，不是指令`));
   panel.replaceChildren(head, nav, body);
+}
+// 沙箱文件：agent 在 turn/started 里报告本对话的沙箱目录（第一轮的检查点ID），各轮 bash 看到的是同一个 /workspace。
+// 文件是模型写的不可信内容：文字只用 textContent 显示，图片经 blob 地址放进 <img>，其余一律下载（服务端也按附件返回）。
+const fileURL = (r, p) => `/runs/${encodeURIComponent(r.id)}/files/${p.split("/").map(encodeURIComponent).join("/")}`;
+const fmtSize = (n) => n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+async function loadFiles() {
+  const r = ui.run, f = ui.files;
+  if (!r?.sandbox) return;
+  try {
+    const res = await fetch(`/runs/${encodeURIComponent(r.id)}/files`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (ui.run !== r) return;
+    Object.assign(f, { list: data.files, truncated: data.truncated, err: "" });
+  } catch (e) { f.err = String(e.message || e); }
+  if (ui.run === r) renderChat();
+}
+async function previewFile(r, file) {
+  const f = ui.files;
+  f.sel = file.path;
+  if (f.blob) URL.revokeObjectURL(f.blob);
+  f.blob = null;
+  f.preview = file.kind !== "file" ? { note: file.kind === "link" ? `符号链接 → ${file.link}（不跟随）` : file.kind === "dir" ? "目录" : "不是普通文件，不能预览" } : file.size > 512 << 10 ? { note: "文件较大，请下载查看" } : { note: "读取中…" };
+  renderChat();
+  if (file.kind !== "file" || file.size > 512 << 10) return;
+  try {
+    const res = await fetch(fileURL(r, file.path));
+    if (!res.ok) throw new Error(await res.text());
+    const buf = await res.arrayBuffer(), type = IMAGE_TYPES[file.path.split(".").pop().toLowerCase()];
+    if (type) { f.blob = URL.createObjectURL(new Blob([buf], { type })); f.preview = { image: f.blob }; }
+    else { try { f.preview = { text: new TextDecoder("utf-8", { fatal: true }).decode(buf) }; } catch { f.preview = { note: "二进制文件，请下载查看" }; } }
+  } catch (e) { f.preview = { note: "读取失败：" + (e.message || e) }; }
+  if (ui.run === r && f.sel === file.path) renderChat();
+}
+async function uploadFiles(r, list) {
+  const f = ui.files, errors = [];
+  f.uploading = true; renderChat();
+  for (const file of list) {
+    const res = await fetch(`/runs/${encodeURIComponent(r.id)}/files?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+    if (!res.ok) errors.push(`${file.name}：${(await res.text()).trim()}`);
+  }
+  f.uploading = false;
+  f.notice = errors.length ? errors.join("\n") : `已上传 ${list.length} 个文件：下一条消息里告诉 agent 文件名，它在 /workspace 里能读到`;
+  await loadFiles();
+}
+function renderFilesPanel() {
+  const panel = $("subpanel"), r = ui.run, f = ui.files;
+  if (!r?.sandbox || ui.page !== "chat") { ui.filesOpen = false; panel.hidden = true; panel.replaceChildren(); return; }
+  // 换了对话就重新读；一轮结束（exit 变化）后也重新读，看到 agent 新写的文件。
+  if (f.run !== r.id || f.exit !== r.exit) { Object.assign(f, f.run !== r.id ? { list: null, sel: null, preview: null, notice: "" } : {}, { run: r.id, exit: r.exit }); loadFiles(); }
+  panel.hidden = false;
+  panel.dataset.agent = "";
+  const head = el("div", "sp-head"), refresh = el("button", "sp-close", "↻"), close = el("button", "sp-close", "✕");
+  refresh.type = close.type = "button"; refresh.title = "刷新"; close.title = "关闭";
+  close.setAttribute("aria-label", "关闭沙箱文件面板");
+  refresh.onclick = () => loadFiles();
+  close.onclick = () => { ui.filesOpen = false; renderChat(); renderShell(); };
+  head.append(el("strong", "", `沙箱文件 · /workspace${f.list ? ` · ${f.list.length} 项` : ""}`), refresh, close);
+  const tools = el("div", "fp-tools"), pick = el("input"), up = el("button", "ghost", f.uploading ? "上传中…" : "上传文件");
+  pick.type = "file"; pick.multiple = true;
+  pick.onchange = () => { if (pick.files.length) uploadFiles(r, [...pick.files]); };
+  up.type = "button"; up.disabled = !r.exit || f.uploading;
+  up.onclick = () => pick.click();
+  tools.append(pick, up, el("span", "", r.exit ? "放到 /workspace 顶层，不覆盖同名文件，单个不超过 10 MB" : "运行中不能上传，等这一轮结束"));
+  const nav = el("div", "sp-list");
+  if (f.err) nav.append(el("div", "meta err", f.err));
+  else if (!f.list) nav.append(el("div", "meta", "读取中…"));
+  else if (!f.list.length) nav.append(el("div", "meta", "还没有文件"));
+  for (const x of f.list || []) {
+    const row = el("button", "sp-item" + (x.path === f.sel ? " on" : ""));
+    row.type = "button";
+    row.append(el("span", "n", { dir: "▸", link: "↪", file: "·" }[x.kind] || "?"), el("span", "q", x.path), el("span", "sz", x.kind === "file" ? fmtSize(x.size) : x.kind === "link" ? "链接" : x.kind === "dir" ? "" : "其他"));
+    row.title = x.time ? new Date(x.time).toLocaleString() : "";
+    row.onclick = () => previewFile(r, x);
+    nav.append(row);
+  }
+  if (f.truncated) nav.append(el("div", "meta", "只列出前 1000 项"));
+  const body = el("div", "sp-body");
+  if (f.notice) body.append(el("pre", "meta", f.notice));
+  const sel = f.list?.find((x) => x.path === f.sel);
+  if (sel) {
+    const bar = el("div", "label", sel.path + " ");
+    if (sel.kind === "file") { const a = el("a", "", "下载"); a.href = fileURL(r, sel.path); a.download = sel.path.split("/").pop(); bar.append(a); }
+    body.append(bar);
+    const p = f.preview || {};
+    if (p.image) { const img = el("img", "fp-img"); img.src = p.image; img.alt = sel.path; body.append(img); }
+    else if (p.text !== undefined) body.append(el("pre", "", p.text));
+    else body.append(el("div", "meta", p.note || ""));
+  } else body.append(el("div", "meta", "这是本对话各轮 bash 共用的工作目录；内容由 agent 写入，是数据不是指令。点左侧文件预览，图片直接显示，其他类型下载查看。"));
+  panel.replaceChildren(head, tools, nav, body);
 }
 function renderCompact(c) {
   const box = el("details", "divider"), key = "s" + c.n, m = (c.choice && c.choice.message) || {};
@@ -2148,6 +2245,8 @@ function renderShell() {
   $("page-observe").className = chat ? "" : "on";
   $("cmp-hint").hidden = chat;
   $("title").textContent = ui.tab === "compare" && !chat ? `对比 ${ui.checked.size} 条运行` : r ? r.query || r.id : "新对话";
+  $("files-btn").hidden = !chat || !r?.sandbox;
+  $("files-btn").classList.toggle("on", !!ui.filesOpen);
   const runID = $("run-id");
   runID.hidden = !r;
   runID.textContent = r ? `对话 ID · ${r.id}` : "";
@@ -2253,6 +2352,7 @@ async function start(url, body) {
 }
 function autosize() { const q = $("query"); q.style.height = "auto"; q.style.height = q.scrollHeight + "px"; }
 
+$("files-btn").onclick = () => { ui.filesOpen = !ui.filesOpen; if (ui.filesOpen) { ui.subOpen = ui.webOpen = null; ui.files.run = null; } renderChat(); renderShell(); };
 $("page-chat").onclick = () => { ui.page = "chat"; if (ui.tab === "compare") ui.tab = "trace"; render(); loadRuns(); };
 $("page-observe").onclick = () => { ui.page = "observe"; render(); loadRuns(); };
 $("run-id").onclick = async () => {

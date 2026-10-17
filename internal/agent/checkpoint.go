@@ -178,6 +178,18 @@ func Lineage(id string) []string {
 	return chain
 }
 
+// ConversationRoot 是本轮所在对话的第一轮检查点ID：沙箱工作目录按它存放，续聊各轮看到同一批文件。
+// 新的一轮从上一轮（Continues）往前找；续跑时本轮的检查点已经存在，从它往前找。
+// 子 agent、回放分叉没有续接关系，各自就是起点。
+func ConversationRoot() string {
+	start := CheckpointID
+	if Resume == nil && Continues != "" {
+		start = Continues
+	}
+	chain := Lineage(start)
+	return chain[len(chain)-1]
+}
+
 // Fork 记录回放验证的来源。
 type Fork struct {
 	From   string `json:"from"`

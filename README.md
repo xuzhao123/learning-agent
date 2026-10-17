@@ -179,7 +179,7 @@ go build -o bin/learning-agent .
 | `-private-input` | false | D20：任务输入已含私有数据，外发类工具执行前要确认；父 agent 派出子任务时自动加上，一般不手动使用 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
 | `-provider` | ark | 模型路由：`ark`（豆包，方舟）或 `deepseek`；子 agent 继承，续跑沿用 |
-| `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux） |
+| `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux）；工作目录按对话保留，续聊各轮共用，观测台可上传、下载 |
 | `-bash-project-ro` | false | 配合 `-bash`：项目只读挂到 `/project`（`.env`、`.data`、`.git`、`bin` 除外） |
 | `-net-allow` | 空 | 配合 `-bash`：沙箱可经代理访问的域名（含子域名，可重复），由用户批准后添加 |
 | `-browser` | false | Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料；环境变量 `CHROME_PATH` 指定浏览器，系统不支持 Chrome 沙箱时设 `CHROME_NO_SANDBOX=1` |

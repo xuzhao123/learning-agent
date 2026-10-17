@@ -474,13 +474,14 @@ func run() error {
 	config.Effort = *effort
 	fmt.Printf("Model: provider=%s model=%s upstream=%s\n", config.Provider, config.Model, config.Upstream)
 	// B0：一轮开始。界面从这里拿任务ID（检查点、浏览器画面目录都按它存放）、输入容量和 trace_id，不再从日志里解析。
+	sandboxID := "" // 启用 bash 时是本对话沙箱目录的名字（对话第一轮的检查点ID），界面按它列出沙箱文件
 	turnStarted := func(turn string) {
 		thread := telemetry.ConversationID
 		if thread == "" {
 			thread = turn
 		}
 		protocol.Notify("turn/started", map[string]any{"thread_id": thread, "turn_id": turn, "continues": agent.Continues, "resume": agent.Resume != nil,
-			"trace_id": root.SpanContext().TraceID().String(), "input_capacity": options.Capacity(), "provider": config.Provider, "model": config.Model, "pid": os.Getpid()})
+			"trace_id": root.SpanContext().TraceID().String(), "input_capacity": options.Capacity(), "provider": config.Provider, "model": config.Model, "pid": os.Getpid(), "sandbox": sandboxID})
 	}
 	if *contextLab || *ragLab {
 		turnStarted("")
@@ -566,8 +567,13 @@ func run() error {
 	if browser.Enabled {
 		browser.FrameDir = tenant.Here("browser", agent.CheckpointID)
 	}
-	// 沙箱工作目录按任务ID分开：同一任务的多次调用、续跑共用；子 agent 有自己的目录。
-	sandbox.Dir = tenant.Here("sandbox", agent.CheckpointID)
+	// 沙箱工作目录按对话分开：续聊各轮、续跑都用对话第一轮的检查点ID，文件在整个对话里保留；
+	// 子 agent 与回放分叉没有续接关系，各有自己的目录。
+	first := agent.ConversationRoot()
+	sandbox.Dir = tenant.Here("sandbox", first)
+	if sandbox.Enabled {
+		sandboxID = first
+	}
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	turnStarted(agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)

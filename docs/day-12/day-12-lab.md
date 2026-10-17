@@ -25,7 +25,7 @@ bash(command)
 | 设计点 | 本项目的选择 |
 | --- | --- |
 | 隔离工具 | bubblewrap + seccomp，与 Codex、Claude Code 在 Linux 上的路线相同；不需要 Docker |
-| 文件系统 | `/usr` 只读，`/etc` 只挂动态库缓存、证书、时区等，passwd/group/hosts 用生成的最小版本；`/workspace` = `.data/sandbox/<任务ID>`，同一任务的多次调用与续跑共用，子 agent 各有目录；`/tmp` 是 64MB 内存盘；最后把根目录改成只读 |
+| 文件系统 | `/usr` 只读，`/etc` 只挂动态库缓存、证书、时区等，passwd/group/hosts 用生成的最小版本；`/workspace` = `.data/sandbox/<对话第一轮的检查点ID>`，同一对话的各轮续聊、续跑共用，子 agent 与回放分叉各有目录（见 3.7）；`/tmp` 是 64MB 内存盘；最后把根目录改成只读 |
 | 看不到的 | 家目录、项目目录（默认）、`.env`、宿主机进程、宿主机的环境变量 |
 | 资源 | cgroup：内存 512M、不用 swap、CPU 100%、进程数 64；时长跟随 `-tool-timeout`；超时用 `systemctl --user kill` 按 cgroup 杀掉 |
 | 系统调用 | 纯 Go 拼出的经典 BPF：先查架构，再对黑名单返回 EPERM（没有 C 编译器，不用 libseccomp） |
@@ -162,6 +162,42 @@ No retry […]: reason=permanent attempts=1 error=页面请求了本机或内网
 
 起始地址是公网的 httpbin，Day 11 只检查起始地址时拦不住；现在跳转后的请求被 Fetch 拦截挡下。模型的判断和工具的拦截是两层独立的防线。
 
+### 3.7 对话级沙箱与文件进出
+
+最初工作目录按本轮的检查点ID分配。续聊每轮换新ID，所以第二轮看不到第一轮写的文件。现在改为按**续接链的起点**分配，一个对话一个工作目录，像托管型 agent 那样每个会话一台机器；观测台可以上传、预览、下载这个目录里的文件。
+
+**读代码**
+
+- [ConversationRoot](../../internal/agent/checkpoint.go)：新的一轮从上一轮（`-continues`）沿续接链往前找，续跑从本轮检查点往前找；子 agent 与 `ForkCheckpoint`/`ForkSnapshot` 的分叉没有续接关系，各自就是起点。
+- [main.go](../../main.go) 用它设置 `sandbox.Dir`，并在 `turn/started` 里多发一个 `sandbox` 字段（目录名）；工具描述和系统规则改成“整个对话内保留文件”。
+- [files.go](../../internal/observer/files.go)：观测台按 `turn/started` 报告的目录名读写，`GET /runs/{id}/files` 列出，`GET /runs/{id}/files/{path}` 下载，`POST /runs/{id}/files?name=` 上传；都先经 `runOf` 核对租户。
+
+这个目录里的东西是模型写的，观测台把它当不可信数据：
+
+| 风险 | 做法 |
+| --- | --- |
+| 模型建一个符号链接 `leak-env -> ../../../.env`：沙箱里它什么也指不到，但在宿主机上，从 `.data/sandbox/<ID>/` 往上三层正好是项目根目录 | 只经 `os.Root` 打开文件：解析到根目录外就报错，不跟出去 |
+| 模型建命名管道，观测台读它会一直阻塞 | 打开时带 `O_NONBLOCK`，再确认是普通文件 |
+| 模型写一个含脚本的 HTML，观测台按网页返回就会在登录后的页面源里执行 | 一律 `Content-Disposition: attachment`、`application/octet-stream`、`nosniff`；页面预览文本只用 `textContent`，图片经 blob 地址放进 `<img>` |
+| 上传覆盖模型的文件、写到目录外 | 只放顶层、不以点开头、不覆盖（`O_EXCL`），单个不超过 10 MB；运行中不接受 |
+
+上传是人对工作目录的改动，先写审计（`user_upload`，文件名和内容哈希），写不进就不上传；下载是只读操作，不记。
+
+**验证**（2026-10-15，DeepSeek，观测台接口，临时测试账号验证后已删除）：
+
+| 检查 | 结果 |
+| --- | --- |
+| 第一轮写 `notes.txt`，第二轮续聊问内容 | 第二轮原样读出；四轮 `turn/started` 的 `sandbox` 都是第一轮的检查点ID，没有按轮新建目录；第二轮私有标记为 `bash` |
+| 上传 `销售.csv` 后第三轮问城市数与平均分 | 3 个、87.67，正确 |
+| 同名再传、`../../x.csv`、`.bashrc`、跨站 Origin | 409、400、400、403 |
+| 租户账号对这条平台对话列表/下载/上传；未登录 | 都是 404；401 |
+| 模型建的 `leak-env -> ../../../.env`（宿主机上确实指向项目的 `.env`）、`abs-link -> /etc/hostname` | 列表里显示为链接；下载都是 404 |
+| 命名管道、目录 | 400，观测台没有卡住 |
+| `page.html` | 按附件下载，`application/octet-stream` + `nosniff` |
+| 第四轮派子 agent `ls -la /workspace` | 两个子 agent 的目录都是空的，看不到父对话的文件 |
+
+回放分叉用新目录这一条，只按代码确认（分叉检查点不带 `continues`），没有用真实回放运行验证。第四轮触发了上下文压缩，模型按摘要把前几轮的目标又做了一遍，这是摘要本身的行为，和本节改动无关。
+
 ## 4. 已知边界
 
 - 共享宿主机内核：内核漏洞可以逃出沙箱。需要 gVisor 或微虚拟机。
@@ -173,4 +209,8 @@ No retry […]: reason=permanent attempts=1 error=页面请求了本机或内网
 - 浏览器加 bash 时，浏览器仍是外发通道（打开带参数的 URL），没有审批；高风险操作确认在 Week 3。
 - 工作目录不限总大小（`/tmp` 限 64MB）；没有 systemd 用户会话时不做资源限制（会打印提示）。
 - 每次调用都是新的 shell，`cd`、环境变量不保留；后台进程活不过一次调用。
+- 对话沙箱的文件留到手动删除为止，没有总大小与保留期限；对话越长，积累的文件越多。
+- 回放分叉从空目录开始，不还原分叉那一刻的文件；依赖文件的任务，回放结论要打折扣。
+- 命令行从同一轮 `-continues` 两次会分出两条续接链，它们共用一个目录；观测台一条对话一次只跑一轮，不会出现。
+- 上传只到顶层、单个 10 MB、不覆盖；面板只列前 1000 项，不支持删除。
 - 只支持 Linux；macOS 需要 Seatbelt，没有实现。

@@ -9,6 +9,7 @@
 3. Linux 上一个轻量沙箱由哪几层组成？namespace、cgroup、seccomp 分别管什么？
 4. 沙箱需要联网时，怎样只放行指定的域名？
 5. 沙箱挡不住的风险有哪些？还需要哪些措施？
+6. 沙箱的工作目录应该跟着一次调用、一个任务还是一次会话？文件怎样安全地进出？
 
 ## 1. 为什么要一个 shell 工具
 
@@ -30,6 +31,40 @@
 
 - **在开发者自己的电脑上执行**（Codex CLI、Claude Code）：代码大多由用户自己发起，需要直接读写本机项目、每条命令都要快，通常用操作系统沙箱工具。
 - **在服务商的机器上执行别人的代码**（云端 agent、代码解释器、多租户平台）：完全不可信、多个用户共用硬件，用容器加 gVisor，或微虚拟机。
+
+### 2.1 围栏与独立机器：工作目录跟谁走
+
+上面两种场景对应两种完全不同的产品形态：
+
+| | 本地型：在真实目录外加围栏 | 托管型：每个会话一台独立机器 |
+| --- | --- | --- |
+| 代表 | Codex CLI、Claude Code 在本机运行 | 云端 agent（如 Manus）、代码解释器、云端编码任务 |
+| 命令在哪里执行 | 用户的电脑上，以用户身份，就在启动它的那个项目目录 | 服务商的虚拟机或容器里 |
+| 能看到什么 | 用户的真实文件 | 只有这台机器里的东西：克隆进去的仓库、用户上传的文件 |
+| 沙箱的作用 | 只做限制：大部分磁盘只读，项目目录可写，网络默认关闭或经代理按域名放行 | 整体隔离：机器本身就是边界，里面可以随意操作 |
+
+两者用的挂载原理相同，差别只在可写目录的来源：本地型把用户的项目目录绑定进去，托管型给每个会话一个新的空目录（或一台新虚拟机）。
+
+托管型还要决定**工作目录的生命周期**：
+
+- **按调用**：每条命令一个空目录。最干净，但模型没法“先写文件、再运行它”，几乎没法用。
+- **按任务**：一次任务内保留。用户追问时文件就没了，和用户心里“这是同一个对话”的直觉不符。
+- **按会话**：同一会话的每一轮都看到同一批文件。托管型 agent 普遍这样做：E2B 这类沙箱服务每个会话一台微虚拟机，会话内文件和安装的软件包一直保留，会话结束随机器销毁，除非先暂停做快照。
+
+按会话保留之后，有三件事要跟着处理：
+
+1. **派生出去的执行要单独的目录。** 子 agent 共用父会话的目录，就失去了“独立上下文”的意义；评测回放共用原会话的目录，会互相污染，回放结论也会失真。回放要么从空目录开始（结论不含文件的影响），要么在分叉点给目录拍快照；E2B 提供把运行中的沙箱整台分叉的功能，就是后一种。
+2. **私有数据的标记要跟着会话走。** 第一轮读进来的私有数据可能写在文件里，几轮之后再被外发；“这个会话碰过私有数据”的状态不能每轮清零。
+3. **磁盘要有配额和保留期限。** 生命周期越长，积累越多。
+
+### 2.2 文件进出：沙箱里的文件也是不可信内容
+
+用户需要把文件交给 agent，也需要拿回 agent 做出的东西。这时**宿主机上的程序要去读写沙箱的目录**，而目录里的东西是模型写的，模型的行为又可能被注入的内容左右。几个常见的坑：
+
+- **符号链接。** 链接只是一段路径文字。`leak -> ../../../.env` 在沙箱里什么也指不到，但宿主机上的程序从沙箱目录往上走三层，可能正好到达存放密钥的项目根目录。读写都要限制在目录内解析，例如 Go 1.24 起的 `os.Root`、Linux 的 `openat2(RESOLVE_BENEATH)`。
+- **特殊文件。** 命名管道、设备文件一打开就可能阻塞。只处理普通文件，打开时用非阻塞方式，再检查类型。
+- **在界面里渲染。** 模型写的 HTML、SVG 如果以网页形式从管理界面的同一个源返回，其中的脚本会带着登录态执行，这是存储型 XSS。下载一律按附件返回并禁止嗅探类型；预览只当纯文本显示，或者放到单独的域名下。
+- **上传。** 只接受一层文件名，拒绝 `..` 和隐藏文件，不覆盖已有文件，限制大小；这是人对工作目录的改动，应该进审计。
 
 ## 3. Linux 轻量沙箱的三层
 
@@ -127,12 +162,21 @@ namespace 限制“看得到什么”（文件、进程、网络）；cgroup 限
 **6. 沙箱里只有一个可写的工作目录，还有什么风险？**
 工作目录里的文件可能被删改；白名单内的域名可以外发数据；合法但有害的操作沙箱判断不了；共享内核的沙箱挡不住内核漏洞。
 
+**7. 托管型 agent 为什么要“一个会话一个工作目录”，而不是一个任务一个？**
+用户把同一会话的追问看作一件事：上一轮生成的文件，下一轮应该还在。按任务分配时，每轮续聊都从空目录开始。但子 agent、评测回放这类派生执行仍要用单独的目录，否则就失去了隔离，回放结论也会失真。
+
+**8. 宿主机程序读沙箱目录里的文件，为什么不能直接 `open(目录 + 文件名)`？**
+目录里的内容由模型控制。符号链接可以指向目录外（在宿主机上解析）、命名管道会让读取阻塞、HTML 在管理界面里渲染会执行脚本。要在目录内解析路径、只读普通文件、按附件返回。
+
 ## 参考
 
 - bubblewrap，[github.com/containers/bubblewrap](https://github.com/containers/bubblewrap)
 - Linux man pages：[namespaces(7)](https://man7.org/linux/man-pages/man7/namespaces.7.html)、[cgroups(7)](https://man7.org/linux/man-pages/man7/cgroups.7.html)、[seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html)、[landlock(7)](https://man7.org/linux/man-pages/man7/landlock.7.html)
 - Linux kernel，[Seccomp BPF](https://docs.kernel.org/userspace-api/seccomp_filter.html)
 - Anthropic，[Claude Code Sandboxing](https://code.claude.com/docs/en/sandboxing)
+- OpenAI，[Codex Sandboxing](https://developers.openai.com/codex/concepts/sandboxing)
+- E2B，[Sandbox persistence](https://e2b.dev/docs/sandbox/persistence)（暂停时保存文件系统与内存）、[Sandbox forking](https://docs.e2b.dev/sandbox/fork)
+- Go，[os.Root](https://pkg.go.dev/os#Root)；Linux man pages，[openat2(2)](https://man7.org/linux/man-pages/man2/openat2.2.html)
 - OpenAI Codex，[codex-rs/linux-sandbox](https://github.com/openai/codex)；第三方解读 [Codex CLI Sandbox Internals](https://codex.danielvaughan.com/2026/05/03/codex-cli-sandbox-internals-seatbelt-bubblewrap-landlock-windows-dacl/)
 - gVisor，[What is gVisor?](https://gvisor.dev/docs/)；Firecracker，[firecracker-microvm.github.io](https://firecracker-microvm.github.io/)
 - Simon Willison，[The lethal trifecta for AI agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)，2025

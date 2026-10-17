@@ -35,7 +35,7 @@ import (
 var (
 	Enabled   bool
 	ProjectRO bool   // -bash-project-ro：把项目目录只读挂到 /project（.env、.data、.git 除外）
-	Dir       string // 本任务的工作目录 .data/sandbox/<任务ID>，由 main 设置
+	Dir       string // 本对话的工作目录 .data/sandbox/<对话第一轮的检查点ID>，由 main 设置
 )
 
 // 资源上限：一次命令最多用这么多；时长由执行器的单次工具时限（-tool-timeout）控制。
@@ -48,7 +48,7 @@ const (
 )
 
 var Definitions = []map[string]any{
-	{"name": "bash", "description": "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。工作目录 /workspace 在本任务内保留文件；每次调用是新的 shell（cd 和环境变量不保留）。不能写其他位置，默认不能联网。", "parameters": llm.Parameters("command")},
+	{"name": "bash", "description": "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。工作目录 /workspace 在整个对话内保留文件（之前几轮写的、用户上传的都在）；每次调用是新的 shell（cd 和环境变量不保留）。不能写其他位置，默认不能联网。", "parameters": llm.Parameters("command")},
 	{"name": "request_network_access", "description": "请求用户允许沙箱访问一个域名（如 pypi.org）。由用户在界面上批准：用户当场批准时本轮接下来就能访问；没有界面或用户未答复时返回 pending。", "parameters": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -63,7 +63,7 @@ var Definitions = []map[string]any{
 var ApprovalWait = 4 * time.Minute
 
 func Rules() string {
-	rule := "\n可以用 bash 在 Linux 沙箱里执行命令：工作目录 /workspace（本任务内保留文件），每次调用是新的 shell；只能写 /workspace 和 /tmp；内存、进程数和时长有限。"
+	rule := "\n可以用 bash 在 Linux 沙箱里执行命令：工作目录 /workspace（整个对话内保留文件，包括之前几轮写的和用户上传的），每次调用是新的 shell；只能写 /workspace 和 /tmp；内存、进程数和时长有限。"
 	if ProjectRO {
 		rule += "项目目录只读挂在 /project。"
 	}
