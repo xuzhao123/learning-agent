@@ -158,6 +158,8 @@ ready → model_pending → model_replied
 - OpenAI，[A practical guide to building agents](https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf)（2025，PDF）：何时值得用 Agent、单 Agent 与多 Agent 编排、护栏。
 - HumanLayer，[12-factor agents](https://github.com/humanlayer/12-factor-agents)：把 Agent 当普通软件管理：自己掌控循环、上下文与状态，和本项目“手写 loop”的思路一致。
 
-本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Week 1 复盘](../docs/week-01-review.md)
+- OpenAI，[Unrolling the Codex agent loop](https://openai.com/index/unrolling-the-codex-agent-loop)（2026）与 Anthropic，[How Claude Code works](https://code.claude.com/docs/en/how-claude-code-works)：两家编码 agent 对 harness 的说明，分层对照见 Day 22。
+
+本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Week 1 复盘](../docs/week-01-review.md) · [Day 22：Harness 参考架构](../docs/day-22/day-22-notes.md)
 
 [学习目录](README.md) · [下一篇：模型调用与执行循环](02-models-and-loop.md) · [术语表](TERMS.md)

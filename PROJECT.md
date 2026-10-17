@@ -14,7 +14,7 @@
 
 ## 下一阶段
 
-Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。下一步：D22 harness 全景与成功标准。
+Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22 已完成，下一步：D23 编码工具集。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。
 
 ## 课程进度
 
@@ -44,6 +44,7 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 | Day 20 补充：多租户与登录 | 数据按租户分目录（检查点、记忆、沙箱、浏览器、对话存档、审计），agent 用 `-tenant`，子 agent、续跑、队列跟随；观测台真正登录（PBKDF2、会话 Cookie、失败锁定、同源检查），平台账号与租户账号；每个按编号访问的接口核对租户（404）；租户功能策略与并发上限，队列 `-per-tenant`；模型代理进程令牌。DeepSeek 真实运行：记忆不跨租户召回、越权访问全部 404、功能 403 与配额 429、跨租户续跑找不到、租户内确认只能由本租户回答、审计带用户名、队列按租户串行 | 待用户复述：路径隔离的取舍、为什么登录后每次访问还要查归属 | [Day 20 笔记 §6–7](docs/day-20/day-20-notes.md#6-多租户与执行隔离)、[实践 §6](docs/day-20/day-20-lab.md#6-多租户与登录补充) |
 | Day 20：高风险确认 | 执行器按程序规则判断四类风险（删除记忆、MCP 声明的破坏性工具、含私有数据后的浏览器/MCP 外发、续跑重做），经 `tool/requestApproval` 只由界面上的人回答，没有界面或拒绝都不执行；私有来源存检查点并传给子 agent；每项调用结束写结果日志，续跑先取回；熔断改为 6 动作窗口，加结果指纹的无进展检测。DeepSeek 真实运行：外发拒绝（CLI）与允许（观测台接口）、子 agent 继承、删除记忆拒绝、kill -9 续跑取回日志、无进展提示 2/2 触发且 4 次正常任务无误触发；方舟仍 403。多租户见下一行 | 待用户复述：确认为什么不能交给模型、粗粒度标记的取舍 | [Day 20 笔记](docs/day-20/day-20-notes.md)、[实践](docs/day-20/day-20-lab.md) |
 | Day 21：审计日志 | `.data/audit/audit.jsonl` 只追加、哈希链、文件锁、写后 fsync；agent 记任务起止、确认请求与程序决定、有副作用的执行、续跑取回与回填、联网请求与决定、记忆变更，观测台记人的点击；参数只存哈希；确认与联网审批写不进审计就不执行。`go run . audit` 与观测台审计页只读校验。DeepSeek 真实运行：三进程并发写链完整、观测台批准链四条参数哈希一致、记忆写入与人工删除、子 agent 记录按父任务归组；改内容、删一条、重算单条哈希三种篡改均被发现。第三周复盘已完成 | 待用户复述：调用链为何不能兼作审计、哈希链发现不了哪种篡改 | [Day 21 笔记](docs/day-21/day-21-notes.md)、[实践](docs/day-21/day-21-lab.md)、[复盘](docs/week-03-review.md) |
+| Day 22：Harness 参考架构 | 对照 Codex 与 Claude Code 的公开设计，画出参考架构与本项目现状（`harness-architecture.html`）；能力清单细化为 9 个领域 25 项、每项拆细项（已有 2、部分 16、缺 7）；发现并行调度不分只读与修改、第三方 MCP 继承全部环境变量；从待办选出 6 题自用任务集（T1–T6）。无代码改动，未运行模型 | 用户已阅读架构图；待复述：沙箱与审批各挡什么、前缀稳定与系统提醒、拒绝规则与 hook 的优先级 | [Day 22 笔记](docs/day-22/day-22-notes.md)、[实践](docs/day-22/day-22-lab.md) |
 | 扩展：结构化协议（B0） | `-app-server` 模式，JSON-RPC 双向：turn/start、turn/interrupt、item/turn 通知、联网审批请求；观测台与 RunChild 作为界面，去掉终端文本解析；审批当轮生效、续接链、队列、页面新旧存档均用真实模型验证 | 待反馈 | [B0 实践](docs/bonus-protocol/protocol-lab.md) |
 | 扩展：流式输出（B1） | 所有模型请求 `stream: true` + `include_usage`，`llm.Stream` 按 index 重组工具调用，流结束后再做截断与空回答检查；主任务正文边收边打印；协议加 `item/delta`（只发主任务与摘要），completed 带首字延迟；观测台代理逐行转发并 flush，用同一份拼接逻辑存档完整响应（记 chunk 数与首字延迟），delta 只在内存不落盘；页面实时显示推理与正文。DeepSeek 真实运行：命令行工具参数重组与用量、协议 220 条 delta 拼接与答案一致、观测台 delta 先于 response 且存档无 delta、存档续聊正确、生成中停止记 499 与 cancelled；方舟仍 403 | 待用户复述：流式为什么不让工具更早执行、代理为什么不能整段缓冲 | [B1 笔记](docs/bonus-streaming/streaming-notes.md)、[实践](docs/bonus-streaming/streaming-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
@@ -68,6 +69,7 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 | MCP 权限 | 第三方 stdio server 继承环境变量 | 启动环境改为最小白名单 |
 | MCP 契约 | 不处理 list_changed；schema 错误可读性不足，远程鉴权未完成 | 动态更新、错误转译与鉴权按后续任务引入 |
 | Skills | 触发准确率未系统评估 | 纳入评测集；知识内容与执行权限分开 |
+| 工具调度 | 同一批工具调用全部并行，不区分只读与修改（D22 对照发现）；加入编辑工具后，两次修改同一文件会互相覆盖 | 按工具标注只读并行、修改串行，列为自用任务 T4，见 [Day 22 实践](docs/day-22/day-22-lab.md#2-拆细后看出的两个问题) |
 | 工具取消 | 不配合取消的工具可能在调用方放弃等待后继续执行；Bash 已使用 cgroup 清理 | 按工具检查取消和资源回收，见 [Day 8](docs/day-08/day-08-lab.md) |
 | 父子进程 | 父进程被 kill -9 后，子进程可能暂时继续执行并占有任务锁；task_id 引用靠模型遵守规则，模型若仍改写 task 重派，会新开子任务 | 父死亡信号或锁释放等待；续跑时把已派出的子任务列进上下文，见 [Q15](docs/deep-questions.md#q15) |
 | 检查点 | 没有版本兼容标记、fsync 与自动清理；只存 View，续跑后再压缩的素材变少，首次用量只能粗估 | 持久化版本和保留策略；Transcript 追加另存、usage 写入检查点，见 [Q14](docs/deep-questions.md#q14)（续聊覆盖旧检查点的问题已改为续接链，见 [Q21](docs/deep-questions.md#q21)） |

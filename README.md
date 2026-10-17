@@ -80,6 +80,7 @@ go build -o bin/learning-agent .
 | Day 19 | 来源标记与工具权限边界 | [笔记](docs/day-19/day-19-notes.md) | [实践](docs/day-19/day-19-lab.md) | — |
 | Day 20 | 高风险操作确认与执行边界 | [笔记](docs/day-20/day-20-notes.md) | [实践](docs/day-20/day-20-lab.md) | — |
 | Day 21 | 审计日志与第三周复盘 | [笔记](docs/day-21/day-21-notes.md) · [复盘](docs/week-03-review.md) | [实践](docs/day-21/day-21-lab.md) | — |
+| Day 22 | Harness 参考架构与自用任务集 | [笔记](docs/day-22/day-22-notes.md) · [架构图](harness-architecture.html) | [实践](docs/day-22/day-22-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
