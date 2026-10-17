@@ -1,6 +1,6 @@
 # 用 Go 学习 Agent
 
-从最小工具调用循环出发，逐步学习上下文、检索、记忆、MCP、运行时和安全边界。长期目标见 [岗位能力对照](JOB_REQUIREMENTS.md)，当前进度见 [PROJECT.md](PROJECT.md)。
+从最小工具调用循环出发，逐步学习上下文、检索、记忆、MCP、运行时和安全边界。长期目标是 agent harness 能力，见 [能力对照](JOB_REQUIREMENTS.md#harness-能力对照)，当前进度见 [PROJECT.md](PROJECT.md)。
 
 **按模块系统学习，从 [Agent Wiki](wiki/README.md) 开始。** Wiki 分基础理解与技术展开两层，提供术语、数据结构、算法算例、Go片段、故障推演和源码对照；每日 notes 与 lab 保留按天学习和动手路径，见下方学习目录。
 
@@ -88,7 +88,7 @@ go build -o bin/learning-agent .
 
 补充阅读：
 
-- [28 天学习计划](plan.md)：课程安排与长期目标；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链；[第三周复盘](docs/week-03-review.md)：评测、权限、确认与审计怎样加在同一条路上。
+- [学习计划](plan.md)：课程安排与长期目标（Week 4–6 为编码 harness）；[Harness 参考架构](harness-architecture.html)：综合 Codex 与 Claude Code 的 harness 结构与对照，下方附本项目现状架构，浏览器直接打开；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链；[第三周复盘](docs/week-03-review.md)：评测、权限、确认与审计怎样加在同一条路上。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
 - [Agent 工程面试题库](wiki/16-interview-preparation.md)：134 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。

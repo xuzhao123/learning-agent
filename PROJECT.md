@@ -2,7 +2,7 @@
 
 ## 目标与阅读入口
 
-以 Manus「Agent 全栈工程师」岗位要求为长期目标，用 Go 逐步实现并理解 Agent。课程安排见 [学习计划](plan.md)，生产化改造见 [进阶计划](plan-advanced.md)，能力覆盖见 [JOB_REQUIREMENTS.md](JOB_REQUIREMENTS.md)。
+长期目标是拥有设计、实现和迭代 agent harness 的能力（2026-10-17 由 Manus 岗位面试准备调整而来，岗位要求保留为参考），用 Go 逐步实现并理解。课程安排见 [学习计划](plan.md)，生产化改造见 [进阶计划](plan-advanced.md)，能力覆盖见 [JOB_REQUIREMENTS.md](JOB_REQUIREMENTS.md)。
 
 启动、配置、学习目录和源码导航统一见 [README.md](README.md)。协作规则统一见 [AGENTS.md](AGENTS.md)。本文件只记录当前进度、理解情况与仍未解决的问题。
 
@@ -11,6 +11,10 @@
 一个 Go 模块、一个入口（观测台需要登录，数据按租户分目录）：`go run .` 运行 agent，`go run . observe` 运行观测台，`go run . queue` 运行队列，`go run . metrics` 统计指标，`go run . eval` 跑评测与归因，`go run . audit` 查看并校验审计日志。一个 agent 进程执行一个任务；检索与记忆在任务进程内调用，观测台、队列和子 agent 通过子进程执行任务。
 
 已覆盖 Day 1–21 与 Skills、子 agent、模型路由扩展：原生 Tool Calling、并行工具、循环护栏、上下文压缩、向量检索、长期记忆、MCP、取消超时、检查点、队列、浏览器、Bash 沙箱、OpenTelemetry 调用链、D15 指标采集、D16 评测集与回归、D17 失败归因与回放验证、D18–19 无害资料实验与工具权限边界、D20 高风险操作确认（含跨工具外发检查、结果日志与无进展检测）、D21 审计日志与第三周复盘；agent 与界面之间改为结构化协议（B0，仿 Codex app-server）；模型请求改为流式（B1），观测台逐行转发并实时显示。MCP 支持 stdio 和 Streamable HTTP，普通问答可连接多个 server；工具列表只在连接时读取。D18–19 按用户要求缩小为知识学习，不代表完成通用注入检测或外发防护。
+
+## 下一阶段
+
+Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。下一步：D22 harness 全景与成功标准。
 
 ## 课程进度
 

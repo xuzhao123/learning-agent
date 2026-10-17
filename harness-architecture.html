@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent Harness 参考架构</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* 布局：参考架构原理图为主体，下方是 Codex 与 Claude Code 对照表、读图要点和来源 */
+:root {
+  --bg: #eef1f4;
+  --panel: #ffffff;
+  --proc: #f7f9fa;
+  --ink: #17212c;
+  --muted: #5b6a79;
+  --line: #b8c2cc;
+  --accent: #1d6a73;
+  --accent-soft: #e0eef0;
+  --plan: #a85d17;
+  --plan-soft: #fbf1e5;
+  --miss: #a33b3b;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151b; --panel: #18212a; --proc: #131b22; --ink: #e2e8ee; --muted: #93a2b1; --line: #36444f;
+    --accent: #62b6bd; --accent-soft: #163239; --plan: #e3a560; --plan-soft: #2d2316; --miss: #e07a7a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151b; --panel: #18212a; --proc: #131b22; --ink: #e2e8ee; --muted: #93a2b1; --line: #36444f;
+  --accent: #62b6bd; --accent-soft: #163239; --plan: #e3a560; --plan-soft: #2d2316; --miss: #e07a7a;
+  color-scheme: dark;
+}
+body { margin: 0;
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6;
+}
+.wrap {
+  max-width: 1320px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 56px;
+  display: grid; gap: 28px;
+}
+header { display: grid; gap: 10px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+h1 { margin: 0; font-size: clamp(26px, 4vw, 36px); line-height: 1.2; font-weight: 700; letter-spacing: -.01em; text-wrap: balance; }
+.lede { margin: 0; max-width: 65ch; color: var(--muted); }
+.bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted); align-items: center; }
+.legend i { display: inline-block; width: 26px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+.lg-have { background: var(--panel); border: 1.5px solid var(--line); }
+.lg-core { background: var(--accent-soft); border: 1.5px solid var(--accent); }
+.lg-plan { background: var(--plan-soft); border: 1.5px dashed var(--plan); }
+.tally { font-family: var(--font-mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tally b { color: var(--ink); font-weight: 500; }
+.toggle { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink); cursor: pointer; }
+.toggle input { accent-color: var(--plan); width: 16px; height: 16px; }
+
+figure { margin: 0; display: grid; gap: 10px; }
+.scroller { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.scroller svg { display: block; width: 100%; min-width: 980px; height: auto; }
+figcaption { font-size: 13px; color: var(--muted); max-width: 90ch; }
+
+svg .proc { fill: var(--proc); stroke: var(--line); stroke-width: 1; }
+svg .bx { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+svg .bx.core { fill: var(--accent-soft); stroke: var(--accent); }
+svg .bx.band { fill: var(--accent-soft); stroke: var(--accent); }
+svg .bx.pl { fill: var(--plan-soft); stroke: var(--plan); stroke-dasharray: 5 4; }
+svg .bx.pl.ghost { fill: none; }
+svg text { font-family: var(--font-body); }
+svg .tt { font-size: 13px; font-weight: 500; fill: var(--ink); }
+svg .ts { font-size: 11px; fill: var(--muted); }
+svg .mono { font-family: var(--font-mono); font-size: 10.5px; }
+svg .tg { font-family: var(--font-mono); font-size: 10px; font-weight: 500; fill: var(--plan); }
+svg .tg2 { font-family: var(--font-mono); font-size: 10px; font-weight: 500; fill: var(--accent); }
+svg .sec { font-size: 12px; font-weight: 700; fill: var(--muted); letter-spacing: .06em; }
+svg .col { font-size: 11px; font-weight: 500; fill: var(--accent); letter-spacing: .1em; }
+svg .al { font-size: 10.5px; fill: var(--muted); }
+svg .ar { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+svg .bridge { fill: none; stroke: var(--proc); stroke-width: 8; }
+svg .head { fill: var(--muted); }
+svg .node { transition: opacity .2s; }
+svg.focus .node { opacity: .18; }
+svg.focus .node.on { opacity: 1; }
+svg.focus .node.on .bx { stroke-width: 2.2; }
+svg.noplan .node.plan { opacity: 0; }
+svg.noplan.focus .node.plan.on { opacity: .5; }
+
+section { display: grid; gap: 14px; }
+h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+.caps { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.cap {
+  display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; gap: 2px 10px; align-items: baseline;
+  text-align: left; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 12px; cursor: pointer; min-width: 0;
+}
+.cap:hover, .cap.on { border-color: var(--accent); }
+.cap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cap .code { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cap .name { font-size: 14px; font-weight: 500; min-width: 0; }
+.cap .st { font-size: 11px; padding: 1px 8px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap; }
+.st.have { color: var(--accent); }
+.st.part { color: var(--plan); }
+.st.miss { color: var(--miss); }
+.cap .days { grid-column: 2 / 4; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 28px; font-size: 14px; }
+.notes p { margin: 0; min-width: 0; }
+.notes b { font-weight: 500; }
+code { font-family: var(--font-mono); font-size: .9em; }
+@media (prefers-reduced-motion: reduce) { svg .node { transition: none; } }
+
+svg .bx.key { fill: var(--panel); stroke: var(--accent); stroke-width: 1.6; }
+svg .bx.row { fill: var(--proc); stroke: var(--line); stroke-width: 1; }
+svg .tr { font-size: 11.5px; fill: var(--ink); }
+svg .ar.dash { stroke-dasharray: 5 4; stroke: var(--accent); }
+svg.ours .node[data-ours="have"] > rect { stroke: var(--accent); stroke-width: 2.2; stroke-dasharray: none; }
+svg.ours .node[data-ours="part"] > rect { stroke: var(--plan); stroke-width: 2; stroke-dasharray: 6 3; }
+svg.ours .node[data-ours="miss"] > rect { stroke: var(--miss); stroke-width: 2; stroke-dasharray: 3 3; }
+.lg-miss { background: var(--panel); border: 1.5px dashed var(--miss); }
+.lg-part { background: var(--panel); border: 1.5px dashed var(--plan); }
+.lg-ok { background: var(--panel); border: 2px solid var(--accent); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-size: 12px; letter-spacing: .06em; color: var(--muted); font-weight: 500; background: var(--proc); }
+td:first-child { font-weight: 500; white-space: nowrap; }
+.src { margin: 0; padding-left: 1.2em; font-size: 13.5px; display: grid; gap: 4px; }
+.src a { color: var(--accent); }
+.src span { color: var(--muted); }
+.part2 { gap: 8px; padding-top: 24px; border-top: 1px solid var(--line); }
+.big { font-size: clamp(22px, 3vw, 28px); }
+.doms { display: grid; gap: 18px; }
+.dom h3 { margin: 0 0 8px; font-size: 13px; font-weight: 500; letter-spacing: .08em; color: var(--accent); }
+.cap { align-content: start; }
+.cap .sub { grid-column: 1 / 4; margin: 6px 0 2px; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 12.5px; }
+.cap .sub li { display: grid; grid-template-columns: 9px 1fr; gap: 8px; align-items: center; }
+.cap .sub li::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; }
+.cap .sub li.have::before { color: var(--accent); background: var(--accent); }
+.cap .sub li.part::before { color: var(--plan); background: linear-gradient(90deg, var(--plan) 50%, transparent 50%); }
+.cap .sub li.miss::before { color: var(--miss); }
+.cap .days { grid-column: 1 / 4; }
+.subkey { display: inline-flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Codex · Claude Code · 资料核对于 2026-10-17</div>
+    <h1>Agent Harness 参考架构</h1>
+    <p class="lede">harness 是包在模型外面的那一层：组织上下文、提供工具、决定每个动作能不能做、保存会话。这张图综合 Codex 与 Claude Code 公开的设计，组件名取两者通用的叫法，具体名称见下方对照表。</p>
+  </header>
+
+  <div class="bar">
+    <div class="legend">
+      <span><i class="lg-core"></i>请求主路径</span>
+      <span><i class="lg-have"></i>组件</span>
+      <span id="ours-legend" hidden><i class="lg-ok"></i>本项目已有 <i class="lg-part" style="margin-left:12px"></i>部分 <i class="lg-miss" style="margin-left:12px"></i>还没有</span>
+    </div>
+    <label class="toggle" for="show-ours"><input type="checkbox" id="show-ours">对照本项目现状</label>
+  </div>
+
+  <figure>
+    <div class="scroller">
+      <svg id="map" viewBox="0 0 1280 992" role="img" aria-label="Agent harness 参考架构：多种界面经同一套客户端协议驱动 harness 核心；核心由上下文引擎、agent 循环和执行面组成，每次工具调用先经 hook、规则、权限模式和审批者组成的策略管线，shell 在 OS 沙箱内执行；扩展层由配置文件加载，状态层保存会话记录、文件检查点和记忆。">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+<text class="sec" x="50" y="18" text-anchor="start">界面：同一个核心，多种入口</text>
+<g class="node" data-ours="part"><rect class="bx" x="50" y="28" width="185" height="58" rx="6"/><text class="tt" x="62" y="54.0">终端 TUI</text><text class="ts mono" x="62" y="71.0">codex · claude</text></g>
+<path class="ar" d="M142 86 V108" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<g class="node" data-ours="miss"><rect class="bx" x="249" y="28" width="185" height="58" rx="6"/><text class="tt" x="261" y="54.0">IDE 插件</text><text class="ts mono" x="261" y="71.0">VS Code · JetBrains</text></g>
+<path class="ar" d="M341 86 V108" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<g class="node" data-ours="part"><rect class="bx" x="448" y="28" width="185" height="58" rx="6"/><text class="tt" x="460" y="54.0">桌面与 Web</text><text class="ts mono" x="460" y="71.0">Codex App · claude.ai/code</text></g>
+<path class="ar" d="M540 86 V108" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<g class="node" data-ours="have"><rect class="bx" x="647" y="28" width="185" height="58" rx="6"/><text class="tt" x="659" y="54.0">无头 / CI</text><text class="ts mono" x="659" y="71.0">codex exec · claude -p</text></g>
+<path class="ar" d="M739 86 V108" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<g class="node" data-ours="part"><rect class="bx" x="846" y="28" width="185" height="58" rx="6"/><text class="tt" x="858" y="54.0">SDK</text><text class="ts mono" x="858" y="71.0">Codex SDK · Agent SDK</text></g>
+<path class="ar" d="M938 86 V108" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<g class="node" data-ours="miss"><rect class="bx" x="1045" y="28" width="185" height="58" rx="6"/><text class="tt" x="1057" y="54.0">云端与远程</text><text class="ts mono" x="1057" y="71.0">Cloud · Remote Control</text></g>
+<path class="ar" d="M1137 86 V108" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<g class="node" data-ours="part"><rect class="bx core" x="50" y="110" width="1180" height="52" rx="6"/><text class="tt" x="66" y="131">客户端协议</text><text class="ts" x="160" y="131">Thread / Turn / Item 事件流 · 开始 turn · 中途插话 steer · 中断 · 审批请求由 harness 发起、界面回答</text><text class="ts mono" x="66" y="150">Codex app-server：JSON-RPC over stdio / 进程内 / WebSocket　·　Claude Agent SDK：stream-json 消息流 + canUseTool 回调</text></g>
+<path class="ar" d="M640 162 V186" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<text class="al" x="630" y="179" text-anchor="end">turn/start · steer · interrupt ↓　事件与增量 ↑</text>
+<rect class="proc" x="30" y="188" width="1220" height="600" rx="10"/>
+<text class="sec" x="46" y="211" text-anchor="start">Harness 核心 · 一个会话（Codex 叫 Thread，Claude Code 叫 Session）</text>
+<text class="col" x="50" y="238" text-anchor="start">上下文引擎</text>
+<text class="col" x="430" y="238" text-anchor="start">Agent 循环（一个 turn）</text>
+<text class="col" x="884" y="238" text-anchor="start">执行面：工具</text>
+<g class="node" data-ours="part"><rect class="bx key" x="50" y="248" width="320" height="270" rx="6"/><text class="tt" x="62" y="268">提示词组装</text><text class="ts" x="62" y="285">顺序固定：前缀不变才能命中提示缓存</text></g>
+<g class="node" data-ours="have"><rect class="bx row" x="62" y="298" width="296" height="30" rx="4"/><text class="tr" x="72" y="317">系统指令 · 工具定义</text><text class="tg" x="350" y="317" text-anchor="end">稳定</text></g>
+<g class="node" data-ours="miss"><rect class="bx row" x="62" y="334" width="296" height="30" rx="4"/><text class="tr" x="72" y="353">AGENTS.md / CLAUDE.md 分层</text><text class="tg" x="350" y="353" text-anchor="end">稳定</text></g>
+<g class="node" data-ours="have"><rect class="bx row" x="62" y="370" width="296" height="30" rx="4"/><text class="tr" x="72" y="389">Skills 索引 · 记忆</text><text class="tg" x="350" y="389" text-anchor="end">会话级</text></g>
+<g class="node" data-ours="miss"><rect class="bx row" x="62" y="406" width="296" height="30" rx="4"/><text class="tr" x="72" y="425">环境：cwd · git · 沙箱与权限</text><text class="tg" x="350" y="425" text-anchor="end">变化才追加</text></g>
+<g class="node" data-ours="have"><rect class="bx row" x="62" y="442" width="296" height="30" rx="4"/><text class="tr" x="72" y="461">对话历史 Item</text><text class="tg" x="350" y="461" text-anchor="end">只追加</text></g>
+<g class="node" data-ours="miss"><rect class="bx row" x="62" y="478" width="296" height="30" rx="4"/><text class="tr" x="72" y="497">系统提醒：文件变更 · todo</text><text class="tg" x="350" y="497" text-anchor="end">按需插入</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="50" y="530" width="320" height="60" rx="6"/><text class="tt" x="62" y="549">压缩</text><text class="ts" x="62" y="566">先清旧工具输出，再整体摘要</text><text class="ts" x="62" y="581">PreCompact hook · /compact 指定保留重点</text></g>
+<g class="node" data-ours="part"><rect class="bx" x="50" y="602" width="320" height="60" rx="6"/><text class="tt" x="62" y="621">模型客户端</text><text class="ts" x="62" y="638">Responses API · Messages API</text><text class="ts" x="62" y="653">流式 · 重试 · 提示缓存 · 推理强度</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="50" y="674" width="320" height="48" rx="6"/><text class="tt" x="62" y="695.0">工具延迟加载</text><text class="ts" x="62" y="712.0">MCP 工具 schema 经 ToolSearch 按需取</text></g>
+<path class="ar" d="M370 270 H428" marker-end="url(#ah)"/>
+<path class="ar" d="M430 326 H392 V632 H372" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<text class="al" x="398" y="345" text-anchor="start">采样</text>
+<g class="node" data-ours="have"><rect class="bx core" x="430" y="248" width="380" height="44" rx="6"/><text class="tt" x="442" y="267.0">组装请求</text><text class="ts" x="442" y="284.0">上下文引擎的输入 + 本轮工具列表</text></g>
+<g class="node" data-ours="have"><rect class="bx core" x="430" y="304" width="380" height="44" rx="6"/><text class="tt" x="442" y="323.0">模型采样（流式）</text><text class="ts" x="442" y="340.0">文本、推理、工具调用的增量</text></g>
+<g class="node" data-ours="have"><rect class="bx core" x="430" y="360" width="380" height="44" rx="6"/><text class="tt" x="442" y="379.0">解析回复</text><text class="ts" x="442" y="396.0">没有工具调用 → 本 turn 结束</text></g>
+<g class="node" data-ours="part"><rect class="bx key" x="430" y="416" width="380" height="148" rx="6"/><text class="tt" x="442" y="436">策略管线（每次工具调用都走一遍）</text></g>
+<g class="node" data-ours="miss"><rect class="bx row" x="442" y="446" width="356" height="22" rx="4"/><text class="tr" x="452" y="461">① PreToolUse hook：拒绝 / 改写 / 放行</text></g>
+<g class="node" data-ours="miss"><rect class="bx row" x="442" y="474" width="356" height="22" rx="4"/><text class="tr" x="452" y="489">② 规则：deny › ask › allow（命令前缀、路径、域名）</text></g>
+<g class="node" data-ours="miss"><rect class="bx row" x="442" y="502" width="356" height="22" rx="4"/><text class="tr" x="452" y="517">③ 权限模式：计划 · 手动 · 自动编辑 · auto · 全权</text></g>
+<g class="node" data-ours="part"><rect class="bx row" x="442" y="530" width="356" height="22" rx="4"/><text class="tr" x="452" y="545">④ 审批者：人，或分类器 / 审查子 agent</text></g>
+<g class="node" data-ours="part"><rect class="bx core" x="430" y="576" width="380" height="44" rx="6"/><text class="tt" x="442" y="595.0">执行</text><text class="ts" x="442" y="612.0">只读工具并行 · 修改类串行 · shell 进沙箱</text></g>
+<g class="node" data-ours="part"><rect class="bx core" x="430" y="632" width="380" height="44" rx="6"/><text class="tt" x="442" y="651.0">回填结果</text><text class="ts" x="442" y="668.0">PostToolUse hook · 写会话记录 · 发 item 事件</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="430" y="690" width="380" height="58" rx="6"/><text class="tt" x="442" y="709">限制与结局</text><text class="ts" x="442" y="726">最大轮数 · 费用预算 · 中断 · 排队消息插入下一步</text><text class="ts" x="442" y="741">success · error_max_turns · error_max_budget · 中断</text></g>
+<path class="ar" d="M620 292 V302" marker-end="url(#ah)"/>
+<path class="ar" d="M620 348 V358" marker-end="url(#ah)"/>
+<path class="ar" d="M620 404 V414" marker-end="url(#ah)"/>
+<path class="ar" d="M620 564 V574" marker-end="url(#ah)"/>
+<path class="ar" d="M620 620 V630" marker-end="url(#ah)"/>
+<path class="ar" d="M810 654 H838 V270 H812" marker-end="url(#ah)"/>
+<text class="al" x="828" y="470" text-anchor="middle" transform="rotate(-90 828 470)">下一步</text>
+<path class="bridge" d="M830 490 H846"/>
+<path class="ar dash" d="M810 490 H858 V164" marker-end="url(#ah)" marker-start="url(#ah)"/>
+<text class="al" x="866" y="206" text-anchor="start">审批请求 → 界面上的人回答</text>
+<g class="node" data-ours="miss"><rect class="bx" x="884" y="248" width="346" height="50" rx="6"/><text class="tt" x="896" y="270.0">文件</text><text class="ts" x="896" y="287.0">Read · Edit / apply_patch · Write · 改前快照</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="884" y="306" width="346" height="50" rx="6"/><text class="tt" x="896" y="328.0">搜索</text><text class="ts" x="896" y="345.0">Glob · Grep · 代码智能（LSP）</text></g>
+<g class="node" data-ours="part"><rect class="bx" x="884" y="364" width="346" height="50" rx="6"/><text class="tt" x="896" y="386.0">Shell</text><text class="ts" x="896" y="403.0">PTY 会话 · 后台进程 · 超时与输出截断</text></g>
+<g class="node" data-ours="part"><rect class="bx" x="884" y="502" width="346" height="50" rx="6"/><text class="tt" x="896" y="524.0">Web</text><text class="ts" x="896" y="541.0">WebFetch · WebSearch</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="884" y="560" width="346" height="50" rx="6"/><text class="tt" x="896" y="582.0">MCP 客户端</text><text class="ts" x="896" y="599.0">stdio · Streamable HTTP · OAuth</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="884" y="618" width="346" height="50" rx="6"/><text class="tt" x="896" y="640.0">子 agent</text><text class="ts" x="896" y="657.0">独立上下文 · 只回摘要 · 可 fork</text></g>
+<g class="node" data-ours="part"><rect class="bx" x="884" y="676" width="346" height="50" rx="6"/><text class="tt" x="896" y="698.0">编排工具</text><text class="ts" x="896" y="715.0">Todo · AskUserQuestion · Skill · ToolSearch</text></g>
+<g class="node" data-ours="have"><rect class="bx key" x="906" y="422" width="324" height="70" rx="6"/><text class="tt" x="918" y="441">OS 沙箱（只管 shell 及其子进程）</text><text class="ts" x="918" y="458">Seatbelt · bwrap + Landlock/seccomp · 受限令牌</text><text class="ts" x="918" y="473">只读 / 工作区可写 / 全权 · 网络代理白名单</text></g>
+<path class="ar" d="M896 414 V457 H904" marker-end="url(#ah)"/>
+<path class="ar" d="M872 273 H882 M872 331 H882 M872 389 H882 M872 527 H882 M872 585 H882 M872 643 H882 M872 701 H882 M872 273 V701"/>
+<path class="bridge" d="M830 598 H846"/>
+<path class="ar" d="M810 598 H870" marker-end="url(#ah)"/>
+<text class="al" x="846" y="590" text-anchor="start">调用</text>
+<rect class="proc" x="30" y="808" width="600" height="172" rx="10"/>
+<text class="sec" x="46" y="830" text-anchor="start">扩展层 · 写配置就生效，不改 harness 代码</text>
+<g class="node" data-ours="miss"><rect class="bx" x="46" y="842" width="282" height="38" rx="6"/><text class="tt" x="187" y="866" text-anchor="middle">AGENTS.md / CLAUDE.md</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="338" y="842" width="282" height="38" rx="6"/><text class="tt" x="479" y="866" text-anchor="middle">Skills：正文按需加载</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="46" y="888" width="282" height="38" rx="6"/><text class="tt" x="187" y="912" text-anchor="middle">Hooks：生命周期事件</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="338" y="888" width="282" height="38" rx="6"/><text class="tt" x="479" y="912" text-anchor="middle">斜杠命令</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="46" y="934" width="282" height="38" rx="6"/><text class="tt" x="187" y="958" text-anchor="middle">MCP servers · 子 agent 定义</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="338" y="934" width="282" height="38" rx="6"/><text class="tt" x="479" y="958" text-anchor="middle">插件打包 · 设置分层</text></g>
+<rect class="proc" x="650" y="808" width="600" height="172" rx="10"/>
+<text class="sec" x="666" y="830" text-anchor="start">状态与持久化</text>
+<g class="node" data-ours="part"><rect class="bx" x="666" y="842" width="282" height="38" rx="6"/><text class="tt" x="807" y="866" text-anchor="middle">会话记录 JSONL（rollout）</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="958" y="842" width="282" height="38" rx="6"/><text class="tt" x="1099" y="866" text-anchor="middle">恢复 · 分叉 · 回滚</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="666" y="888" width="282" height="38" rx="6"/><text class="tt" x="807" y="912" text-anchor="middle">文件检查点：按步回退</text></g>
+<g class="node" data-ours="part"><rect class="bx" x="958" y="888" width="282" height="38" rx="6"/><text class="tt" x="1099" y="912" text-anchor="middle">自动记忆 MEMORY.md</text></g>
+<g class="node" data-ours="miss"><rect class="bx" x="666" y="934" width="282" height="38" rx="6"/><text class="tt" x="807" y="958" text-anchor="middle">Todo / 计划状态</text></g>
+<g class="node" data-ours="have"><rect class="bx" x="958" y="934" width="282" height="38" rx="6"/><text class="tt" x="1099" y="958" text-anchor="middle">遥测 OpenTelemetry</text></g>
+<path class="ar" d="M330 806 V790" marker-end="url(#ah)"/>
+<text class="al" x="340" y="802" text-anchor="start">启动时加载 · 设置分层合并</text>
+<path class="ar" d="M950 788 V806" marker-end="url(#ah)"/>
+<text class="al" x="960" y="802" text-anchor="start">追加写 · 改文件前快照</text>
+      </svg>
+    </div>
+    <figcaption>一次工具调用的路径：界面开始 turn → 上下文引擎按固定顺序组装请求 → 模型流式返回工具调用 → 策略管线依次过 hook、规则、权限模式和审批者 → 执行（shell 进 OS 沙箱）→ 结果回填、写会话记录、推事件给界面 → 下一步。窄屏可左右滑动图。</figcaption>
+  </figure>
+
+  <section>
+    <h2>读图要点</h2>
+    <div class="notes">
+      <p><b>一个核心，多种界面。</b>终端、IDE、CI 和 SDK 都是同一个 harness 的客户端，靠一套事件协议驱动。审批是 harness 发给界面的请求，没人回答就不执行。</p>
+      <p><b>沙箱和审批是两条独立的轴。</b>沙箱由操作系统强制，只管 shell 及其子进程；审批决定越界时问不问、问谁。规则和 hook 看的是命令文本，沙箱管的是实际的系统调用，所以两者要一起用。</p>
+      <p><b>上下文按缓存来设计。</b>稳定内容放前面，历史只追加；环境或文件变了，用追加一条提醒来表达，不改写前缀。压缩时先丢旧的工具输出，再做摘要。</p>
+      <p><b>能配置的都不写死。</b>项目指令、权限规则、hooks、skills、MCP、子 agent 都是文件，按托管策略、项目、用户分层合并。harness 代码只提供机制。</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Codex 与 Claude Code 对照</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>组件</th><th>Codex</th><th>Claude Code</th></tr></thead>
+        <tbody>
+<tr><td>界面</td><td>TUI、IDE 插件、Codex App、codex exec、Codex SDK、Cloud</td><td>终端、IDE、桌面、claude.ai/code、claude -p、Agent SDK、Remote Control</td></tr>
+<tr><td>客户端协议</td><td>app-server：双向 JSON-RPC，Thread / Turn / Item，stdio、进程内或 WebSocket</td><td>Agent SDK 消息流：SystemMessage、AssistantMessage、UserMessage、StreamEvent、ResultMessage；canUseTool 回调</td></tr>
+<tr><td>模型接口</td><td>OpenAI Responses API</td><td>Anthropic Messages API</td></tr>
+<tr><td>项目指令</td><td>AGENTS.md，按目录逐级合并</td><td>CLAUDE.md 逐级合并（也可读 AGENTS.md），另有自动记忆 MEMORY.md</td></tr>
+<tr><td>编辑工具</td><td>apply_patch：模型写补丁</td><td>Edit：唯一字符串替换；Write 整体写入</td></tr>
+<tr><td>Shell</td><td>shell 工具，支持 PTY 会话</td><td>Bash，可后台运行；Monitor 观察输出</td></tr>
+<tr><td>沙箱</td><td>sandbox_mode：read-only / workspace-write / danger-full-access；Seatbelt、bwrap + Landlock + seccomp、Windows 受限令牌</td><td>可选 sandbox：Seatbelt、bubblewrap，网络走代理白名单；只约束 shell 及子进程</td></tr>
+<tr><td>审批</td><td>approval_policy：on-request / never；审批者 user 或 auto_review</td><td>权限模式：Manual、acceptEdits、plan、auto（分类器）、dontAsk、bypassPermissions</td></tr>
+<tr><td>规则</td><td>rules：按命令前缀 allow / prompt / forbid</td><td>permissions：deny › ask › allow，如 Bash(npm *)、Read(路径)、WebFetch(domain:…)</td></tr>
+<tr><td>Hooks</td><td>hooks.json 或 config.toml：SessionStart、PreToolUse、PermissionRequest、PostToolUse、PreCompact、Stop 等；非托管 hook 先经信任确认</td><td>settings.json：33 种事件；command、http、mcp_tool、prompt、agent 五种类型；exit 2 拦截</td></tr>
+<tr><td>扩展</td><td>Skills、MCP、子 agent、插件</td><td>Skills、MCP、子 agent、斜杠命令、插件、输出风格</td></tr>
+<tr><td>会话</td><td>thread/resume、fork、revert；会话记录可续</td><td>~/.claude/projects 下 JSONL；--resume、--fork-session；Esc 两次回退文件</td></tr>
+<tr><td>压缩</td><td>超过阈值自动压缩，Responses 有专用压缩接口</td><td>先清旧工具输出再摘要；/compact 指定重点；PreCompact hook</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="part2">
+    <div class="eyebrow">对照 · learning-agent 现状</div>
+    <h2 class="big">本项目现状架构</h2>
+    <p class="lede">同一套视角看本仓库：实线是 Day 1–21 与 B0、B1 已经实现的部分，虚线是 Week 4–6 要补的编码 harness 层，标注对应课程。</p>
+  </section>
+  <div class="bar">
+    <div class="legend">
+      <span><i class="lg-core"></i>执行循环与协议</span>
+      <span><i class="lg-have"></i>已实现</span>
+      <span><i class="lg-plan"></i>规划中（Dxx）</span>
+      <span class="tally">已有 <b>2</b> · 部分 <b>16</b> · 缺 <b>7</b></span>
+    </div>
+    <label class="toggle" for="show-plan"><input type="checkbox" id="show-plan" checked>显示规划中的部分</label>
+  </div>
+
+  <figure>
+    <div class="scroller">
+      <svg id="cur" viewBox="0 0 1280 976" role="img" aria-label="Agent harness 架构：界面经 app-server 协议驱动 agent 进程；进程内上下文与模型、执行循环、工具三列协作，经权限闸门执行工具，状态写入按租户分目录的 .data，评测与审计只读汇总；虚线为待实现的编码 harness 部分。">
+        <defs>
+          <marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ahcs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+<text class="sec" x="50" y="16" text-anchor="start">界面</text>
+<g class="node" data-h="H23"><rect class="bx" x="50" y="26" width="180" height="60" rx="6"/><text class="tt" x="62" y="53.0">命令行</text><text class="ts mono" x="62" y="70.0">go run .</text></g>
+<path class="ar" d="M140 86 V114" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<g class="node" data-h="H23 H24"><rect class="bx" x="250" y="26" width="180" height="60" rx="6"/><text class="tt" x="262" y="53.0">观测台</text><text class="ts mono" x="262" y="70.0">go run . observe</text></g>
+<path class="ar" d="M340 86 V114" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<g class="node" data-h="H23"><rect class="bx" x="450" y="26" width="180" height="60" rx="6"/><text class="tt" x="462" y="53.0">任务队列</text><text class="ts mono" x="462" y="70.0">go run . queue</text></g>
+<path class="ar" d="M540 86 V114" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<g class="node" data-h="H25"><rect class="bx" x="650" y="26" width="180" height="60" rx="6"/><text class="tt" x="662" y="53.0">评测与归因</text><text class="ts mono" x="662" y="70.0">go run . eval</text></g>
+<path class="ar" d="M740 86 V114" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<g class="node" data-h="H21 H22"><rect class="bx" x="850" y="26" width="180" height="60" rx="6"/><text class="tt" x="862" y="53.0">父 agent</text><text class="ts mono" x="862" y="70.0">RunChild 子进程</text></g>
+<path class="ar" d="M940 86 V114" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<g class="node plan" data-h="H23"><rect class="bx pl" x="1050" y="26" width="180" height="60" rx="6"/><text class="tt" x="1062" y="53.0">终端客户端</text><text class="ts mono" x="1062" y="70.0">app-server 客户端</text><text class="tg" x="1220" y="42" text-anchor="end">D34</text></g>
+<path class="ar" d="M1140 86 V114" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<g class="node" data-h="H22"><rect class="bx band" x="50" y="116" width="1180" height="34" rx="6"/><text class="tt" x="66" y="138">app-server 协议</text><text class="ts mono" x="190" y="138">JSON-RPC 一行一条 · turn/start · turn/interrupt · item/started · delta · completed · requestApproval</text><text class="tg2" x="1218" y="138" text-anchor="end">B0 · B1</text></g>
+<path class="ar" d="M640 150 V174" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<text class="al" x="650" y="167" text-anchor="start">双向：事件通知 / 审批请求</text>
+<rect class="proc" x="30" y="176" width="1220" height="560" rx="10"/>
+<text class="sec" x="46" y="198" text-anchor="start">agent 进程 · 一个进程只跑一个任务</text>
+<text class="col" x="50" y="224" text-anchor="start">上下文与模型</text>
+<text class="col" x="490" y="224" text-anchor="start">执行循环</text>
+<text class="col" x="880" y="224" text-anchor="start">工具</text>
+<g class="node plan" data-h="H03"><rect class="bx pl" x="50" y="235" width="330" height="48" rx="6"/><text class="tt" x="62" y="256.0">提示词组装</text><text class="ts" x="62" y="273.0">AGENTS.md 分层 · 环境信息 · 稳定前缀</text><text class="tg" x="370" y="251" text-anchor="end">D24</text></g>
+<g class="node" data-h="H04 H18"><rect class="bx" x="50" y="293" width="330" height="48" rx="6"/><text class="tt" x="62" y="314.0">Transcript / View</text><text class="ts" x="62" y="331.0">完整记录与发给模型的视图分开</text></g>
+<g class="node" data-h="H04"><rect class="bx" x="50" y="351" width="330" height="48" rx="6"/><text class="tt" x="62" y="372.0">上下文压缩</text><text class="ts" x="62" y="389.0">工具截断 · 集中清理 · 摘要</text></g>
+<g class="node plan" data-h="H04"><rect class="bx pl" x="262" y="361" width="108" height="20" rx="10"/><text class="tg" x="316" y="375" text-anchor="middle">分词计数 D30</text></g>
+<g class="node" data-h="H05 H15"><rect class="bx" x="50" y="409" width="330" height="48" rx="6"/><text class="tt" x="62" y="430.0">记忆召回 · Skills 索引</text><text class="ts" x="62" y="447.0">相关记忆注入 · 正文按需加载</text></g>
+<g class="node" data-h="H02"><rect class="bx" x="50" y="467" width="330" height="48" rx="6"/><text class="tt" x="62" y="488.0">模型适配 llm.Stream</text><text class="ts" x="62" y="505.0">流式拼接 · 重组工具调用 · usage</text></g>
+<g class="node" data-h="H02"><rect class="bx" x="50" y="535" width="100" height="40" rx="6"/><text class="tt" x="100" y="559" text-anchor="middle">方舟</text></g>
+<g class="node" data-h="H02"><rect class="bx" x="165" y="535" width="100" height="40" rx="6"/><text class="tt" x="215" y="559" text-anchor="middle">DeepSeek</text></g>
+<g class="node plan" data-h="H02"><rect class="bx pl" x="280" y="535" width="100" height="40" rx="6"/><text class="tt" x="330" y="559" text-anchor="middle">原生协议</text><text class="tg" x="374" y="547" text-anchor="end">D33</text></g>
+<path class="ar" d="M215 515 V533" marker-end="url(#ahc)"/>
+<text class="ts" x="50" y="596" text-anchor="start">OpenAI 兼容接口 · 可经观测台代理逐行转发</text>
+<text class="ts mono" x="50" y="612" text-anchor="start">-provider 手动选择</text>
+<path class="ar" d="M380 259 H392 M380 317 H392 M380 375 H392 M380 433 H392 M392 259 V433"/>
+<path class="ar" d="M392 259 H488" marker-end="url(#ahc)"/>
+<text class="al" x="400" y="252" text-anchor="start">系统提示词 + View</text>
+<path class="ar" d="M490 317 H405 V491 H382" marker-end="url(#ahc)" marker-start="url(#ahcs)"/>
+<text class="al" x="412" y="330" text-anchor="start">流式请求</text>
+<g class="node" data-h="H01"><rect class="bx core" x="490" y="235" width="280" height="48" rx="6"/><text class="tt" x="502" y="256.0">组装请求</text><text class="ts" x="502" y="273.0">View + 本轮工具列表</text></g>
+<g class="node" data-h="H01 H02"><rect class="bx core" x="490" y="293" width="280" height="48" rx="6"/><text class="tt" x="502" y="314.0">调用模型（流式）</text><text class="ts" x="502" y="331.0">item/delta 只用于显示</text></g>
+<g class="node" data-h="H01"><rect class="bx core" x="490" y="351" width="280" height="48" rx="6"/><text class="tt" x="502" y="372.0">解析回复</text><text class="ts" x="502" y="389.0">没有工具调用就结束</text></g>
+<g class="node plan" data-h="H10 H13"><rect class="bx pl ghost" x="482" y="414" width="296" height="64" rx="9"/><text class="tg" x="774" y="410" text-anchor="end">统一权限策略：模式 + 规则 D25</text></g>
+<g class="node" data-h="H10 H12 H01"><rect class="bx core" x="490" y="422" width="280" height="48" rx="6"/><text class="tt" x="502" y="443.0">权限闸门</text><text class="ts" x="502" y="460.0">允许列表 · 来源标记 · 高风险确认 · 联网审批</text></g>
+<g class="node" data-h="H01 H07"><rect class="bx" x="490" y="488" width="280" height="48" rx="6"/><text class="tt" x="502" y="509.0">并行执行工具</text><text class="ts" x="502" y="526.0">单次超时 · 分类重试 · 结果日志</text></g>
+<g class="node" data-h="H01 H18"><rect class="bx" x="490" y="546" width="280" height="48" rx="6"/><text class="tt" x="502" y="567.0">回填结果 · 写检查点</text><text class="ts" x="502" y="584.0">Observation 进 Transcript</text></g>
+<path class="ar" d="M630 283 V291" marker-end="url(#ahc)"/>
+<path class="ar" d="M630 341 V349" marker-end="url(#ahc)"/>
+<path class="ar" d="M630 399 V420" marker-end="url(#ahc)"/>
+<path class="ar" d="M630 470 V486" marker-end="url(#ahc)"/>
+<path class="ar" d="M630 536 V544" marker-end="url(#ahc)"/>
+<path class="ar" d="M770 570 H795 V259 H772" marker-end="url(#ahc)"/>
+<text class="al" x="812" y="420" text-anchor="middle" transform="rotate(-90 812 420)">下一步</text>
+<g class="node" data-h="H01"><rect class="bx" x="440" y="608" width="380" height="56" rx="6"/><text class="tt" x="452" y="626">护栏</text><text class="ts" x="452" y="643">请求预算 · 退避重试 · 6 动作窗口熔断 · 无进展检测</text><text class="ts" x="452" y="657">整次与单次超时 · 取消 · 完成 / 失败 / 取消 / 超时</text></g>
+<g class="node plan" data-h="H14 H15"><rect class="bx pl" x="440" y="676" width="185" height="44" rx="6"/><text class="tt" x="452" y="702.0">Hooks · 斜杠命令</text><text class="tg" x="615" y="692" text-anchor="end">D26</text></g>
+<g class="node plan" data-h="H20"><rect class="bx pl" x="635" y="676" width="185" height="44" rx="6"/><text class="tt" x="647" y="702.0">todo · 计划模式</text><text class="tg" x="810" y="692" text-anchor="end">D27</text></g>
+<g class="node" data-h="H05"><rect class="bx" x="880" y="235" width="350" height="48" rx="6"/><text class="tt" x="892" y="256.0">检索</text><text class="ts" x="892" y="273.0">search_docs · search_notes · 向量 + BM25</text></g>
+<g class="node" data-h="H05"><rect class="bx" x="880" y="293" width="350" height="48" rx="6"/><text class="tt" x="892" y="314.0">长期记忆</text><text class="ts" x="892" y="331.0">remember · search · forget · 只记原话</text></g>
+<g class="node" data-h="H07 H11"><rect class="bx" x="880" y="351" width="350" height="48" rx="6"/><text class="tt" x="892" y="372.0">Bash 沙箱</text><text class="ts" x="892" y="389.0">bubblewrap · seccomp · cgroup · 白名单代理</text></g>
+<g class="node" data-h="H08 H11"><rect class="bx" x="880" y="409" width="350" height="48" rx="6"/><text class="tt" x="892" y="430.0">浏览器</text><text class="ts" x="892" y="447.0">chromedp · 只读 · 截图 · 出口共用 netguard</text></g>
+<g class="node" data-h="H16"><rect class="bx" x="880" y="467" width="350" height="48" rx="6"/><text class="tt" x="892" y="488.0">MCP</text><text class="ts" x="892" y="505.0">stdio · Streamable HTTP · 多 server</text></g>
+<g class="node" data-h="H21"><rect class="bx" x="880" y="525" width="350" height="48" rx="6"/><text class="tt" x="892" y="546.0">spawn_agent</text><text class="ts" x="892" y="563.0">子进程 RunChild · 幂等 task_id</text></g>
+<g class="node plan" data-h="H06 H09"><rect class="bx pl" x="880" y="583" width="350" height="48" rx="6"/><text class="tt" x="892" y="604.0">编码工具</text><text class="ts" x="892" y="621.0">read · glob · grep · edit · write</text><text class="tg" x="1220" y="599" text-anchor="end">D23</text></g>
+<g class="node plan" data-h="H07"><rect class="bx pl" x="880" y="641" width="350" height="48" rx="6"/><text class="tt" x="892" y="662.0">后台命令</text><text class="ts" x="892" y="679.0">启动 · 读输出 · 停止</text><text class="tg" x="1220" y="657" text-anchor="end">D32</text></g>
+<path class="ar" d="M866 259 H878 M866 317 H878 M866 375 H878 M866 433 H878 M866 491 H878 M866 549 H878 M866 607 H878 M866 665 H878 M866 259 V665"/>
+<path class="bridge" d="M786 512 H804"/>
+<path class="ar" d="M770 512 H864" marker-end="url(#ahc)"/>
+<text class="al" x="818" y="505" text-anchor="start">调用</text>
+<rect class="proc" x="30" y="760" width="880" height="134" rx="10"/>
+<text class="sec" x="46" y="781" text-anchor="start">.data/ 持久化 · 按租户分目录 · 不提交</text>
+<g class="node" data-h="H18"><rect class="bx" x="50" y="794" width="200" height="40" rx="6"/><text class="tt" x="150" y="819" text-anchor="middle">检查点 · 续接链</text></g>
+<g class="node" data-h="H18"><rect class="bx" x="265" y="794" width="200" height="40" rx="6"/><text class="tt" x="365" y="819" text-anchor="middle">调用结果日志</text></g>
+<g class="node" data-h="H05"><rect class="bx" x="480" y="794" width="200" height="40" rx="6"/><text class="tt" x="580" y="819" text-anchor="middle">长期记忆 JSON</text></g>
+<g class="node" data-h="H11"><rect class="bx" x="695" y="794" width="200" height="40" rx="6"/><text class="tt" x="795" y="819" text-anchor="middle">沙箱工作目录</text></g>
+<g class="node" data-h="H08"><rect class="bx" x="50" y="844" width="200" height="40" rx="6"/><text class="tt" x="150" y="869" text-anchor="middle">浏览器截图</text></g>
+<g class="node" data-h="H24"><rect class="bx" x="265" y="844" width="200" height="40" rx="6"/><text class="tt" x="365" y="869" text-anchor="middle">调用链 span</text></g>
+<g class="node" data-h="H24"><rect class="bx" x="480" y="844" width="200" height="40" rx="6"/><text class="tt" x="580" y="869" text-anchor="middle">审计哈希链</text></g>
+<g class="node" data-h="H25"><rect class="bx" x="695" y="844" width="200" height="40" rx="6"/><text class="tt" x="795" y="869" text-anchor="middle">评测与归因记录</text></g>
+<path class="ar" d="M630 736 V758" marker-end="url(#ahc)"/>
+<text class="al" x="640" y="752" text-anchor="start">检查点 · 日志 · span · 审计</text>
+<g class="node plan" data-h="H06 H11"><rect class="bx pl" x="940" y="760" width="310" height="60" rx="6"/><text class="tt" x="952" y="787.0">工作区仓库</text><text class="ts" x="952" y="804.0">编码工具读写 · bash 可写挂载</text><text class="tg" x="1240" y="776" text-anchor="end">D22+</text></g>
+<g class="node plan" data-h="H19 H20"><rect class="bx pl" x="940" y="834" width="310" height="60" rx="6"/><text class="tt" x="952" y="861.0">文件快照 · 进度文件</text><text class="ts" x="952" y="878.0">按轮回退 D29 · 跨会话接力 D31</text></g>
+<path class="ar" d="M1095 736 V758" marker-end="url(#ahc)"/>
+<text class="al" x="1105" y="752" text-anchor="start">读写</text>
+<path class="ar" d="M1095 820 V832" marker-end="url(#ahc)"/>
+<path class="ar" d="M470 894 V916" marker-end="url(#ahc)"/>
+<text class="al" x="480" y="910" text-anchor="start">只读</text>
+<g class="node" data-h="H24 H25"><rect class="bx" x="30" y="918" width="880" height="44" rx="6"/><text class="tt" x="42" y="937.0">只读汇总</text><text class="ts" x="42" y="954.0">metrics 指标 · eval 打分与三票评审 · audit 校验 · 观测台回放与分叉</text></g>
+<g class="node plan" data-h="H25"><rect class="bx pl" x="940" y="918" width="310" height="44" rx="6"/><text class="tt" x="952" y="944.0">编码任务评测 · 消融</text><text class="tg" x="1240" y="934" text-anchor="end">D36–40</text></g>
+      </svg>
+    </div>
+    <figcaption>一次请求的路径：界面发 <code>turn/start</code> → 执行循环组装请求、流式调用模型 → 工具调用先过权限闸门，再并行执行 → 结果回填并写检查点，进入下一步，直到没有工具调用或护栏停止。</figcaption>
+  </figure>
+  <section>
+    <h2>25 项 harness 能力 · 9 个领域</h2>
+    <p class="hint">每项下面是细项和各自的状态，整项状态由细项汇总。点选一项，现状图里只亮出它所在的位置，再点一次取消。<span id="nohit" hidden>这一项在现状图里还没有对应组件。</span></p>
+    <div class="doms">
+<div class="dom"><h3>循环与模型</h3><div class="caps"><button class="cap" type="button" data-h="H01" id="cap-H01" aria-pressed="false"><span class="code">H01</span><span class="name">Agent 循环</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>流式采样与工具调用解析</span></li><li class="part"><span>并行调度：只读并行、修改串行</span></li><li class="have"><span>停止条件与结局：轮数、预算、无进展</span></li><li class="part"><span>中断与中途插话（steer）</span></li></ul><span class="days">D1–2 · D8 · D20 · D34 · 参考：Codex turn 循环 · Agent SDK agent loop</span></button><button class="cap" type="button" data-h="H02" id="cap-H02" aria-pressed="false"><span class="code">H02</span><span class="name">模型客户端</span><span class="st part">部分</span><ul class="sub"><li class="part"><span>多协议适配</span></li><li class="part"><span>错误分类与重试</span></li><li class="part"><span>推理强度与模型切换</span></li><li class="part"><span>用量与成本记账、预算上限</span></li></ul><span class="days">B1 · D33 · 参考：Responses API · Messages API</span></button></div></div>
+<div class="dom"><h3>上下文</h3><div class="caps"><button class="cap" type="button" data-h="H03" id="cap-H03" aria-pressed="false"><span class="code">H03</span><span class="name">提示词组装</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>固定顺序与稳定前缀（提示缓存）</span></li><li class="miss"><span>项目指令分层加载</span></li><li class="miss"><span>环境上下文：cwd、git、权限</span></li><li class="miss"><span>系统提醒：文件变更、todo</span></li></ul><span class="days">D24 · 参考：AGENTS.md · CLAUDE.md · 系统提醒</span></button><button class="cap" type="button" data-h="H04" id="cap-H04" aria-pressed="false"><span class="code">H04</span><span class="name">上下文预算与压缩</span><span class="st part">部分</span><ul class="sub"><li class="part"><span>token 计数</span></li><li class="have"><span>工具输出截断</span></li><li class="have"><span>压缩：先清旧输出，再摘要</span></li><li class="miss"><span>工具定义延迟加载</span></li></ul><span class="days">D3 · D30 · 参考：auto-compact · /compact · ToolSearch</span></button><button class="cap" type="button" data-h="H05" id="cap-H05" aria-pressed="false"><span class="code">H05</span><span class="name">记忆与检索</span><span class="st have">已有</span><ul class="sub"><li class="have"><span>跨会话记忆：写入、召回、遗忘</span></li><li class="have"><span>检索增强：向量 + BM25 + 重排</span></li></ul><span class="days">D4–5 · 参考：自动记忆 MEMORY.md</span></button></div></div>
+<div class="dom"><h3>工具</h3><div class="caps"><button class="cap" type="button" data-h="H06" id="cap-H06" aria-pressed="false"><span class="code">H06</span><span class="name">编码工具</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>读：行号、分页</span></li><li class="miss"><span>搜：glob、grep</span></li><li class="miss"><span>改：唯一替换或补丁，读后才改</span></li><li class="miss"><span>代码智能：诊断、跳转（未排期）</span></li></ul><span class="days">D23 · 参考：apply_patch · Read / Edit / Write · Glob / Grep</span></button><button class="cap" type="button" data-h="H07" id="cap-H07" aria-pressed="false"><span class="code">H07</span><span class="name">Shell 与进程</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>一次性命令：超时、输出截断</span></li><li class="miss"><span>PTY 交互会话</span></li><li class="miss"><span>后台进程：启动、读输出、停止</span></li></ul><span class="days">D12 · D32 · 参考：shell（PTY）· Bash 后台运行</span></button><button class="cap" type="button" data-h="H08" id="cap-H08" aria-pressed="false"><span class="code">H08</span><span class="name">Web 与浏览器</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>网页读取</span></li><li class="part"><span>搜索</span></li></ul><span class="days">D11 · 参考：WebFetch · WebSearch · 浏览器扩展</span></button><button class="cap" type="button" data-h="H09" id="cap-H09" aria-pressed="false"><span class="code">H09</span><span class="name">工具接口设计（ACI）</span><span class="st part">部分</span><ul class="sub"><li class="part"><span>描述与 schema 校验</span></li><li class="part"><span>只读 / 破坏性标注</span></li><li class="part"><span>结果格式与错误可读性</span></li></ul><span class="days">D23 · D37 · 参考：工具描述 · readOnlyHint · 错误可读</span></button></div></div>
+<div class="dom"><h3>安全</h3><div class="caps"><button class="cap" type="button" data-h="H10" id="cap-H10" aria-pressed="false"><span class="code">H10</span><span class="name">权限策略</span><span class="st part">部分</span><ul class="sub"><li class="miss"><span>规则：deny › ask › allow</span></li><li class="miss"><span>权限模式：计划、手动、自动编辑、全权</span></li><li class="part"><span>审批者与审批协议</span></li><li class="have"><span>高风险判断：外发、破坏性、重做</span></li></ul><span class="days">D20 · D25 · 参考：approval_policy · permission modes · rules</span></button><button class="cap" type="button" data-h="H11" id="cap-H11" aria-pressed="false"><span class="code">H11</span><span class="name">OS 沙箱与网络</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>文件系统边界</span></li><li class="have"><span>系统调用与资源限制</span></li><li class="have"><span>网络代理白名单</span></li><li class="part"><span>凭证隔离：工具进程拿不到密钥</span></li></ul><span class="days">D12 · 参考：Seatbelt · bwrap + Landlock/seccomp</span></button><button class="cap" type="button" data-h="H12" id="cap-H12" aria-pressed="false"><span class="code">H12</span><span class="name">不可信内容</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>工具结果来源标记</span></li><li class="have"><span>按轮工具允许列表</span></li><li class="miss"><span>真实网页 / MCP 注入评测（未排期）</span></li></ul><span class="days">D18–19 · 参考：提示注入防护 · 来源标记</span></button></div></div>
+<div class="dom"><h3>扩展</h3><div class="caps"><button class="cap" type="button" data-h="H13" id="cap-H13" aria-pressed="false"><span class="code">H13</span><span class="name">配置与信任</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>设置分层合并：托管 › 项目 › 用户</span></li><li class="miss"><span>项目信任与托管策略</span></li></ul><span class="days">D25 · D26 · 参考：config.toml · settings.json 分层</span></button><button class="cap" type="button" data-h="H14" id="cap-H14" aria-pressed="false"><span class="code">H14</span><span class="name">Hooks</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>生命周期事件</span></li><li class="miss"><span>拦截、改写、放行</span></li></ul><span class="days">D26 · 参考：PreToolUse · PostToolUse · Stop …</span></button><button class="cap" type="button" data-h="H15" id="cap-H15" aria-pressed="false"><span class="code">H15</span><span class="name">Skills 与斜杠命令</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>Skills：索引常驻、正文按需</span></li><li class="miss"><span>斜杠命令</span></li></ul><span class="days">Bonus · D26 · 参考：Skills · 斜杠命令</span></button><button class="cap" type="button" data-h="H16" id="cap-H16" aria-pressed="false"><span class="code">H16</span><span class="name">MCP</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>客户端：stdio、Streamable HTTP、多 server</span></li><li class="have"><span>服务端</span></li><li class="miss"><span>远程鉴权、动态工具列表</span></li></ul><span class="days">D6–7 · 参考：MCP client / server</span></button><button class="cap" type="button" data-h="H17" id="cap-H17" aria-pressed="false"><span class="code">H17</span><span class="name">插件打包</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>把 skills、hooks、MCP、命令打成一个包</span></li></ul><span class="days">未排期 · 参考：plugins</span></button></div></div>
+<div class="dom"><h3>会话与状态</h3><div class="caps"><button class="cap" type="button" data-h="H18" id="cap-H18" aria-pressed="false"><span class="code">H18</span><span class="name">会话记录与恢复</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>会话持久化与续跑</span></li><li class="have"><span>续聊、分叉</span></li><li class="miss"><span>会话命令：恢复、分叉、压缩</span></li></ul><span class="days">D9 · D30 · 参考：rollout · thread/resume · fork</span></button><button class="cap" type="button" data-h="H19" id="cap-H19" aria-pressed="false"><span class="code">H19</span><span class="name">文件检查点与回退</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>改文件前快照</span></li><li class="miss"><span>按步回退，与对话对齐</span></li></ul><span class="days">D29 · 参考：rewind · thread/revert</span></button><button class="cap" type="button" data-h="H20" id="cap-H20" aria-pressed="false"><span class="code">H20</span><span class="name">规划与长任务</span><span class="st miss">缺</span><ul class="sub"><li class="miss"><span>todo 与计划模式</span></li><li class="miss"><span>跨会话接力</span></li></ul><span class="days">D27 · D31 · 参考：Todo · plan mode · 进度文件</span></button></div></div>
+<div class="dom"><h3>多 agent</h3><div class="caps"><button class="cap" type="button" data-h="H21" id="cap-H21" aria-pressed="false"><span class="code">H21</span><span class="name">子 agent</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>独立上下文，只回摘要</span></li><li class="have"><span>权限继承与幂等恢复</span></li><li class="miss"><span>fork 当前对话、后台运行</span></li></ul><span class="days">D10+ · 参考：Agent / Task 工具 · 子 agent 定义</span></button></div></div>
+<div class="dom"><h3>界面与协议</h3><div class="caps"><button class="cap" type="button" data-h="H22" id="cap-H22" aria-pressed="false"><span class="code">H22</span><span class="name">客户端协议</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>Thread / Turn / Item 事件</span></li><li class="have"><span>流式增量</span></li><li class="have"><span>审批请求由 harness 发起</span></li><li class="miss"><span>断线重连与事件补读</span></li></ul><span class="days">B0 · B1 · 参考：app-server · Agent SDK 消息流</span></button><button class="cap" type="button" data-h="H23" id="cap-H23" aria-pressed="false"><span class="code">H23</span><span class="name">客户端</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>无头运行</span></li><li class="have"><span>网页界面</span></li><li class="miss"><span>终端客户端</span></li></ul><span class="days">D34 · 参考：TUI · IDE · 无头 · SDK</span></button></div></div>
+<div class="dom"><h3>质量</h3><div class="caps"><button class="cap" type="button" data-h="H24" id="cap-H24" aria-pressed="false"><span class="code">H24</span><span class="name">可观测性与审计</span><span class="st have">已有</span><ul class="sub"><li class="have"><span>调用链与指标</span></li><li class="have"><span>审计哈希链</span></li></ul><span class="days">D13 · D15 · D21 · 参考：OpenTelemetry · 审计日志</span></button><button class="cap" type="button" data-h="H25" id="cap-H25" aria-pressed="false"><span class="code">H25</span><span class="name">评测与迭代</span><span class="st part">部分</span><ul class="sub"><li class="have"><span>问答评测、三票评审</span></li><li class="have"><span>归因与回放验证</span></li><li class="miss"><span>编码任务评测与消融</span></li></ul><span class="days">D16–17 · D36–40 · 参考：Terminal-Bench 类任务集</span></button></div></div>
+    </div>
+  </section>
+<script>
+(function () {
+  var svg = document.getElementById('cur');
+  var nodes = svg.querySelectorAll('.node');
+  var caps = document.querySelectorAll('.cap');
+  var current = null;
+  function apply(h) {
+    current = h;
+    var hit = 0;
+    svg.classList.toggle('focus', !!h);
+    nodes.forEach(function (n) {
+      var list = (n.getAttribute('data-h') || '').split(' ');
+      var on = !!h && list.indexOf(h) >= 0;
+      if (on) hit++;
+      n.classList.toggle('on', on);
+    });
+    document.getElementById('nohit').hidden = !h || hit > 0;
+    caps.forEach(function (c) { c.classList.toggle('on', c.getAttribute('data-h') === h); c.setAttribute('aria-pressed', c.getAttribute('data-h') === h ? 'true' : 'false'); });
+  }
+  caps.forEach(function (c) {
+    c.addEventListener('click', function () { apply(current === c.getAttribute('data-h') ? null : c.getAttribute('data-h')); });
+  });
+  var box = document.getElementById('show-plan');
+  box.addEventListener('change', function () { svg.classList.toggle('noplan', !box.checked); });
+})();
+</script>
+
+  <section>
+    <h2>来源</h2>
+    <ol class="src">
+<li><a href="https://openai.com/index/unrolling-the-codex-agent-loop" target="_blank" rel="noopener">Unrolling the Codex agent loop</a> <span>· OpenAI 工程博客，2026-01</span></li>
+<li><a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md" target="_blank" rel="noopener">Codex app-server README</a> <span>· 协议方法与传输</span></li>
+<li><a href="https://learn.chatgpt.com/docs/sandboxing" target="_blank" rel="noopener">Codex：沙箱与审批</a> <span>· sandbox_mode、approval_policy</span></li>
+<li><a href="https://developers.openai.com/codex/hooks" target="_blank" rel="noopener">Codex：Hooks</a> <span>· 事件与配置位置</span></li>
+<li><a href="https://code.claude.com/docs/en/how-claude-code-works" target="_blank" rel="noopener">How Claude Code works</a> <span>· 循环、上下文、检查点、权限</span></li>
+<li><a href="https://code.claude.com/docs/en/agent-sdk/agent-loop" target="_blank" rel="noopener">Agent SDK：How the agent loop works</a> <span>· 消息类型、并行规则、结局</span></li>
+<li><a href="https://code.claude.com/docs/en/permissions" target="_blank" rel="noopener">Claude Code：Permissions</a> <span>· 规则顺序、hook 与沙箱的关系</span></li>
+<li><a href="https://code.claude.com/docs/en/hooks" target="_blank" rel="noopener">Claude Code：Hooks</a> <span>· 事件与决策字段</span></li>
+<li><a href="https://codex.danielvaughan.com/2026/04/10/codex-cli-internals-queue-pair-guardian-sandbox/" target="_blank" rel="noopener">Codex CLI Internals（第三方）</a> <span>· 内部队列与沙箱实现，二手资料</span></li>
+    </ol>
+  </section>
+</div>
+
+<script>
+(function () {
+  var svg = document.getElementById('map');
+  var box = document.getElementById('show-ours');
+  var legend = document.getElementById('ours-legend');
+  box.addEventListener('change', function () {
+    svg.classList.toggle('ours', box.checked);
+    legend.hidden = !box.checked;
+  });
+})();
+</script>
+</body>
+</html>
