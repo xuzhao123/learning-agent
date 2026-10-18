@@ -11,7 +11,7 @@
 | 参考架构与现状对照 | [harness-architecture.html](../../harness-architecture.html) | 上半部分是综合 Codex 与 Claude Code 的参考架构及两家对照表，可切换标出本项目现状；下半部分是本项目现状架构，点能力卡片会在图中定位 |
 | 能力清单 | [JOB_REQUIREMENTS.md](../../JOB_REQUIREMENTS.md#harness-能力对照) | 9 个领域、25 项能力，每项拆成细项并标状态，附 Codex / Claude Code 的对应名称与课程编号 |
 | 课程计划 | [plan.md](../../plan.md#week-4--编码-harness-的基础) | Week 4–6 按缺口重排 |
-| 自用任务集 | 本文第 3 节 | 6 个来自待办的真实小任务，D28、D36、D41 使用 |
+| 自用任务集 | 本文第 3 节 | 6 个来自待办的真实小任务，D27、D36、D41 使用 |
 
 ## 1. 对照结果
 
@@ -63,7 +63,7 @@
 
 | 时间 | 用法 |
 | --- | --- |
-| D28 | 编码工具、权限与 hooks 补完后，挑 T1 或 T5 让 harness 第一次真正改代码，记录卡在哪一步 |
+| D27 | 编码工具、权限与 hooks 补完后，挑 T5 让 harness 第一次真正改代码，记录卡在哪一步（原定 D28，规划课调整后提前） |
 | D36 | 给每题配校验命令，整理成编码任务评测集 |
 | D41 | 用 harness 完成 T3、T4 或 T6 中的一题 |
 

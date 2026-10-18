@@ -84,11 +84,12 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 		}
 		var args struct {
 			Name string `json:"name"`
+			File string `json:"file"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return nil, llm.Permanent(errors.New("name 需要是字符串"))
+			return nil, llm.Permanent(errors.New("name、file 需要是字符串"))
 		}
-		return skills.Load(strings.TrimSpace(args.Name))
+		return skills.Load(strings.TrimSpace(args.Name), strings.TrimSpace(args.File))
 	case "bash", "request_network_access":
 		return sandbox.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
 	case "read_file", "glob", "grep", "edit_file", "write_file":

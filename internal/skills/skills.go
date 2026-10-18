@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -14,8 +15,8 @@ import (
 	"learning-agent/internal/protocol"
 )
 
-// Bonus：知识型 skill。三级加载：索引常驻 system → load_skill 读全文 →（v1 不做）references/scripts。
-// v1 只读 Markdown，不执行 skill 自带脚本；脚本执行等沙箱。
+// Bonus：知识型 skill。三级加载：索引常驻 system → load_skill 读全文 → load_skill(file) 按需读 references/*.md。
+// 只读 Markdown，不执行 skill 自带脚本；脚本执行等沙箱。
 var Enabled bool
 var Index []Skill // nil 表示未启用
 
@@ -23,8 +24,11 @@ type Skill struct{ Name, Description, Path string }
 
 var LoadDefinition = map[string]any{
 	"name":        "load_skill",
-	"description": "按名称读取一个 skill 的完整操作指南（SKILL.md 正文）。只在任务与 system 中列出的某个 skill 相关时调用；name 必须是列表里的名字。",
-	"parameters":  llm.Parameters("name"),
+	"description": "按名称读取一个 skill 的完整操作指南（SKILL.md 正文）。只在任务与 system 中列出的某个 skill 相关时调用；name 必须是列表里的名字。正文要求按需读取 references/ 下的文件时，再带上 file（如 references/mode-echarts.md）读取那一份。",
+	"parameters": map[string]any{"type": "object", "required": []string{"name"}, "properties": map[string]any{
+		"name": map[string]string{"type": "string"},
+		"file": map[string]string{"type": "string", "description": "可选：skill 目录内 references/ 下的 .md 相对路径；不给则返回 SKILL.md 正文"},
+	}},
 }
 
 // spec：小写字母、数字、单个连字符分隔，不以连字符开头或结尾。
@@ -156,9 +160,9 @@ func Prompt() string {
 	return strings.Join(lines, "\n")
 }
 
-// 只按索引里的名字找文件，模型传入的字符串不会拼进路径。
+// 只按索引里的名字找 skill 目录；file 经 os.Root 打开，带 .. 或符号链接也逃不出这个目录。
 // 名字不存在时返回结构化结果而不是 error：这是可自我纠正的业务错误，重试同样的参数没有意义。
-func Load(name string) (any, error) {
+func Load(name, file string) (any, error) {
 	available := []string{}
 	for _, s := range Index {
 		available = append(available, s.Name)
@@ -170,7 +174,36 @@ func Load(name string) (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("skill %s 读取失败：%v", name, err)
 		}
-		return map[string]any{"name": name, "content": body}, nil
+		if file == "" {
+			return map[string]any{"name": name, "content": body}, nil
+		}
+		return loadReference(s, file)
 	}
 	return map[string]any{"error": "unknown_skill", "message": fmt.Sprintf("没有名为 %q 的 skill", name), "available": available}, nil
+}
+
+// 第三级：只开放 references/ 下的 Markdown，examples/、scripts/ 等开发用文件不给模型。
+// 先 Clean 再判断前缀：references/../examples/x.md 在 os.Root 里不算逃逸，但不该被读到。
+func loadReference(s Skill, file string) (any, error) {
+	file = path.Clean(file)
+	if !filepath.IsLocal(file) || !strings.HasPrefix(file, "references/") || filepath.Ext(file) != ".md" {
+		return map[string]any{"error": "bad_file", "message": "file 只能是 references/ 下的 .md 文件"}, nil
+	}
+	root, err := os.OpenRoot(filepath.Dir(s.Path))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	info, err := root.Stat(file)
+	if err != nil {
+		return map[string]any{"error": "unknown_file", "message": fmt.Sprintf("skill %s 里没有 %s", s.Name, file)}, nil
+	}
+	if info.Size() > maxSkillBytes {
+		return nil, llm.Permanent(fmt.Errorf("%s 超过 %d 字节", file, maxSkillBytes))
+	}
+	data, err := root.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"name": s.Name, "file": file, "content": string(data)}, nil
 }
