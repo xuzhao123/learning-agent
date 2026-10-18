@@ -54,6 +54,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .runitem button { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; text-align: left; border: 0; background: none; padding: 0; }
 .runitem .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runitem small { flex: none; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.runitem .src { margin-right: 6px; padding: 0 5px; border-radius: 4px; background: var(--soft); color: var(--muted); font-size: 10.5px; }
 .live { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
 .whoami { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
 .whoami .avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--soft); color: var(--text); font-size: 11px; font-weight: 600; text-transform: uppercase; }
@@ -521,6 +522,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <div class="brand"><span class="mark"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5"/><path d="M13 17h6"/></svg></span>Learning Agent</div>
     <button id="new-chat" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>新对话</button>
     <button id="settings" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg></span>设置</button>
+    <button id="import" class="navbtn" title="Codex 的 rollout-*.jsonl 或 Claude Code 的会话 .jsonl，导入后只读查看"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg></span>导入对话</button><input id="import-file" type="file" accept=".jsonl,application/x-ndjson,application/json" hidden>
     <div class="navlabel"><span>中心</span></div>
     <button id="skills-hub" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6-4.6-1.9 4.6-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg></span>Skills</button>
     <button id="mcp-hub" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v5M15 2v5"/><path d="M6 7h12v4a6 6 0 0 1-12 0Z"/><path d="M12 17v5"/></svg></span>MCP</button>
@@ -716,7 +718,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {} }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map() }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -731,7 +733,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + endLabel(r) + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; r.source = e.source || ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.termination = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -744,8 +746,12 @@ function apply(r, e) {
     r.aux.push({ aux: true, purpose: e.purpose, n: e.call, turn, req: e.body || {}, start: time, tools: [], usage: {} });
   }
   else if (e.kind === "request") {
+    // 导入的对话（Codex / Claude Code）只存新增的消息：接在上一次请求后面还原完整输入，工具定义沿用。
+    if (e.body?.append && r.lastBody) e = { ...e, body: { ...e.body, messages: (r.lastBody.messages || []).concat(e.body.messages || []), tools: e.body.tools ?? r.lastBody.tools } };
+    if (e.body) r.lastBody = e.body;
     const messages = (e.body && e.body.messages) || [];
-    const prefixLength = (a, b) => { let n = 0; while (n < a.length && n < b.length && JSON.stringify(a[n]) === JSON.stringify(b[n])) n++; return n; };
+    // 先比引用再比内容：长会话（几百次请求、上千条消息）逐条序列化会很慢。
+    const prefixLength = (a, b) => { let n = 0; while (n < a.length && n < b.length && (a[n] === b[n] || JSON.stringify(a[n]) === JSON.stringify(b[n]))) n++; return n; };
     const shared = prefixLength(r.prevMessages, messages);
     const prev = r.calls[r.calls.length - 1];
     const lastMessage = messages[messages.length - 1];
@@ -767,11 +773,12 @@ function apply(r, e) {
     r.prompt = prompt; r.turnPending = false; r.pendingTime = null; r.pending = "";
     const rebuilt = !isCompact && ((prev && prev.compact) || (r.lastMainMessages.length > 0 && prefixLength(r.lastMainMessages, messages) < r.lastMainMessages.length));
     // 压缩后的消息数可能变短；按调用ID在所有历史请求中关联结果，不能依赖旧数组长度。
-    for (const m of messages) if (m.role === "tool") {
+    // 前缀相同的部分上次已经处理过，只看新增的消息。
+    for (const m of rebuilt || isCompact ? messages : messages.slice(shared)) if (m.role === "tool") {
       const observation = parse(m.content);
       if (!r.embeddingExplicit && observation?.tool === "search_docs" && ["ark", "local"].includes(observation.result?.backend)) r.embedding = observation.result.backend;
-      const t = r.calls.flatMap((c) => c.tools).find((t) => t.id === m.tool_call_id && !t.done);
-      if (t) { t.result = m.content; t.done = time; }
+      const t = r.openTools.get(m.tool_call_id);
+      if (t) { t.result = m.content; t.done = time; t.isError = !!m.is_error; r.openTools.delete(m.tool_call_id); }
     }
     if (!isCompact) r.lastMainMessages = messages;
     if (!r.query) { const u = messages.find((m) => m.role === "user"); if (u) r.query = u.content; }
@@ -790,6 +797,7 @@ function apply(r, e) {
     c.invalidSummary = c.compact && (m.tool_calls || []).length > 0;
     if (c.aux) return;
     c.tools = (c.compact ? [] : (m.tool_calls || [])).map((t, i) => ({ id: t.id, name: t.function.name, args: t.function.arguments, start: time, call: c, index: i }));
+    for (const t of c.tools) r.openTools.set(t.id, t);
   } else if (e.kind === "stdout" || e.kind === "stderr") {
     r.logs.push(e);
     if (!r.protocol) legacyLine(r, e, time);
@@ -895,7 +903,7 @@ function analyze(r) {
   for (const c of r.calls) for (const t of c.tools) {
     const v = parse(t.result);
     const shown = v && typeof v === "object" && "result" in v ? v.result : v;
-    t.state = !t.done ? (r.exit ? "lost" : "running") : v?.status === "denied" ? "denied" : v && typeof v === "object" && v.error ? "error" : (isEmpty(shown) || shown?.status === "insufficient") ? "empty" : "ok";
+    t.state = !t.done ? (r.exit ? "lost" : "running") : v?.status === "denied" ? "denied" : t.isError || (v && typeof v === "object" && v.error) ? "error" : (isEmpty(shown) || shown?.status === "insufficient") ? "empty" : "ok";
     const key = t.name + " " + compact(t.args);
     t.repeatOf = seen.has(key) && seen.get(key) < c.n ? seen.get(key) : null;
     if (!seen.has(key)) seen.set(key, c.n);
@@ -926,6 +934,7 @@ function analyze(r) {
     failed: !!r.exit && r.exit !== "exit 0",
   };
 }
+const SOURCE_LABEL = { codex: "Codex", "claude-code": "Claude Code" };
 function tokenParts(u) {
   const cached = (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0;
   const reasoning = (u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens) || 0;
@@ -937,7 +946,7 @@ function toolSummary(t) {
   if (t.state === "lost") return args + " → 无结果";
   if (t.state === "empty") return args + " → 空结果";
   const v = parse(t.result);
-  if (t.state === "error") return args + " → 错误：" + clip(v.error, 40);
+  if (t.state === "error") return args + " → 错误：" + clip(v?.error ?? v, 40);
   const shown = v && typeof v === "object" && "result" in v ? v.result : v;
   if (t.name === "search_memory" && shown?.memories) return args + ` → ${shown.memories.length} 条记忆 · ` + shown.memories.map((m) => m.id).join(" / ");
   if (t.name === "forget_memory" && shown?.deleted) return args + ` → 已删除 ${shown.deleted}`;
@@ -1022,7 +1031,7 @@ function render() {
   $("search").hidden = $("expand").hidden = ui.tab !== "trace";
   $("replay").textContent = ui.replay ? "■ 停止" : "▶ 回放";
   $("terminal").disabled = !ui.run || ui.tab === "compare";
-  $("attribute").disabled = !ui.run || !ui.run.exit || !!ui.replay || ui.tab === "compare";
+  $("attribute").disabled = !ui.run || !ui.run.exit || !!ui.run.source || !!ui.replay || ui.tab === "compare";
   if (ui.tab === "compare") return renderCompare();
   const r = ui.run;
   if (!r) return;
@@ -2390,7 +2399,7 @@ function drawChat() {
   const answered = last && last.choice && !last.tools.length && last.choice.message.content;
   if (r.exit && (r.exit !== "exit 0" || !answered)) {
     const card = el("div", "stopcard");
-    card.append(el("div", "err", (r.stopRequested ? "已按停止按钮中断：" : "agent 已停止：") + endLabel(r)));
+    card.append(el("div", "err", r.source && r.exit === "exit 0" ? "记录在这里结束：最后一次请求之后没有回答" : (r.stopRequested ? "已按停止按钮中断：" : "agent 已停止：") + endLabel(r)));
     if (r.checkpoint) card.append(el("div", "meta", "检查点已保存，可以直接继续提问"));
     const tail = r.logs.filter((l) => !(l.text || "").startsWith("用户续聊：")).slice(-6);
     if (tail.length) card.append(fold("最后几行输出", tail.map((l) => l.text).join("\n")));
@@ -2485,12 +2494,17 @@ function syncComposer() {
   $("send").innerHTML = running ? '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>' : '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
   $("send").title = running ? (r.stopRequested ? "强制结束（SIGKILL）" : "停止（SIGINT：先回填结果、保存检查点）") : "发送";
   $("send").setAttribute("aria-label", running ? (r.stopRequested ? "强制结束" : "停止") : "发送");
-  $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
-  $("query").placeholder = r ? "继续提问" : "给 agent 布置一个任务，/ 选命令";
+  const imported = SOURCE_LABEL[r?.source];
+  // 导入的对话只读：模型、工作区、权限与工具都是对方 agent 的，这里不给选择。
+  for (const id of ["provider", "perm", "tools-link"]) $(id).hidden = !!imported;
+  if (imported) $("workspace").hidden = true;
+  $("query").disabled = !!imported;
+  $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !!imported || !$("query").value.trim();
+  $("query").placeholder = imported ? "导入的对话只能查看" : r ? "继续提问" : "给 agent 布置一个任务，/ 选命令";
   const steps = r ? r.maxSteps : Number(s?.values.max_steps || 0);
-  $("mode-chip").textContent = r && ui.toolsOpen ? $("tools-link").title : steps > 0 ? `预算 ${steps} 次请求` : "";
+  $("mode-chip").textContent = imported ? `${imported} · ${r.calls.find((c) => c.res?.model)?.res.model || ""}` : r && ui.toolsOpen ? $("tools-link").title : steps > 0 ? `预算 ${steps} 次请求` : "";
   // 只在需要人注意时提示；常规操作说明不放在输入框下面。
-  $("hint").textContent = !r ? "" : lab ? "对比实验使用独立问题；自行提问请新建对话" : ui.replay ? "回放中，结束后可继续提问" :
+  $("hint").textContent = !r ? "" : imported ? `从 ${imported} 导入的记录，只能查看；系统提示词、工具定义与耗时以记录里有的为准` : lab ? "对比实验使用独立问题；自行提问请新建对话" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次强制结束" : "") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : "";
 }
 // 列表显示最后一次活动的时间：服务端给 Unix 毫秒时间戳，这里按看的人所在的时区格式化。
@@ -2522,6 +2536,7 @@ async function loadRuns() {
     }
     const b = el("button"), q = el("span", "q");
     if (!r.done) q.append(el("span", "live"));
+    if (SOURCE_LABEL[r.source]) q.append(el("span", "src", SOURCE_LABEL[r.source]));
     q.append(r.query === LAB_TITLE ? "上下文实验" : r.query === RAG_LAB_TITLE ? "检索对比" : r.query || "（无问题）");
     b.title = `${r.query}\n对话 ID：${r.id}`;
     b.append(q, el("small", "", relTime(r)));
@@ -2604,6 +2619,23 @@ function newChat(updateURL = true) {
   render(); loadRuns(); $("query").focus();
 }
 $("new-chat").onclick = () => newChat();
+// 导入 Codex / Claude Code 的会话文件：服务端换成观测台的存档格式，导入后只读。
+$("import").onclick = () => $("import-file").click();
+$("import-file").onchange = async () => {
+  const file = $("import-file").files[0];
+  $("import-file").value = "";
+  if (!file) return;
+  const label = $("import").lastChild.textContent;
+  $("import").lastChild.textContent = "导入中…";
+  try {
+    const res = await fetch("/runs/import", { method: "POST", body: file });
+    if (!res.ok) throw new Error(await res.text());
+    document.body.classList.remove("nav-open");
+    ui.page = "chat";
+    show((await res.json()).id);
+  } catch (err) { alert("导入失败：" + err.message); }
+  finally { $("import").lastChild.textContent = label; }
+};
 $("lab").onclick = () => {
   document.body.classList.remove("nav-open");
   if (!ui.sending && confirm("自动进行33轮真实对话和一次大工具输出实验，最多60次模型请求（minimal推理）。开始？")) start("/runs", { context_lab: true });

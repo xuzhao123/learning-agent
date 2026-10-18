@@ -36,6 +36,10 @@ go run . observe
 
 界面风格参照 Codex 客户端：黑白灰为主，颜色只用于状态（失败、运行中）；图标是内联 SVG，不依赖系统字体；成功的工具调用不加标记，只标出失败和非零退出码；输入框下只在需要人注意时出现提示。
 
+### 2.0 导入其他 agent 的对话
+
+左侧“导入对话”上传 Codex 的 `rollout-*.jsonl` 或 Claude Code 的会话 `.jsonl`，转成同一种存档后只读查看，列表里标题前标出来源。格式、切分规则与缺失项见 [导入实践](../bonus-import/import-lab.md)。
+
 ### 2.1 设置
 
 左侧“设置”参考 Claude Code 的 settings.json、Codex 的 config.toml：工具常驻，模型自己决定用不用，每个对话只选模型和工作区。

@@ -92,6 +92,7 @@ go build -o bin/learning-agent .
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
 | 扩展 | agent 与界面的结构化协议（B0） | [笔记](docs/bonus-protocol/protocol-notes.md) | [实践](docs/bonus-protocol/protocol-lab.md) | — |
 | 扩展 | 模型流式输出（B1） | [笔记](docs/bonus-streaming/streaming-notes.md) | [实践](docs/bonus-streaming/streaming-lab.md) | — |
+| 扩展 | 导入 Codex / Claude Code 对话 | [笔记](docs/bonus-import/import-notes.md) | [实践](docs/bonus-import/import-lab.md) | — |
 
 补充阅读：
 

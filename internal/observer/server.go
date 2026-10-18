@@ -84,12 +84,14 @@ type event struct {
 	FirstToken int64           `json:"first_token_ms,omitempty"` // B1：从转发请求到收到第一段正文或推理的毫秒数
 	Protocol   bool            `json:"protocol,omitempty"`       // B0：start/continue 上标记这一轮经协议运行；之前的存档没有，页面据此启用旧存档兼容
 	Eval       string          `json:"eval,omitempty"`           // D16：由评测发起的试次（评测ID · 用例 #序号），对话列表里不显示
+	Source     string          `json:"source,omitempty"`         // 导入的对话：codex 或 claude-code，记在 start 上；只读，不能续聊
 }
 
 type run struct {
 	ID, Query string
 	Tenant    string // 对话所属的租户；空是平台。只有同一租户的账号能看到和操作它
 	Eval      string // D16：评测发起的试次，见 event.Eval
+	Source    string // 从 Codex / Claude Code 导入的对话，见 event.Source
 	Done      bool
 
 	mu       sync.Mutex
@@ -175,6 +177,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("GET /me", s.me)
 	mux.HandleFunc("GET /runs", s.listRuns)
 	mux.HandleFunc("POST /runs", s.startRun)
+	mux.HandleFunc("POST /runs/import", s.importRun)
 	mux.HandleFunc("POST /runs/{id}/messages", s.continueRun)
 	mux.HandleFunc("GET /runs/{id}/events", s.streamEvents)
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
@@ -906,7 +909,7 @@ func (r *run) canContinue() bool {
 	for i >= 0 && (r.events[i].Kind == "allow" || r.events[i].Kind == "deny") {
 		i--
 	}
-	if r.Query == ragLabTitle || !r.Done || i < 0 || r.events[i].Kind != "exit" {
+	if r.Query == ragLabTitle || r.Source != "" || !r.Done || i < 0 || r.events[i].Kind != "exit" {
 		return false
 	}
 	if r.events[i].Text == "exit 0" {
@@ -946,7 +949,7 @@ func (s *server) loadSpace(space string) {
 			r.events = append(r.events, e)
 			r.calls = max(r.calls, e.Call)
 			if e.Kind == "start" {
-				r.Query, r.Eval = e.Text, e.Eval
+				r.Query, r.Eval, r.Source = e.Text, e.Eval, e.Source
 			}
 			if e.Kind == "request" && r.Query == "" {
 				r.Query = firstUserMessage(e.Body)
@@ -973,7 +976,7 @@ func firstUserMessage(body json.RawMessage) string {
 func (r *run) summary() map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	summary := map[string]any{"id": r.ID, "query": r.Query, "done": r.Done, "can_continue": r.canContinue(), "eval": r.Eval}
+	summary := map[string]any{"id": r.ID, "query": r.Query, "done": r.Done, "can_continue": r.canContinue(), "eval": r.Eval, "source": r.Source}
 	// 时间给 Unix 毫秒时间戳，由页面按看的人所在的时区显示。
 	if len(r.events) > 0 {
 		summary["created_at"], summary["updated_at"] = r.events[0].Time.UnixMilli(), r.events[len(r.events)-1].Time.UnixMilli()

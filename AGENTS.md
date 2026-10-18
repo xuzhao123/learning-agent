@@ -41,6 +41,7 @@
 - Day 24 提示词组装：有工作区时根目录 AGENTS.md（无则 CLAUDE.md）进系统提示词；环境信息与运行中的变化都以 `<system-reminder>` 用户消息追加在末尾，不改写已发出的内容；提醒不是用户原话，记忆与压缩保留区用 `llm.FromUser` 排除。验证用的子目录 AGENTS.md 只在临时 worktree 里创建。
 - Day 25 统一权限：每次工具调用先过允许列表，再按用户规则（deny › ask › allow，`-allow/-ask/-deny` 或观测台设置）与权限模式（`-permission-mode` plan/ask/edit/full，默认 edit）决定，询问与 D20 高风险确认走同一条 `tool/requestApproval`；D20 风险规则在任何模式下都照常。有工作区且启用 bash 时，沙箱 `/workspace` 挂工作区（plan 只读），`.git` 只读、`.env` 换空、`.data` 换空目录，本对话目录挂 `/scratch`，Go 工具链与模块缓存只读挂入、编译缓存按租户单独存放。验证在临时 clone/worktree 中进行，用完删除。
 - Day 26 Hooks 与斜杠命令：hooks 配置沿用 Claude Code 格式，只来自 `-hooks`（用户）或观测台平台设置（个人层不能改），不读工作区里的配置；hook 命令在宿主机运行，只给最少的环境变量，拦截写审计。`hooks/` 与 `commands/`、`.agents/commands/` 只放本仓库真实使用的；验证用的临时 hook 只用命令行传入。斜杠命令只是提示词模板，不执行命令。
+- 导入其他 agent 的对话（用户要求）：观测台“导入对话”只接受 Codex 的 rollout 与 Claude Code 的会话 JSONL，转成同一种存档放进当前租户的 runs 目录，只读、不续聊、不提交；解析在 `internal/transcript`。验证只用真实的会话文件，不手写或生成假记录；用户提供的原始文件不放进 docs。
 - Day 27 规划与自用：不做上下文内的 todo 工具（D37 用消融决定）；计划模式沿用 D25 的 plan 权限，批准由人在下一轮切到 edit。自用在常驻 `test` 账号下、`.data/selfuse/` 里的 `git clone --local` 中进行；harness 的改动先人工 review、在沙箱外用真实模型验证，再合回主仓库，验收后删除 clone 与临时检查点。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。
 - 保留当前学习任务必需的参数解析、并行工具调用、消息历史、错误反馈和终止条件。
