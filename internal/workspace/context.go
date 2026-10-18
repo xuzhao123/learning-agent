@@ -72,13 +72,15 @@ func note(path string) {
 	}
 }
 
-// loadedMarker 匹配之前各轮已经发过的子目录指令提醒；续聊是新进程，靠它避免重复发送。
+// loadedMarker 匹配视图里已经发过的子目录指令提醒。
 var loadedMarker = regexp.MustCompile(`\[项目指令 dir=([^\]\s]+)\]`)
 
-// Prime 用续聊带来的历史，标记哪些子目录的项目指令已经在上下文里。
+// Prime 按当前视图里的提醒重新标记哪些子目录的项目指令还在上下文里：续聊是新进程，压缩会把提醒并进摘要，
+// 两种情况都以视图为准；不在视图里的目录，下次用到时重新加载原文。根目录指令在系统提示词里，始终算已加载。
 func Prime(history []string) {
 	mu.Lock()
 	defer mu.Unlock()
+	loaded = map[string]bool{".": true}
 	for _, text := range history {
 		for _, m := range loadedMarker.FindAllStringSubmatch(text, -1) {
 			loaded[m[1]] = true

@@ -808,18 +808,20 @@ func environment(c *Context, continued bool) {
 		c.Append(llm.Reminder(env))
 		return
 	}
-	var reminders []string
+	reminders := c.reminders()
 	last := ""
-	for _, m := range c.View {
-		if m.Role == "user" && strings.HasPrefix(m.Content, llm.ReminderPrefix) {
-			reminders = append(reminders, m.Content)
-			if e := workspace.EnvironmentIn(m.Content); e != "" {
-				last = e
-			}
+	for _, text := range reminders {
+		if e := workspace.EnvironmentIn(text); e != "" {
+			last = e
 		}
 	}
 	workspace.Prime(reminders)
-	if last != env {
+	switch {
+	case last == "":
+		// 压缩会把旧提醒并进摘要，视图里没有可比的那份；重新给一份，不说成“变了”。
+		c.Append(llm.Reminder(env))
+		fmt.Println("Reminder: environment re-added")
+	case last != env:
 		c.Append(llm.Reminder("环境和上一轮不同，以这一份为准：\n" + env))
 		fmt.Println("Reminder: environment changed")
 	}

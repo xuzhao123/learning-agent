@@ -11,6 +11,7 @@ import (
 	"learning-agent/internal/llm"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/telemetry"
+	"learning-agent/internal/workspace"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -324,7 +325,20 @@ func (c *Context) finishCompact(before, cleared, summarized, kept, retries int) 
 	c.LastUsage, c.UsageAt, c.forceFull = 0, 0, false
 	c.stepsSinceCompact = 0
 	c.CompactCount++
+	// 摘要会把子目录项目指令的提醒并进去，原文不在视图里了；按新视图重新标记，之后用到那个目录时再发一次原文。
+	workspace.Prime(c.reminders())
 	fmt.Printf("Compact: before=%d after=%d cleared_tools=%d summarized=%dmsgs kept_groups=%d kept_user=%d retries=%d %s\n", before, llm.ContextTokens(c.View, c.withTools), cleared, summarized, kept, max(0, c.summaryAt-1), retries, c.parts())
+}
+
+// reminders 返回视图里 harness 追加的提醒原文（不是用户原话）。
+func (c *Context) reminders() []string {
+	var out []string
+	for _, m := range c.View {
+		if m.Role == "user" && strings.HasPrefix(m.Content, llm.ReminderPrefix) {
+			out = append(out, m.Content)
+		}
+	}
+	return out
 }
 
 func (c *Context) parts() string {
@@ -399,12 +413,18 @@ func (c *Context) summarize(ctx context.Context, client *llm.Client, prefix []ll
 		if len(groups) == 0 {
 			return "", retries, errors.New("system和摘要指令也放不下，未替换视图")
 		}
-		drop := groups[0]
-		for _, group := range groups {
-			if group.Start >= protected {
-				drop = group // 先删保护区之后最旧的原始消息组
-				break
+		// 先删保护区之后最旧的原始消息组；用户原话是任务本身，先删工具往返与提醒，实在放不下才删它。
+		pick := func(skipUser bool) (llm.Group, bool) {
+			for _, group := range groups {
+				if group.Start >= protected && !(skipUser && llm.FromUser(working[group.Start])) {
+					return group, true
+				}
 			}
+			return groups[0], false
+		}
+		drop, ok := pick(true)
+		if !ok {
+			drop, _ = pick(false)
 		}
 		if drop.Start < protected {
 			protected -= drop.End - drop.Start

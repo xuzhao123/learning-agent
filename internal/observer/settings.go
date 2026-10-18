@@ -158,7 +158,7 @@ func valid(key, value string, f settingsFile) error {
 			return err
 		}
 	case "max_steps", "context_window", "tool_output":
-		limits := map[string][2]int{"max_steps": {1, 60}, "context_window": {4096, 262144}, "tool_output": {64, 32768}}[key]
+		limits := map[string][2]int{"max_steps": {1, 60}, "context_window": {4096, 1048576}, "tool_output": {64, 32768}}[key]
 		if n, err := strconv.Atoi(value); err != nil || n < limits[0] || n > limits[1] {
 			return fmt.Errorf("%s 范围为 %d 到 %d", key, limits[0], limits[1])
 		}
