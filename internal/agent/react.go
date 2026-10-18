@@ -25,6 +25,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
+	"learning-agent/internal/permission"
+	"learning-agent/internal/workspace"
 )
 
 // D8 运行时参数，由 main 按命令行设置。
@@ -36,7 +38,7 @@ var (
 
 // 结果未知时可以直接再执行一次的工具：只读，或带幂等键（spawn_agent 按子任务ID续跑或取回存档）。
 // 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
-var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "request_network_access": true} // bash 不在里面：命令可能有副作用
+var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "request_network_access": true, "read_file": true, "glob": true, "grep": true} // bash、edit_file、write_file 不在里面：有副作用
 
 // RootAttributes 是 main 创建根 span 时就知道的属性；其余在 Run 里补。
 func RootAttributes() []attribute.KeyValue {
@@ -208,6 +210,9 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			}
 		}()
 	}
+	if workspace.Dir != "" && resume == nil {
+		environment(conversation, history != nil)
+	}
 	if resume == nil {
 		conversation.Append(llm.Message{Role: "user", Content: question})
 		protocol.ItemCompleted(CheckpointID, protocol.Item{ID: "user", Type: "userMessage", Data: map[string]string{"text": question}})
@@ -215,7 +220,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	if memory.Active != nil {
 		// remember_memory 的引文只能来自本次会话里用户说过的话（不含摘要、模型回答和工具结果）。
 		for _, m := range conversation.Transcript {
-			if m.Role == "user" && !strings.HasPrefix(m.Content, llm.SummaryPrefix) {
+			if llm.FromUser(m) {
 				memory.Active.UserTexts = append(memory.Active.UserTexts, m.Content)
 			}
 		}
@@ -242,6 +247,11 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 				break
 			}
 			fmt.Printf("\nRound %d\n", step)
+			// D24：上一批工具执行期间出现的新情况，作为提醒追加在末尾，再请求模型。
+			for _, text := range workspace.Reminders() {
+				conversation.Append(llm.Reminder(text))
+				fmt.Printf("Reminder: %s\n", firstLine(text))
+			}
 			response, err := conversation.Next(ctx, client)
 			if err != nil {
 				reason := "model_error"
@@ -342,8 +352,8 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 
 // 每个 goroutine 只写自己的结果；历史由主循环在整批结束后追加。
 // 有顺序依赖的工具在同一批里按调用顺序一个接一个执行：bash 的后一条命令常常要用前一条生成的文件，
-// 和 shell 里写 a; b 一样。其余工具照常并行。
-var sequential = map[string]bool{"bash": true}
+// 和 shell 里写 a; b 一样；D23 的编辑与写入也一样，后一处修改可能建立在前一处之上。其余工具照常并行。
+var sequential = map[string]bool{"bash": true, "edit_file": true, "write_file": true}
 
 func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries int) []llm.Observation {
 	results := make([]llm.Observation, len(calls))
@@ -358,8 +368,22 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 		}()
 		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
 		defer func() { writeJournal(result) }()
+		// D25：先按用户的权限规则和模式判断。拒绝就不执行；询问和 D20 的高风险确认走同一条确认路径。
+		effect, why := permission.Decide(call.Function.Name, call.Function.Arguments)
+		span.SetAttributes(attribute.String("agent.tool.permission", effect))
+		if effect == "deny" {
+			record := audit.Record{Actor: "program", Event: "permission_deny", CallID: call.ID, Tool: call.Function.Name, Decision: "deny", Detail: why}
+			record.Args(call.Function.Arguments)
+			audit.Log(ctx, record)
+			fmt.Printf("Permission deny [%s]: %s\n", call.ID, why)
+			return llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "denied",
+				Error: "用户设置的权限不允许这项操作（" + why + "）。不要换个写法、换个工具或拆成几步绕过；在回答里说明需要什么权限，由用户决定是否调整。"}
+		}
 		// D20：高风险操作先等人确认，再占并发槽位；等人的时间不算进单次工具时限。
 		kind, reason := risk(call)
+		if kind == "" && effect == "ask" {
+			kind, reason = "permission", why+"：这项操作需要你确认"
+		}
 		// D21：可能有副作用的调用（不在可重复名单里）和经过确认的调用，结束时写一条审计；只读调用不记，审计不变成第二份 trace。
 		if kind != "" || !repeatable[call.Function.Name] {
 			defer func() {
@@ -586,6 +610,8 @@ func trackPrivate(o llm.Observation) {
 		markPrivate("bash")
 	case "search_memory":
 		markPrivate("memory")
+	case "read_file", "grep":
+		markPrivate("workspace") // D23：工作区里的代码与配置是用户的私有数据
 	case "spawn_agent":
 		if result, ok := o.Result.(map[string]any); ok {
 			if sources, _ := result["private"].([]string); len(sources) > 0 {
@@ -684,8 +710,40 @@ func SystemPrompt() string {
 	if sandbox.Enabled {
 		prompt += sandbox.Rules()
 	}
+	if workspace.Dir != "" {
+		prompt += workspace.Rules() + workspace.Instructions()
+	}
 	if SubagentArgs != nil {
 		prompt += subagentRules
 	}
 	return prompt
+}
+
+// D24：环境信息放在问题前面。新对话发一份；续聊对比上一份，变了才追加，并标记哪些子目录的项目指令已经在上下文里。
+// 根目录项目指令写在首轮的系统提示词里；续聊沿用那份系统提示词，文件之后改过就追加新版本，而不是改写开头。
+func environment(c *Context, continued bool) {
+	env := workspace.Environment()
+	if !continued {
+		c.Append(llm.Reminder(env))
+		return
+	}
+	var reminders []string
+	last := ""
+	for _, m := range c.View {
+		if m.Role == "user" && strings.HasPrefix(m.Content, llm.ReminderPrefix) {
+			reminders = append(reminders, m.Content)
+			if e := workspace.EnvironmentIn(m.Content); e != "" {
+				last = e
+			}
+		}
+	}
+	workspace.Prime(reminders)
+	if last != env {
+		c.Append(llm.Reminder("环境和上一轮不同，以这一份为准：\n" + env))
+		fmt.Println("Reminder: environment changed")
+	}
+	if inst := strings.TrimSpace(workspace.Instructions()); inst != "" && !strings.Contains(c.View[0].Content, inst) {
+		c.Append(llm.Reminder("根目录的项目指令在上一轮之后改过，以这一份为准：\n" + inst))
+		fmt.Println("Reminder: project instructions changed")
+	}
 }

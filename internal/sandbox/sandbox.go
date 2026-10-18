@@ -36,7 +36,26 @@ var (
 	Enabled   bool
 	ProjectRO bool   // -bash-project-ro：把项目目录只读挂到 /project（.env、.data、.git 除外）
 	Dir       string // 本对话的工作目录 .data/sandbox/<对话第一轮的检查点ID>，由 main 设置
+
+	// D25：对话选了工作区（-workspace）时，/workspace 挂的是那个仓库，本对话的目录改挂到 /scratch。
+	// 工作区按权限模式挂成可写或只读（plan 模式只读）；.git 只读，.env、.data 等看不到。
+	Project      string
+	ProjectWrite bool
+	GoCache      string // 沙箱里 Go 编译缓存的目录（按租户），由 main 设置；和宿主机的缓存分开
 )
+
+// goEnv 是宿主机上 Go 工具链与模块缓存的位置：有工作区时只读挂进沙箱，命令能离线 go build / go test。
+var goEnv = sync.OnceValue(func() [2]string {
+	out, err := exec.Command("go", "env", "GOROOT", "GOMODCACHE").Output()
+	if err != nil {
+		return [2]string{}
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		return [2]string{}
+	}
+	return [2]string{lines[0], lines[1]}
+})
 
 // 资源上限：一次命令最多用这么多；时长由执行器的单次工具时限（-tool-timeout）控制。
 const (
@@ -64,6 +83,13 @@ var ApprovalWait = 4 * time.Minute
 
 func Rules() string {
 	rule := "\n可以用 bash 在 Linux 沙箱里执行命令：工作目录 /workspace（整个对话内保留文件，包括之前几轮写的和用户上传的），每次调用是新的 shell；只能写 /workspace 和 /tmp；内存、进程数和时长有限。"
+	if Project != "" {
+		access := "可写"
+		if !ProjectWrite {
+			access = "只读（plan 模式）"
+		}
+		rule = "\n可以用 bash 在 Linux 沙箱里执行命令：/workspace 就是对话所选的工作区（" + access + "，和文件工具看到的是同一份代码；.git 只读，.env 与 .data 看不到）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）。每次调用是新的 shell；只能写这两处和 /tmp；内存、进程数和时长有限。有 Go 工具链，离线编译（模块缓存只读，GOPROXY=off）。用 bash 改过的文件，要用文件工具再改之前先重新 read_file。"
+	}
 	if ProjectRO {
 		rule += "项目目录只读挂在 /project。"
 	}
@@ -278,7 +304,36 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 	for _, name := range []string{"passwd", "group", "hosts"} {
 		args = append(args, "--ro-bind", filepath.Join(etc, name), "/etc/"+name)
 	}
-	args = append(args, "--bind", workspace, "/workspace", "--chdir", "/workspace")
+	home := "/workspace"
+	var extraEnv []string
+	if Project != "" {
+		mode := "--ro-bind"
+		if ProjectWrite {
+			mode = "--bind"
+		}
+		args = append(args, mode, Project, "/workspace")
+		// 版本库历史只读：命令能看 diff、log，不能提交、改写历史；密钥和运行数据换成空的。
+		if info, err := os.Stat(filepath.Join(Project, ".git")); err == nil && info.IsDir() {
+			args = append(args, "--ro-bind", filepath.Join(Project, ".git"), "/workspace/.git")
+		}
+		for _, hidden := range []string{".data", ".cache"} {
+			if info, err := os.Stat(filepath.Join(Project, hidden)); err == nil && info.IsDir() {
+				args = append(args, "--tmpfs", "/workspace/"+hidden)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(Project, ".env")); err == nil {
+			args = append(args, "--ro-bind", "/dev/null", "/workspace/.env")
+		}
+		args = append(args, "--bind", workspace, "/scratch", "--chdir", "/workspace")
+		home = "/scratch"
+		if g := goEnv(); g[0] != "" && GoCache != "" && os.MkdirAll(filepath.Join(GoCache, "tmp"), 0o700) == nil {
+			args = append(args, "--ro-bind", g[0], "/opt/go", "--ro-bind", g[1], "/opt/gomod", "--bind", GoCache, "/opt/gocache")
+			extraEnv = []string{"PATH=/opt/go/bin:/usr/local/bin:/usr/bin:/bin", "GOROOT=/opt/go", "GOMODCACHE=/opt/gomod", "GOCACHE=/opt/gocache",
+				"GOTMPDIR=/opt/gocache/tmp", "GOPROXY=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off", "GOFLAGS=-mod=readonly"}
+		}
+	} else {
+		args = append(args, "--bind", workspace, "/workspace", "--chdir", "/workspace")
+	}
 	if ProjectRO {
 		if project, err := os.Getwd(); err == nil {
 			args = append(args, "--ro-bind", project, "/project")
@@ -300,10 +355,10 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 		// 让 sandbox-init 当 1 号进程，/proc/1/cmdline 就不会暴露 bwrap 的命令行和宿主机上的路径。
 		"--remount-ro", "/", "--as-pid-1",
 		// 环境变量全部清空：ARK_API_KEY 之类的密钥不会带进沙箱。
-		"--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", "/workspace", "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp",
+		"--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", home, "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp",
 		"--setenv", "HTTP_PROXY", proxy, "--setenv", "HTTPS_PROXY", proxy, "--setenv", "http_proxy", proxy, "--setenv", "https_proxy", proxy, "--setenv", "NO_PROXY", "localhost,127.0.0.1",
 	)
-	for _, pair := range env {
+	for _, pair := range append(extraEnv, env...) {
 		name, value, _ := strings.Cut(pair, "=")
 		args = append(args, "--setenv", name, value)
 	}

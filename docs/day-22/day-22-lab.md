@@ -29,7 +29,7 @@
 
 ## 2. 拆细后看出的两个问题
 
-**并行调度没区分只读和修改。** `agent.ExecuteBatch` 把同一批工具调用都放进并发槽位，见 [react.go](../../internal/agent/react.go)。目前的工具大多是只读的或彼此独立，问题不明显；D23 加入编辑和写入后，两次修改同一个文件的调用并行执行会互相覆盖。Claude Agent SDK 的做法是只读工具并行、修改类工具串行，并用工具标注里的 `readOnlyHint` 区分。
+**并行调度没区分只读和修改。** `agent.ExecuteBatch` 只对写死在 `sequential` 名单里的 bash 按调用顺序串行，其余工具一律并行，见 [react.go](../../internal/agent/react.go)。新增一个会改东西的工具，就要记得把它加进名单（D23 把编辑与写入加了进去）；MCP 工具则无从判断。Claude Agent SDK 的做法是按工具标注里的 `readOnlyHint` 区分：只读并行，其余串行。
 
 **凭证隔离只做了一半。** Bash 沙箱用 `--clearenv` 清空环境，只设 PATH、HOME 等固定变量、代理地址和调用链变量，并把挂进来的项目 `.env` 盖成空文件，见 [sandbox.go](../../internal/sandbox/sandbox.go)；但第三方 MCP stdio server 用 `client.NewStdioMCPClientWithOptions` 启动，传入的环境为 nil，会继承 agent 的全部环境变量，包括模型密钥，见 [mcp.go](../../internal/mcp/mcp.go)。
 
@@ -44,7 +44,7 @@
 | T1 | 计算器工具描述写明不支持乘方 | D17 归因：子 agent 因此每次多一轮 | `internal/tools/tools.go` 一行描述 | 读、精确替换 |
 | T2 | `go run . metrics` 汇总首字延迟 | B1 遗留 | 从 `.data/traces` 里模型调用 span 的 `agent.response.first_token_ms` 取值，按 P50/P95 输出 | 跨文件阅读、理解数据来源 |
 | T3 | 第三方 MCP stdio server 只拿最小环境 | 待办“MCP 权限” | `internal/mcp` 启动时传显式环境白名单 | 读懂第三方库行为、安全相关修改 |
-| T4 | 只读工具并行、修改类工具串行 | 本日对照发现 | `agent.ExecuteBatch` 按工具标注分组调度 | 并发逻辑、改动影响面大 |
+| T4 | 按工具标注调度：只读并行、其余串行 | 本日对照发现 | `agent.ExecuteBatch` 用工具标注代替写死的 `sequential` 名单，MCP 工具按 server 声明的标注 | 并发逻辑、改动影响面大 |
 | T5 | 检查点加格式版本号 | 待办“检查点” | `Checkpoint` 加版本字段，读取时检查 | 数据兼容、读旧数据 |
 | T6 | 观测台沙箱文件面板支持删除 | D12 遗留 | `internal/observer` 加删除接口与按钮，只经 `os.Root`、核对租户、写审计 | 前后端一起改、守住已有安全约束 |
 

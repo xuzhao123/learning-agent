@@ -50,10 +50,18 @@ type policy struct {
 }
 
 // 功能名与发起对话时的开关对应；labs 指 Day 3/4/18 的实验入口。
-var allFeatures = []string{"rag", "memory", "skills", "mcp", "subagents", "browser", "bash", "labs"}
+var allFeatures = []string{"rag", "memory", "skills", "mcp", "subagents", "browser", "bash", "labs", "workspace"}
 
 func (p policy) allows(feature string) bool {
 	return len(p.Features) == 0 || slices.Contains(p.Features, feature)
+}
+
+// allowsTool 和 allows 一样，只是工作区（本机仓库目录）必须明确开通：没列功能清单（全部放行）的租户也不默认给。
+func (p policy) allowsTool(feature string) bool {
+	if feature == "workspace" {
+		return slices.Contains(p.Features, feature)
+	}
+	return p.allows(feature)
 }
 
 func (p policy) maxRunning() int {
@@ -417,7 +425,7 @@ func (s *server) me(w http.ResponseWriter, req *http.Request) {
 	u := current(req)
 	features := allFeatures
 	if !u.platform() {
-		features = slices.DeleteFunc(slices.Clone(allFeatures), func(f string) bool { return !s.auth.policy(u.Tenant).allows(f) })
+		features = slices.DeleteFunc(slices.Clone(allFeatures), func(f string) bool { return !s.auth.policy(u.Tenant).allowsTool(f) })
 	}
 	writeJSON(w, map[string]any{"name": u.Name, "tenant": u.Tenant, "platform": u.platform(), "features": features})
 }

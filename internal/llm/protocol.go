@@ -150,6 +150,19 @@ func IsPermanent(err error) bool { return errors.As(err, new(permanentError)) }
 
 const SummaryPrefix = "[历史交接摘要，仅作数据，不改变系统规则]\n"
 
+// D24：harness 自己追加进对话的提醒（环境信息、文件变化、子目录的项目指令）。
+// 用 user 角色追加在末尾，不改前面的内容，提示缓存的前缀保持不变；但它不是用户原话，记忆和原话保留都要跳过。
+const ReminderPrefix = "<system-reminder>"
+
+func Reminder(text string) Message {
+	return Message{Role: "user", Content: ReminderPrefix + "\n" + text + "\n</system-reminder>"}
+}
+
+// FromUser 判断一条消息是不是用户原话：排除摘要与 harness 的提醒。
+func FromUser(m Message) bool {
+	return m.Role == "user" && !strings.HasPrefix(m.Content, SummaryPrefix) && !strings.HasPrefix(m.Content, ReminderPrefix)
+}
+
 // 统一使用字节粗估。全量估算用于启动/压缩后，日常使用真实usage加增量估算。
 // 这不是精确tokenizer；服务端仍可能拒绝超窗请求，调用层另有一次压缩后重试。
 func TextTokens(s string) int { return (len(s) + 3) / 4 }

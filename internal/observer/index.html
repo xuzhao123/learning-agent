@@ -159,6 +159,21 @@ button { cursor: pointer; }
 #query { display: block; width: 100%; max-height: 220px; padding: 12px 16px 4px; border: 0; outline: 0; resize: none; background: none; }
 .crow { display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px 14px; }
 #mode-chip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+.pick { padding: 3px 10px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel); font-size: 12px; }
+.pick:disabled { color: var(--muted); }
+button.pick:disabled { border-style: dashed; cursor: default; }
+#tools-link { flex: none; }
+.set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); }
+.set-row:first-child { border-top: 0; }
+.set-row .sub { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
+.set-box { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin: 6px 0 18px; }
+.set-tag { padding: 0 8px; border-radius: 99px; font-size: 11px; white-space: nowrap; background: var(--soft); color: var(--muted); }
+.set-tag.ok { background: color-mix(in srgb, var(--ok) 14%, var(--panel)); color: var(--ok); }
+.set-tag.bad { background: color-mix(in srgb, var(--err) 14%, var(--panel)); color: var(--err); }
+.set-tag.user { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent); }
+.set-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 16px; align-items: center; padding: 12px 14px; }
+.set-grid input, .set-grid select, .set-row select, .set-box input { padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.set-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 24px; }
 #send { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); font-size: 16px; font-weight: 700; }
 #send:disabled { opacity: .25; cursor: default; }
 #send.stop { font-size: 12px; }
@@ -453,13 +468,17 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     <div class="brand">Learning Agent</div>
     <div class="whoami"><span id="whoami"></span><button id="logout" type="button">退出</button></div>
     <button id="new-chat" class="navbtn"><span class="ico">＋</span>新对话</button>
-    <button id="lab" class="navbtn"><span class="ico">⚗</span>Day 3 上下文实验</button>
-    <button id="rag-lab" class="navbtn"><span class="ico">⌕</span>Day 4 检索对比</button>
-    <button id="memory" class="navbtn"><span class="ico">◎</span>Day 5 长期记忆</button>
+    <button id="settings" class="navbtn"><span class="ico">⚙</span>设置</button>
+    <div class="navlabel"><span>中心</span></div>
     <button id="skills-hub" class="navbtn"><span class="ico">✦</span>Skills 中心</button>
     <button id="mcp-hub" class="navbtn"><span class="ico">⇄</span>MCP 中心</button>
-    <button id="evals" class="navbtn"><span class="ico">✓</span>D16 评测 · D17 归因</button>
+    <div class="navlabel"><span>实验（单独运行）</span></div>
+    <button id="lab" class="navbtn"><span class="ico">⚗</span>Day 3 上下文实验</button>
+    <button id="rag-lab" class="navbtn"><span class="ico">⌕</span>Day 4 检索对比</button>
     <button id="security-lab" class="navbtn"><span class="ico">◇</span>D18–19 内容与权限</button>
+    <div class="navlabel"><span>记录</span></div>
+    <button id="memory" class="navbtn"><span class="ico">◎</span>Day 5 长期记忆</button>
+    <button id="evals" class="navbtn"><span class="ico">✓</span>D16 评测 · D17 归因</button>
     <button id="audit" class="navbtn"><span class="ico">⛓</span>D21 审计日志</button>
     <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit">▤ 学习课件</a>
     <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
@@ -479,7 +498,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="composer-wrap">
         <form id="composer">
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
-          <div class="crow"><span id="mode-chip"></span><select id="provider" aria-label="模型" title="模型路由：agent 用 -provider 选择供应商"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><label class="meta"><input id="rag" type="checkbox"> 知识库 RAG</label><select id="embedding" aria-label="向量模型"><option value="ark">线上方舟</option><option value="local">本地 MiniLM</option></select><label class="meta"><input id="mem" type="checkbox"> 长期记忆</label><select id="mem-ttl" aria-label="记忆有效期"><option value="">记住：永久</option><option value="1m">记住：1分钟后过期</option><option value="1h">记住：1小时后过期</option></select><label class="meta" title="启用 Skills 中心里打开的 skill"><input id="use-skills" type="checkbox"> <span id="skills-label">Skills</span></label><label class="meta" title="连接 MCP 中心里打开的 server"><input id="use-mcp" type="checkbox"> <span id="mcp-label">MCP</span></label><label class="meta" title="允许 agent 调用 spawn_agent，把独立子任务交给子 agent"><input id="use-sub" type="checkbox"> 子 agent</label><label class="meta" title="增加 bash：命令在 bubblewrap 沙箱里执行（断网、只可写 /workspace、资源有上限）；联网要经你批准"><input id="use-bash" type="checkbox"> Bash 沙箱</label><label class="meta" title="增加 web_search 与 open_page：agent 用无头 Chrome 查资料，右侧可看实时画面"><input id="use-web" type="checkbox"> 浏览器</label><button id="send" aria-label="发送">↑</button></div>
+          <div class="crow"><span id="mode-chip"></span><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定，换模型请新建对话"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：编码工具只在这个仓库里读写；对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换；规则来自设置"><option value="plan">权限：只读计划</option><option value="ask">权限：改动都问</option><option value="edit">权限：自动编辑</option><option value="full">权限：全权</option></select><button id="tools-link" type="button" class="link"></button><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -619,7 +638,8 @@ function rawIO(c, runID) {
 function message(m) {
   const box = el("div", "msg " + m.role);
   const summary = m.role === "user" && String(m.content).startsWith(SUMMARY_PREFIX);
-  box.append(el("div", "role", m.role + (summary ? " · 历史摘要" : "")));
+  const reminder = m.role === "user" && String(m.content).startsWith("<system-reminder>"); // D24：harness 追加的提醒，不是用户原话
+  box.append(el("div", "role", m.role + (summary ? " · 历史摘要" : reminder ? " · harness 提醒" : "")));
   if (m.content) box.append(el("div", "text", typeof m.content === "string" ? m.content : pretty(m.content)));
   if (m.tool_calls && m.tool_calls.length) box.append(fold("工具调用请求", m.tool_calls, true));
   if (m.tool_call_id) box.append(el("div", "meta", "tool_call_id: " + m.tool_call_id));
@@ -648,7 +668,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -1933,7 +1953,7 @@ function netCard(r, t) {
   return card;
 }
 // D20：高风险操作确认。规则在 agent 的执行器里，命中后 agent 暂停等这里的答复；只对这一项调用有效，不留到下一轮。
-const RISK_LABEL = { irreversible: "不可撤回", destructive: "破坏性操作", outbound: "可能外发私有数据", redo: "重做中断的操作" };
+const RISK_LABEL = { irreversible: "不可撤回", destructive: "破坏性操作", outbound: "可能外发私有数据", redo: "重做中断的操作", permission: "权限设置要求确认" };
 function approvalCard(root, callID) {
   const a = root.approvals[callID];
   const card = el("div", "net-card");
@@ -2181,7 +2201,7 @@ function renderCompact(c) {
 function welcome() {
   const box = el("div", "welcome"), sugs = el("div", "sugs");
   box.append(el("h1", "", "想让 agent 做什么？"), sugs);
-  const suggestions = $("mem").checked ? ["记住：我偏好 Go 而不是 Python", "你还记得我偏好什么语言吗？", "记住流程：代码评审先跑构建，再看逻辑"] : $("rag").checked ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"];
+  const suggestions = toolOn("memory") ? ["记住：我偏好 Go 而不是 Python", "你还记得我偏好什么语言吗？", "记住流程：代码评审先跑构建，再看逻辑"] : toolOn("rag") ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"];
   for (const q of suggestions) {
     const b = el("button", "", q);
     b.onclick = () => { $("query").value = q; syncComposer(); $("query").focus(); };
@@ -2258,34 +2278,58 @@ function renderShell() {
   const calls = r ? `${r.calls.length + r.aux.length} 次` + (r.aux.length ? `（含辅助 ${r.aux.length}）` : "") + (nSub ? ` · 子 agent ${nSub} 次` : "") : "";
   status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? (r.stopRequested ? "正在停止…" : `运行中 · 模型调用 ${calls}`) : r.exit === "exit 0" ? `完成 · 模型调用 ${calls}` : r.stopRequested ? "已停止" : "未正常结束";
 }
+// 工具在设置里常驻；新对话按设置显示，进行中的对话按它开始时的快照显示。
+const TOOL_INFO = {
+  rag: ["知识库检索", "search_docs：检索项目学习文档。打开后系统提示词要求知识问题先查资料，所以默认关"],
+  memory: ["长期记忆", "remember / search / forget_memory：新对话开头先召回，要多发几次模型请求，所以默认关；按租户各自一份"],
+  skills: ["Skills", "Skills 中心里启用的 skill：常驻名字和用途，用到时再加载正文"],
+  mcp: ["MCP", "MCP 中心里启用的 server，工具注册为 mcp_<名字>"],
+  subagents: ["子 agent", "spawn_agent：独立上下文的子进程，继承这里的工具，不继承长期记忆"],
+  bash: ["Bash 沙箱", "bash：bubblewrap 沙箱，默认断网，联网逐次审批"],
+  browser: ["浏览器", "web_search / open_page：无头 Chrome，只读"],
+  coding: ["编码工具", "read_file / glob / grep / edit_file / write_file：只在对话选的工作区里读写"],
+};
+function runTools(r) {
+  return { rag: r.rag || (r.calls.at(-1)?.req.tools || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, bash: r.bash, browser: r.browser, coding: !!r.workspace };
+}
+function toolOn(key) {
+  if (ui.run) return !!runTools(ui.run)[key];
+  const s = ui.settings?.effective;
+  if (!s || s.values[key] !== "on" || key in s.blocked) return false;
+  return key !== "coding" || !!$("workspace").value;
+}
+async function loadSettings() {
+  try { const res = await fetch("/settings"); if (res.ok) ui.settings = await res.json(); } catch {}
+  syncComposer();
+}
 function syncComposer() {
   const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && r.exit && r.exit !== "exit 0" && !r.checkpoint;
-  const lab = r?.query === RAG_LAB_TITLE;
-  $("rag").disabled = !!r;
-  if (r?.calls.length) $("rag").checked = (r.calls.at(-1).req.tools || []).some((t) => t.function?.name === "search_docs");
-  $("embedding").hidden = !$("rag").checked && !$("mem").checked;
-  $("embedding").disabled = !!r;
-  if (r?.embedding) $("embedding").value = r.embedding;
-  $("mem").disabled = !!r;
-  if (r) { $("mem").checked = !!r.memory; $("mem-ttl").value = r.memoryTTL || ""; }
-  $("mem-ttl").hidden = !$("mem").checked;
-  $("mem-ttl").disabled = !!r;
-  // 续聊沿用对话开始时的快照；新对话按中心当前打开的数量显示。
-  $("use-skills").disabled = $("use-mcp").disabled = !!r;
-  if (r) { $("use-skills").checked = r.skills.length > 0; $("use-mcp").checked = r.mcp.length > 0; }
-  else { $("use-skills").checked = load("useSkills") !== "0"; $("use-mcp").checked = load("useMCP") !== "0"; }
-  const nSkills = r ? r.skills.length : ui.hub?.skills.length, nMCP = r ? r.mcp.length : ui.hub?.mcp.length;
-  $("skills-label").textContent = "Skills" + (nSkills != null ? ` ${nSkills}` : "");
-  $("mcp-label").textContent = "MCP" + (nMCP != null ? ` ${nMCP}` : "");
-  $("use-sub").disabled = !!r;
-  $("use-sub").checked = r ? r.subagents : load("useSub") === "1";
-  // 一条对话固定一个模型：续聊沿用开始时的选择（换模型请新建对话）。
+  const lab = r?.query === RAG_LAB_TITLE, s = ui.settings?.effective;
+  ui.picked ||= {};
+  // 一条对话固定一个模型和一个工作区：续聊沿用开始时的选择（换模型请新建对话）。
   $("provider").disabled = !!r;
-  $("provider").value = r ? r.provider || "ark" : load("provider") || "ark";
-  $("use-bash").disabled = !!r;
-  $("use-bash").checked = r ? r.bash : load("useBash") === "1";
-  $("use-web").disabled = !!r;
-  $("use-web").checked = r ? r.browser : load("useWeb") === "1";
+  if (r) $("provider").value = r.provider || "ark";
+  else if (!ui.picked.provider && s) $("provider").value = s.values.provider;
+  const ws = $("workspace"), names = r ? (r.workspace ? [r.workspace] : []) : (s?.workspaces || []).map((w) => w.name);
+  const signature = names.join("\n");
+  if (ws.dataset.sig !== signature) {
+    const keep = ws.value;
+    ws.replaceChildren(new Option("无工作区", ""), ...names.map((n) => new Option("工作区 " + n, n)));
+    ws.dataset.sig = signature;
+    ws.value = names.includes(keep) ? keep : "";
+  }
+  const codingOK = !!s && s.values.coding === "on" && !("coding" in s.blocked);
+  if (r) ws.value = r.workspace || "";
+  else if (!ui.picked.workspace && s) ws.value = codingOK && names.includes(s.values.workspace) ? s.values.workspace : "";
+  ws.disabled = !!r || !codingOK;
+  ws.hidden = !r && !names.length;
+  ws.title = r ? "工作区：对话开始后固定" : !codingOK ? "编码工具没打开或不可用：" + (s?.blocked.coding || "在设置里打开") : "工作区：编码工具只在这个仓库里读写；对话开始后固定";
+  // 权限模式每轮可以换：默认取这条对话上一轮的（新对话取设置）；用户改过就保持用户的选择，直到发送。
+  if (!ui.picked.permission) $("perm").value = (r && r.permission) || s?.values.permission_mode || "edit";
+  $("perm").disabled = !!busy || !!ui.replay;
+  const on = Object.keys(TOOL_INFO).filter(toolOn);
+  $("tools-link").textContent = `${on.length} 组工具 · ${r ? "本对话快照" : "来自设置"}`;
+  $("tools-link").title = on.map((k) => TOOL_INFO[k][0]).join("、") || "没有打开的工具";
   // 运行中发送键变成停止键（Codex 客户端的做法）：第一次优雅停止，第二次强制结束。
   const running = !!r && !r.exit && !ui.replay && (r.calls.length > 0 || r.logs.length > 0);
   $("send").classList.toggle("stop", running);
@@ -2295,9 +2339,10 @@ function syncComposer() {
   $("send").setAttribute("aria-label", running ? (r.stopRequested ? "强制结束" : "停止") : "发送");
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
-  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 60) : "新对话 · 默认10次模型请求预算") + ($("mem").checked ? " · 长期记忆" : "") + (r?.skills.length ? " · Skills " + r.skills.join("、") : "") + (r?.mcp.length ? " · MCP " + r.mcp.map((m) => m.name).join("、") : "") + ($("use-sub").checked ? " · 子 agent" : "") + ($("use-web").checked ? " · 浏览器" : "") + ($("use-bash").checked ? " · Bash 沙箱" : "");
-  $("hint").textContent = !r ? ($("mem").checked ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : $("rag").checked ? "检索在 Agent 内直接执行；资料按需进入上下文，答案可点击引用" : "Enter 发送，Shift+Enter 换行；每个问题都会真实调用方舟模型") : lab ? "对比实验使用独立问题；自行提问请新建对话并勾选知识库 RAG" : ui.replay ? "回放中，结束后可继续提问" :
-    busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次 ■ 强制结束" : "agent 正在回复，点 ■ 停止；本轮结束后可以继续提问") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : r.exit !== "exit 0" ? "上一轮中途停下：继续提问会从检查点接着聊" : "Enter 发送，会延续这条对话的上下文";
+  const steps = r ? r.maxSteps : Number(s?.values.max_steps || 0);
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 40) : "新对话") + (steps ? ` · 预算 ${steps} 次请求` : "") + (r && ui.toolsOpen ? " · " + ($("tools-link").title) : "");
+  $("hint").textContent = !r ? (toolOn("memory") ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : toolOn("coding") ? "编码工具只在所选工作区里读写；改动请用 git 查看和回退" : "Enter 发送，Shift+Enter 换行；工具由设置决定，模型按需调用") : lab ? "对比实验使用独立问题；自行提问请新建对话" : ui.replay ? "回放中，结束后可继续提问" :
+    busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次 ■ 强制结束" : "agent 正在回复，点 ■ 停止；本轮结束后可以继续提问") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : r.exit !== "exit 0" ? "上一轮中途停下：继续提问会从检查点接着聊" : "Enter 发送，会延续这条对话的上下文；工具沿用开始时的快照";
 }
 // 列表显示最后一次活动的时间：服务端给 Unix 毫秒时间戳，这里按看的人所在的时区格式化。
 function relTime(r) {
@@ -2401,7 +2446,7 @@ async function attribute(runID) {
 function newChat(updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
-  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false });
+  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false, picked: {}, toolsOpen: false });
   if (updateURL) syncRunURL(null);
   document.body.classList.remove("nav-open");
   $("stats").hidden = true;
@@ -2427,7 +2472,6 @@ $("rag-lab").onclick = () => {
   button.onclick = () => { button.disabled = true; start("/runs", { rag_lab: true, embedding: model.value }); };
   notice.append(el("p"), model, button); box.replaceChildren(notice);
 };
-$("rag").onchange = () => { syncComposer(); renderChat(); };
 $("security-lab").onclick = () => {
   document.body.classList.remove("nav-open");
   if (ui.sending) return;
@@ -2453,7 +2497,6 @@ $("security-lab").onclick = () => {
   notice.append(sample, document.createTextNode(" "), provider, label, hint, button);
   $("thread").replaceChildren(notice);
 };
-$("mem").onchange = () => { syncComposer(); renderChat(); };
 $("memory").onclick = () => openMemory();
 // D21：审计日志只读。服务端每次从头校验哈希链；页面只展示，不提供修改或删除。
 const AUDIT_ACTOR = { user: "人", model: "模型", program: "程序" };
@@ -2506,8 +2549,8 @@ async function openMemory(focus) {
   catch (err) { panel.replaceChildren(el("div", "err", "读取失败：" + err.message)); return; }
   const list = data.file.memories || [], now = Date.parse(data.now);
   const chunks = Object.values(data.index?.chunks || {});
-  panel.replaceChildren(el("h2", "", "长期记忆"), el("p", "meta", `${data.path} · 共 ${list.length} 条 · 新对话勾选“长期记忆”后，开头经两路召回、融合和重排，最多注入 5 条；过期条目在 agent 下次读写时删除。原文与来源是依据，背景说明是模型生成的派生数据，可重建`));
-  if (!list.length) panel.append(el("div", "empty", "还没有记忆。新对话勾选“长期记忆”，让 agent 记住一件事，例如“别忘了我对花生过敏”。"));
+  panel.replaceChildren(el("h2", "", "长期记忆"), el("p", "meta", `${data.path} · 共 ${list.length} 条 · 在设置里打开“长期记忆”后，新对话开头经两路召回、融合和重排，最多注入 5 条；过期条目在 agent 下次读写时删除。原文与来源是依据，背景说明是模型生成的派生数据，可重建`));
+  if (!list.length) panel.append(el("div", "empty", "还没有记忆。在设置里打开“长期记忆”，再新建对话让 agent 记住一件事，例如“别忘了我对花生过敏”。"));
   for (const m of [...list].reverse()) {
     const expired = m.expire_at && Date.parse(m.expire_at) <= now;
     const card = el("article", "mem-item" + (expired ? " expired" : "") + (m.id === focus ? " focus" : "")), head = el("div", "mem-head");
@@ -2529,10 +2572,101 @@ async function openMemory(focus) {
     panel.append(card);
   }
 }
-$("use-skills").onchange = () => { save("useSkills", $("use-skills").checked ? "1" : "0"); syncComposer(); };
-$("use-mcp").onchange = () => { save("useMCP", $("use-mcp").checked ? "1" : "0"); syncComposer(); };
 $("skills-hub").onclick = () => openSkills();
 $("mcp-hub").onclick = () => openMCP();
+// 设置页：工具常驻，按 内置默认 → 平台 → 个人 合并；租户策略和本机条件只会关掉工具。改动只影响之后的新对话。
+const SET_SOURCE = { builtin: "内置默认", platform: "平台", user: "你" };
+async function openSettings() {
+  const panel = await openHubPage("设置", "工具在新对话里默认都带上，模型自己决定用不用；每个对话只选模型和工作区。改动只影响之后的新对话，进行中的对话沿用开始时的快照。保存在 .data/settings.json。");
+  if (!panel) return;
+  let data;
+  try { data = await (await hubCall("GET", "/settings")).json(); }
+  catch (err) { panel.lastChild.replaceWith(el("div", "err", "读取失败：" + err.message)); return; }
+  if (!panel.isConnected) return;
+  ui.settings = data; syncComposer();
+  const e = data.effective, values = { ...e.values };
+  panel.lastChild.replaceWith(el("p", "meta", "生效顺序：内置默认 › 平台 › 你。" + (ui.me && !ui.me.platform ? `租户 ${ui.me.tenant} 没开通的功能会被关掉。` : "")));
+  const tag = (key) => el("span", "set-tag" + (e.source[key] === "user" ? " user" : ""), SET_SOURCE[e.source[key]] || e.source[key]);
+  const select = (key, options) => {
+    const node = el("select");
+    for (const [v, label] of options) node.append(new Option(label, v));
+    node.value = values[key]; node.onchange = () => { values[key] = node.value; };
+    return node;
+  };
+  panel.append(el("h3", "", "工具"));
+  const tools = el("div", "set-box");
+  for (const key of data.tool_order) {
+    const [name, desc] = TOOL_INFO[key], row = el("label", "set-row"), text = el("span"), box = el("input"), blocked = e.blocked[key];
+    box.type = "checkbox"; box.checked = values[key] === "on"; box.onchange = () => { values[key] = box.checked ? "on" : "off"; };
+    text.append(el("strong", "", name), el("div", "meta", desc));
+    if (key === "rag" || key === "memory") {
+      const sub = el("div", "sub");
+      if (key === "memory") sub.append(select("memory_ttl", [["", "记住：永久"], ["1h", "记住：1小时后过期"], ["24h", "记住：1天后过期"]]));
+      sub.append(select("embedding", [["ark", "向量：线上方舟"], ["local", "向量：本地 MiniLM"]]), el("span", "meta", "检索和记忆共用"));
+      text.append(sub);
+    }
+    if (key === "skills") text.append(el("div", "meta", `已启用 ${e.skills.length} 个`));
+    if (key === "mcp") text.append(el("div", "meta", `已启用 ${e.mcp.length} 个 server`));
+    row.append(text, el("span", "set-tag " + (blocked ? "bad" : "ok"), blocked ? "不可用" : "可用"), tag(key), box);
+    tools.append(row);
+    if (blocked) text.append(el("div", "err", blocked));
+  }
+  panel.append(tools);
+  panel.append(el("h3", "", "工作区"), el("p", "meta", "对话里只能选这里登记的目录（本机上的 git 仓库）。编码工具只在所选目录里读写，bash 暂时还看不到它。只有平台账号能登记。"));
+  const wsBox = el("div", "set-box");
+  if (!e.workspaces.length) wsBox.append(el("div", "set-row", e.blocked.coding ? "编码工具不可用：" + e.blocked.coding : "还没有登记工作区"));
+  for (const w of e.workspaces) {
+    const row = el("div", "set-row"), text = el("span");
+    text.append(el("strong", "", w.name), el("div", "meta", w.path));
+    row.append(text, el("span"), el("span"));
+    if (data.can_edit_platform) {
+      const del = el("button", "ghost", "移除");
+      del.onclick = async () => { if (!confirm(`移除工作区 ${w.name}？目录本身不会删除。`)) return; try { await hubCall("DELETE", `/settings/workspaces/${encodeURIComponent(w.name)}`); openSettings(); } catch (err) { alert(err.message); } };
+      row.append(del);
+    } else row.append(el("span"));
+    wsBox.append(row);
+  }
+  if (data.can_edit_platform) {
+    const form = el("form", "set-row"), path = el("input"), add = el("button", "ghost", "添加");
+    path.placeholder = "仓库目录路径：绝对路径，或相对 agent 目录（如 . 表示本仓库）"; path.style.width = "100%";
+    form.append(path, el("span"), el("span"), add);
+    form.onsubmit = async (ev) => { ev.preventDefault(); add.disabled = true; try { await hubCall("POST", "/settings/workspaces", { path: path.value }); openSettings(); } catch (err) { alert(err.message); add.disabled = false; } };
+    wsBox.append(form);
+  }
+  panel.append(wsBox);
+  panel.append(el("h3", "", "默认值"));
+  const grid = el("div", "set-box set-grid"), num = (key, label, hint) => {
+    const input = el("input"); input.type = "number"; input.value = values[key]; input.oninput = () => { values[key] = input.value; };
+    const wrap = el("span"); wrap.append(input, document.createTextNode(" "), el("span", "meta", hint), document.createTextNode(" "), tag(key));
+    grid.append(el("span", "meta", label), wrap);
+  };
+  const line = (label, node, key) => { const wrap = el("span"); wrap.append(node, document.createTextNode(" "), tag(key)); grid.append(el("span", "meta", label), wrap); };
+  line("默认模型", select("provider", [["ark", "豆包（方舟）"], ["deepseek", "DeepSeek"]]), "provider");
+  line("默认工作区", select("workspace", [["", "无工作区"], ...e.workspaces.map((w) => [w.name, w.name])]), "workspace");
+  num("max_steps", "模型请求预算", "每轮最多多少次模型请求，1–60");
+  num("context_window", "上下文窗口", "token，工具全开时每次请求要带全部工具定义，窗口小会很快压缩");
+  num("tool_output", "工具输出上限", "单个工具结果写进上下文的 token 上限");
+  line("默认权限模式", select("permission_mode", [["plan", "只读计划：不能改文件，bash 里工作区只读"], ["ask", "改动都问：改文件、跑 bash、调 MCP 前确认"], ["edit", "自动编辑：工作区内编辑与沙箱 bash 直接做"], ["full", "全权：不再询问，规则照常"]]), "permission_mode");
+  const rules = el("textarea"); rules.rows = 4; rules.style.width = "100%"; rules.value = values.permission_rules;
+  rules.placeholder = "一行一条，顺序 deny › ask › allow：\nallow: Bash(go build *)\nask: Edit(internal/agent/**)\ndeny: Bash(git push *)";
+  rules.oninput = () => { values.permission_rules = rules.value; };
+  const rulesWrap = el("span"); rulesWrap.append(rules, tag("permission_rules"));
+  grid.append(el("span", "meta", "权限规则"), rulesWrap);
+  panel.append(grid, el("p", "meta", "权限模式在每条对话的输入框旁边还能换（每轮生效）；规则在对话开始时拍进快照。D20 的高风险确认（删除记忆、破坏性 MCP、含私有数据后的外发、续跑重做）在任何模式下都照常询问。"));
+  const actions = el("div", "set-actions"), mine = el("button", "ghost", "保存为我的设置"), reset = el("button", "ghost", "恢复继承");
+  const saveTo = async (url, body) => { try { await hubCall("PUT", url, body); await loadSettings(); openSettings(); } catch (err) { alert(err.message); } };
+  mine.onclick = () => saveTo("/settings", values);
+  reset.onclick = () => { if (confirm("清掉你的个人设置，改用平台默认？")) saveTo("/settings", {}); };
+  actions.append(mine, reset);
+  if (data.can_edit_platform) {
+    const plat = el("button", "ghost", "保存为平台默认");
+    plat.title = "所有账号没单独设过的项都跟着变";
+    plat.onclick = () => saveTo("/settings/platform", values);
+    actions.append(plat);
+  }
+  actions.append(el("span", "meta", "只保存和上一层不同的项；标签显示每项来自哪一层"));
+  panel.append(actions);
+}
 async function loadEnabled() {
   try { const res = await fetch("/hub/enabled"); if (res.ok) ui.hub = await res.json(); } catch {}
   syncComposer();
@@ -2948,7 +3082,7 @@ $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query } : { query, rag: $("rag").checked, embedding: $("embedding").value, memory: $("mem").checked, memory_ttl: $("mem").checked ? $("mem-ttl").value : "", skills: $("use-skills").checked, mcp: $("use-mcp").checked, subagents: $("use-sub").checked, browser: $("use-web").checked, provider: $("provider").value, bash: $("use-bash").checked });
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query, permission: $("perm").value } : { query, provider: $("provider").value, workspace: $("workspace").disabled ? "" : $("workspace").value, permission: $("perm").value });
 };
 $("send").onclick = async (ev) => {
   if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交
@@ -2961,10 +3095,11 @@ $("send").onclick = async (ev) => {
     if (!res.ok && res.status !== 409) alert(await res.text());
   } catch (err) { alert("停止失败：" + err.message); }
 };
-$("use-sub").onchange = () => { save("useSub", $("use-sub").checked ? "1" : "0"); syncComposer(); };
-$("provider").onchange = () => { save("provider", $("provider").value); syncComposer(); };
-$("use-bash").onchange = () => { save("useBash", $("use-bash").checked ? "1" : "0"); syncComposer(); };
-$("use-web").onchange = () => { save("useWeb", $("use-web").checked ? "1" : "0"); syncComposer(); };
+$("provider").onchange = () => { ui.picked.provider = true; syncComposer(); };
+$("workspace").onchange = () => { ui.picked.workspace = true; syncComposer(); };
+$("perm").onchange = () => { ui.picked.permission = true; syncComposer(); };
+$("tools-link").onclick = () => { if (ui.run) { ui.toolsOpen = !ui.toolsOpen; syncComposer(); } else openSettings(); };
+$("settings").onclick = () => openSettings();
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };
 $("query").oninput = () => { autosize(); syncComposer(); };
@@ -2977,7 +3112,8 @@ window.fetch = async (...args) => {
   return res;
 };
 // 当前账号：显示名字与租户；租户账号隐藏没开通的功能和平台专用入口（评测、归因）。服务端同样会拒绝，这里只是不让人点到。
-const FEATURE_INPUTS = { rag: ["rag"], memory: ["mem", "mem-ttl"], skills: ["use-skills", "skills-hub"], mcp: ["use-mcp", "mcp-hub"], subagents: ["use-sub"], browser: ["use-web"], bash: ["use-bash"], labs: ["lab", "rag-lab", "security-lab"] };
+// 工具开关在设置页按租户策略显示“未开通”；这里只隐藏没开通的入口。
+const FEATURE_INPUTS = { skills: ["skills-hub"], mcp: ["mcp-hub"], labs: ["lab", "rag-lab", "security-lab"] };
 async function loadMe() {
   const res = await fetch("/me");
   if (!res.ok) return;
@@ -2999,6 +3135,7 @@ $("logout").onclick = async () => { await fetch("/logout", { method: "POST" }); 
 loadMe();
 restoreRunURL();
 loadEnabled();
+loadSettings();
 </script>
 </body>
 </html>

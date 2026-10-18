@@ -26,6 +26,7 @@ import (
 	"learning-agent/internal/memory"
 	"learning-agent/internal/metrics"
 	"learning-agent/internal/observer"
+	"learning-agent/internal/permission"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/queue"
 	"learning-agent/internal/retrieval"
@@ -34,6 +35,7 @@ import (
 	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tenant"
 	"learning-agent/internal/tools"
+	"learning-agent/internal/workspace"
 
 	"go.opentelemetry.io/otel/trace"
 )
@@ -143,6 +145,12 @@ func run() error {
 	flag.Var(&netAllow, "net-allow", "配合 -bash：沙箱可经代理访问的域名（含子域名，可重复）；由用户批准后添加")
 	flag.BoolVar(&agent.PrivateInput, "private-input", false, "D20：任务输入已含私有数据（父 agent 派出子任务时自动加上）：外发类工具执行前要用户确认")
 	flag.StringVar(&tenant.Current, "tenant", "", "多租户：本任务所属的租户；检查点、记忆、沙箱、浏览器画面与审计都放在 .data/tenants/<租户>/ 下。不给时是平台空间 .data/")
+	flag.StringVar(&permission.Mode, "permission-mode", permission.Mode, "D25：权限模式 plan（只读）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，规则照常）")
+	var allowRules, askRules, denyRules stringList
+	flag.Var(&allowRules, "allow", "D25：允许规则，如 Bash(go build *)、Edit(docs/**)（可重复）")
+	flag.Var(&askRules, "ask", "D25：询问规则，如 Edit(internal/agent/**)（可重复）")
+	flag.Var(&denyRules, "deny", "D25：拒绝规则，如 Bash(git push *)、Read(.env)（可重复）；顺序 deny › ask › allow")
+	workspaceDir := flag.String("workspace", "", "D23：增加编码工具 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写")
 	subagents := flag.Bool("subagents", false, "增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程）")
 	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
 	flag.Parse()
@@ -285,8 +293,8 @@ func run() error {
 	}
 	if tools.SecurityLabEnabled {
 		// 对照实验也只允许读固定样本、做数学运算；不给私有资料、外网或写入能力。
-		if *contextLab || *ragLab || tools.LabEnabled || retrieval.Enabled || *searchQuery != "" || *memoryEnabled || *memoryForget != "" || *memorySearch != "" || skills.Enabled || len(mcpCommands) > 0 || *subagents || browser.Enabled || sandbox.Enabled || *historyStdin || history != nil || agent.Continues != "" {
-			return errors.New("security-lab 不与其他实验、检索、记忆、MCP、Skills、子 agent、浏览器、Bash 或续聊组合")
+		if *contextLab || *ragLab || tools.LabEnabled || retrieval.Enabled || *searchQuery != "" || *memoryEnabled || *memoryForget != "" || *memorySearch != "" || skills.Enabled || len(mcpCommands) > 0 || *subagents || browser.Enabled || sandbox.Enabled || *workspaceDir != "" || *historyStdin || history != nil || agent.Continues != "" {
+			return errors.New("security-lab 不与其他实验、检索、记忆、MCP、Skills、子 agent、浏览器、Bash、工作区或续聊组合")
 		}
 		agent.LabelToolData = *securityProtection
 	}
@@ -459,6 +467,33 @@ func run() error {
 		llm.Tools = append(llm.Tools, sandbox.Definitions...)
 		defer sandbox.Close()
 	}
+	if !slices.Contains(permission.Modes, permission.Mode) {
+		return errors.New("permission-mode 取 plan、ask、edit 或 full")
+	}
+	for effect, list := range map[string]stringList{"allow": allowRules, "ask": askRules, "deny": denyRules} {
+		for _, text := range list {
+			if err := permission.Add(effect, text); err != nil {
+				return err
+			}
+		}
+	}
+	if *workspaceDir != "" {
+		if *contextLab || *ragLab || *searchQuery != "" {
+			return errors.New("workspace用于普通问答与续聊，不与实验或search-docs组合")
+		}
+		if err := workspace.Open(*workspaceDir); err != nil {
+			return err
+		}
+		llm.Tools = append(llm.Tools, workspace.Definitions...)
+		fmt.Printf("Workspace: dir=%s（编码工具只在这里读写）\n", workspace.Dir)
+		if sandbox.Enabled {
+			// D25：bash 看到的 /workspace 就是这个仓库；plan 模式挂成只读。
+			sandbox.Project, sandbox.ProjectWrite, sandbox.GoCache = workspace.Dir, permission.Mode != "plan", tenant.Here("gocache")
+		}
+	}
+	if permission.Mode != "edit" || len(allowRules)+len(askRules)+len(denyRules) > 0 {
+		fmt.Printf("Permission: %s\n", permission.Describe())
+	}
 	if !*contextLab && !*ragLab && strings.TrimSpace(*question) == "" {
 		fmt.Print("请输入任务： ")
 		*question, _ = bufio.NewReader(os.Stdin).ReadString('\n')
@@ -515,7 +550,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true, "bash": true, "bash-project-ro": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {
@@ -530,6 +565,12 @@ func run() error {
 		}
 		for _, domain := range sandbox.Allow {
 			agent.SubagentArgs = append(agent.SubagentArgs, "-net-allow", domain)
+		}
+		// 子 agent 继承同一套权限规则：子任务不能比父任务拥有更多权限。
+		for flagName, list := range map[string]stringList{"-allow": allowRules, "-ask": askRules, "-deny": denyRules} {
+			for _, text := range list {
+				agent.SubagentArgs = append(agent.SubagentArgs, flagName, text)
+			}
 		}
 		llm.Tools = append(llm.Tools, agent.SpawnDefinition)
 	}

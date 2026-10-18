@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -63,6 +64,14 @@ type event struct {
 	Browser    bool            `json:"browser,omitempty"`        // 本对话启用浏览器工具，续聊沿用
 	Provider   string          `json:"provider,omitempty"`       // 本对话的模型供应商（-provider），续聊沿用
 	Bash       bool            `json:"bash,omitempty"`           // 本对话启用 bash 沙箱，续聊沿用
+	RAG        bool            `json:"rag,omitempty"`            // 设置快照：本对话启用知识库检索，续聊沿用
+	Workspace  string          `json:"workspace,omitempty"`      // 设置快照：本对话的工作区名字与开始时解析出的目录，续聊沿用
+	WorkDir    string          `json:"workspace_dir,omitempty"`  //
+	MaxSteps   int             `json:"max_steps,omitempty"`      // 设置快照：模型请求预算、上下文窗口与工具输出上限；旧存档没有，按 agent 默认值
+	Window     int             `json:"context_window,omitempty"` //
+	ToolOutput int             `json:"tool_output,omitempty"`    //
+	Permission string          `json:"permission,omitempty"`     // D25：本轮的权限模式（续聊可以换）与权限规则快照
+	Rules      []string        `json:"permission_rules,omitempty"`
 	NetAllow   []string        `json:"net_allow,omitempty"`      // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
 	Task       string          `json:"task,omitempty"`           // 发出这次请求的 agent 任务ID（X-Agent-Task）
 	Sub        bool            `json:"sub,omitempty"`            // 请求来自子 agent：不进入父对话流、不参与续聊恢复
@@ -187,6 +196,11 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("GET /memory", s.listMemory)
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
 	// Skills/MCP 是平台配置：所有账号可以查看、使用已开启的；只有平台账号能修改。
+	mux.HandleFunc("GET /settings", s.getSettings)
+	mux.HandleFunc("PUT /settings", s.putSettings("user"))
+	mux.HandleFunc("PUT /settings/platform", platform(s.putSettings("platform")))
+	mux.HandleFunc("POST /settings/workspaces", platform(s.addWorkspace))
+	mux.HandleFunc("DELETE /settings/workspaces/{name}", platform(s.deleteWorkspace))
 	mux.HandleFunc("GET /hub", s.listHub)
 	mux.HandleFunc("GET /hub/enabled", s.enabledHub)
 	mux.HandleFunc("POST /hub/skills", platform(s.createSkill))
@@ -237,30 +251,31 @@ func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
 
 // 每次运行都启动一个独立的 agent 子进程（见 agentCommand），各次运行的状态与输出互不影响。
 func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
+	// 普通对话只选模型和工作区，工具来自设置（见 settings.go）；实验仍按各自的固定参数单独运行。
 	var input struct {
-		Query              string `json:"query"`
-		ContextLab         bool   `json:"context_lab"`
-		RAG                bool   `json:"rag"`
-		RAGLab             bool   `json:"rag_lab"`
-		SecurityLab        string `json:"security_lab"`
-		SecurityProtection bool   `json:"security_protection"`
-		Embedding          string `json:"embedding"`
-		Memory             bool   `json:"memory"`
-		MemoryTTL          string `json:"memory_ttl"`
-		Skills             bool   `json:"skills"`
-		MCP                bool   `json:"mcp"`
-		Subagents          bool   `json:"subagents"`
-		Browser            bool   `json:"browser"`
-		Provider           string `json:"provider"`
-		Bash               bool   `json:"bash"`
+		Query              string  `json:"query"`
+		ContextLab         bool    `json:"context_lab"`
+		RAGLab             bool    `json:"rag_lab"`
+		SecurityLab        string  `json:"security_lab"`
+		SecurityProtection bool    `json:"security_protection"`
+		Embedding          string  `json:"embedding"`
+		Provider           string  `json:"provider"`
+		Workspace          *string `json:"workspace"`  // nil：用设置里的默认工作区；""：本对话不用工作区
+		Permission         string  `json:"permission"` // 空：用设置里的默认权限模式
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
 		return
 	}
 	input.Query = strings.TrimSpace(input.Query)
+	u := current(req)
+	settings, _, err := s.effectiveFor(u)
+	if err != nil {
+		http.Error(w, "无法读取设置："+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if input.Embedding == "" {
-		input.Embedding = "ark"
+		input.Embedding = settings.Values["embedding"]
 	}
 	if input.Embedding != "ark" && input.Embedding != "local" {
 		http.Error(w, "embedding须为ark或local", http.StatusBadRequest)
@@ -271,66 +286,68 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	lab := input.ContextLab || input.RAGLab || input.SecurityLab != ""
-	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) || (lab && (input.RAG || input.Memory || input.Skills || input.MCP || input.Subagents || input.Browser || input.Bash)) {
+	if (!lab && input.Query == "") || (lab && input.Query != "") || (input.ContextLab && input.RAGLab) {
 		http.Error(w, "普通问答需要query；实验请单独运行", http.StatusBadRequest)
 		return
 	}
+	if input.Provider == "" {
+		input.Provider = settings.Values["provider"]
+	}
 	// 供应商名由 agent 校验（路由表在 llm 包）；这里只挡住不像名字的输入。
-	if input.Provider != "" && !providerPattern.MatchString(input.Provider) {
+	if !providerPattern.MatchString(input.Provider) {
 		http.Error(w, "provider 只能是小写字母", http.StatusBadRequest)
 		return
 	}
-	if ttl, err := time.ParseDuration(input.MemoryTTL); input.MemoryTTL != "" && (err != nil || ttl <= 0 || !input.Memory) {
-		http.Error(w, "memory_ttl须为正的时长（如1m），且需开启长期记忆", http.StatusBadRequest)
-		return
+	// 工作区只能从这个账号可选的列表里挑；网页给的是名字，目录由服务端按登记解析。
+	workspace := settings.Values["workspace"]
+	if input.Workspace != nil {
+		workspace = *input.Workspace
 	}
-	// 多租户：功能按租户策略放行，再看同时运行的对话数有没有到上限。
-	u := current(req)
-	if !u.platform() {
-		p := s.auth.policy(u.Tenant)
-		for feature, on := range map[string]bool{"rag": input.RAG, "memory": input.Memory, "skills": input.Skills, "mcp": input.MCP,
-			"subagents": input.Subagents, "browser": input.Browser, "bash": input.Bash, "labs": lab} {
-			if on && !p.allows(feature) {
-				http.Error(w, "租户 "+u.Tenant+" 没有开通功能："+feature, http.StatusForbidden)
-				return
-			}
+	var workDir string
+	if workspace != "" && !lab {
+		i := slices.IndexFunc(settings.Workspaces, func(w workspaceDir) bool { return w.Name == workspace })
+		if i < 0 || !settings.on("coding") {
+			http.Error(w, "不能使用工作区 "+workspace+"：没有登记、编码工具没打开，或租户没有开通", http.StatusBadRequest)
+			return
 		}
+		workDir = settings.Workspaces[i].Path
+	} else {
+		workspace = ""
+	}
+	if lab && !u.platform() && !s.auth.policy(u.Tenant).allows("labs") {
+		http.Error(w, "租户 "+u.Tenant+" 没有开通功能：labs", http.StatusForbidden)
+		return
 	}
 	if !s.underQuota(w, u) {
 		return
 	}
-	args := []string{}
-	if input.RAG {
-		args = append(args, "-rag")
-	}
-	args = appendMemoryArgs(args, input.Memory, input.MemoryTTL)
-	var skills []string
-	var servers []mcpServer
-	if input.Skills || input.MCP {
-		enabledSkills, enabledServers, err := s.enabledCapabilities()
-		if err != nil {
-			http.Error(w, "无法读取 .data/hub.json："+err.Error(), http.StatusInternalServerError)
+	// 设置快照：这一刻打开的工具，写进 start 事件，续聊沿用。
+	snap := event{Kind: "start", RAG: settings.on("rag"), Memory: settings.on("memory"), MemoryTTL: settings.Values["memory_ttl"], Subagents: settings.on("subagents"),
+		Browser: settings.on("browser"), Provider: input.Provider, Bash: settings.on("bash"), Workspace: workspace, WorkDir: workDir,
+		Permission: settings.Values["permission_mode"], Rules: ruleLines(settings.Values["permission_rules"])}
+	if input.Permission != "" {
+		if valid("permission_mode", input.Permission, settingsFile{}) != nil {
+			http.Error(w, "permission 取 plan、ask、edit 或 full", http.StatusBadRequest)
 			return
 		}
-		if input.Skills {
-			skills = enabledSkills
-		}
-		if input.MCP {
-			servers = enabledServers
-		}
+		snap.Permission = input.Permission
 	}
-	args = appendCapabilityArgs(args, skills, servers)
-	if input.Subagents {
-		args = append(args, "-subagents")
+	snap.MaxSteps, _ = strconv.Atoi(settings.Values["max_steps"])
+	snap.Window, _ = strconv.Atoi(settings.Values["context_window"])
+	snap.ToolOutput, _ = strconv.Atoi(settings.Values["tool_output"])
+	if settings.on("skills") {
+		snap.Skills = settings.Skills
 	}
-	if input.Browser {
-		args = append(args, "-browser")
+	if settings.on("mcp") {
+		snap.MCP = settings.MCP
 	}
-	if input.Provider != "" {
-		args = append(args, "-provider", input.Provider)
+	if !snap.RAG && !snap.Memory {
+		input.Embedding = ""
 	}
-	if input.Bash {
-		args = append(args, "-bash")
+	var args []string
+	if !lab {
+		snap.Embedding = input.Embedding
+		args = snapshotArgs(snap, nil)
 	}
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
@@ -346,13 +363,14 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		if input.SecurityProtection {
 			args = append(args, "-security-protection")
 		}
-		if input.Provider != "" {
-			args = append(args, "-provider", input.Provider)
-		}
 		input.Query = tools.SecurityQuestion(input.SecurityLab)
 	}
-	if input.RAG || input.RAGLab || input.Memory {
+	if input.RAGLab {
 		args = append(args, "-embedding", input.Embedding)
+	}
+	if lab {
+		args = append(args, "-provider", input.Provider)
+		snap = event{Kind: "start", Provider: input.Provider, Embedding: input.Embedding}
 	}
 	// 对话 ID：随机 UUID（v4），不含时间，与观测台在哪个时区启动无关。
 	// 早期存档的 ID 是“20261006-213820.763”这样的本地时间，照常读回，不改名，旧链接仍能打开。
@@ -367,7 +385,8 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	s.runs = append(s.runs, r)
 	s.mu.Unlock()
 	ctx, span := r.beginTurn(input.Query)
-	r.add(event{Kind: "start", Text: r.Query, Embedding: input.Embedding, Memory: input.Memory, MemoryTTL: input.MemoryTTL, Skills: skills, MCP: servers, Subagents: input.Subagents, Browser: input.Browser, Provider: input.Provider, Bash: input.Bash, Trace: span.SpanContext().TraceID().String(), Protocol: true})
+	snap.Text, snap.Trace, snap.Protocol = r.Query, span.SpanContext().TraceID().String(), true
+	r.add(snap)
 	var turn map[string]any
 	if !input.ContextLab && !input.RAGLab {
 		turn = map[string]any{"question": input.Query}
@@ -430,10 +449,15 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var input struct {
-		Query string `json:"query"`
+		Query      string `json:"query"`
+		Permission string `json:"permission"` // D25：权限模式可以每轮换（和 Codex 的 /approvals、Claude Code 的 Shift+Tab 一样）；工具与规则沿用快照
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil || strings.TrimSpace(input.Query) == "" {
 		http.Error(w, "请填写续聊问题", http.StatusBadRequest)
+		return
+	}
+	if input.Permission != "" && valid("permission_mode", input.Permission, settingsFile{}) != nil {
+		http.Error(w, "permission 取 plan、ask、edit 或 full", http.StatusBadRequest)
 		return
 	}
 	r.mu.Lock()
@@ -454,46 +478,30 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "无法追加对话记录", http.StatusInternalServerError)
 		return
 	}
-	// 续聊沿用这条对话开始时的记忆、skill 与 MCP 设置：最近一次 start/continue 事件为准。
-	memory, ttl, subagents, browser, provider, bash := false, "", false, false, "", false
-	var skills []string
-	var servers []mcpServer
+	// 续聊沿用这条对话开始时的设置快照：最近一次 start/continue 事件为准，之后改设置不影响这条对话。
+	var snap event
 	for _, e := range r.events {
 		if e.Kind == "start" || e.Kind == "continue" {
-			memory, ttl, skills, servers, subagents, browser, provider, bash = e.Memory, e.MemoryTTL, e.Skills, e.MCP, e.Subagents, e.Browser, e.Provider, e.Bash
+			snap = e
 		}
 	}
+	snap.Kind, snap.Text, snap.Embedding = "continue", strings.TrimSpace(input.Query), history.Embedding
+	if input.Permission != "" {
+		snap.Permission = input.Permission
+	}
+	snap.RAG = snap.RAG || history.RAG // B0 之前的存档没有 rag 字段，按上一次请求里有没有 search_docs 判断
+	snap.Trace, snap.Protocol, snap.Status, snap.Seq, snap.Time = "", true, 0, 0, time.Time{}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
-	ctx, span := r.beginTurn(strings.TrimSpace(input.Query))
-	r.add(event{Kind: "continue", Text: strings.TrimSpace(input.Query), Embedding: history.Embedding, Memory: memory, MemoryTTL: ttl, Skills: skills, MCP: servers, Subagents: subagents, Browser: browser, Provider: provider, Bash: bash, NetAllow: r.netAllow(), Trace: span.SpanContext().TraceID().String(), Protocol: true})
+	snap.NetAllow = r.netAllow() // netAllow 自己加锁，要在放开 r.mu 之后调用
+	ctx, span := r.beginTurn(snap.Text)
+	snap.Trace = span.SpanContext().TraceID().String()
+	r.add(snap)
 	args := []string{}
 	if history.Effort != "" {
 		args = append(args, "-reasoning-effort", history.Effort)
 	}
-	if history.RAG {
-		args = append(args, "-rag")
-	}
-	if history.RAG || memory {
-		args = append(args, "-embedding", history.Embedding)
-	}
-	args = appendMemoryArgs(args, memory, ttl)
-	args = appendCapabilityArgs(args, skills, servers)
-	if subagents {
-		args = append(args, "-subagents")
-	}
-	if browser {
-		args = append(args, "-browser")
-	}
-	if provider != "" {
-		args = append(args, "-provider", provider)
-	}
-	if bash {
-		args = append(args, "-bash")
-		for _, domain := range r.netAllow() {
-			args = append(args, "-net-allow", domain)
-		}
-	}
+	args = append(args, snapshotArgs(snap, r.netAllow())...)
 	// 问题、续聊上下文与续接关系放进 turn/start。每一轮都用新的检查点ID，旧检查点保持原样（“一个ID一个问题”），
 	// 续接关系让模型可以按 task_id 续跑之前各轮的子任务。
 	turn := map[string]any{"question": strings.TrimSpace(input.Query), "history": history, "continues": history.Continues}
@@ -578,6 +586,50 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 			r.add(event{Kind: "exit", Text: text})
 		}()
 	}
+}
+
+// snapshotArgs 把设置快照还原成 agent 的启动参数；首问和续聊共用，保证同一条对话每一轮的工具一致。
+func snapshotArgs(e event, netAllow []string) []string {
+	args := []string{}
+	if e.RAG {
+		args = append(args, "-rag")
+	}
+	if (e.RAG || e.Memory) && e.Embedding != "" {
+		args = append(args, "-embedding", e.Embedding)
+	}
+	args = appendMemoryArgs(args, e.Memory, e.MemoryTTL)
+	args = appendCapabilityArgs(args, e.Skills, e.MCP)
+	if e.Subagents {
+		args = append(args, "-subagents")
+	}
+	if e.Browser {
+		args = append(args, "-browser")
+	}
+	if e.Provider != "" {
+		args = append(args, "-provider", e.Provider)
+	}
+	if e.Bash {
+		args = append(args, "-bash")
+		for _, domain := range netAllow {
+			args = append(args, "-net-allow", domain)
+		}
+	}
+	if e.WorkDir != "" {
+		args = append(args, "-workspace", e.WorkDir)
+	}
+	if e.Permission != "" {
+		args = append(args, "-permission-mode", e.Permission)
+	}
+	for _, line := range e.Rules {
+		effect, rule, _ := strings.Cut(line, ":")
+		args = append(args, "-"+strings.TrimSpace(effect), strings.TrimSpace(rule))
+	}
+	for flag, n := range map[string]int{"-max-steps": e.MaxSteps, "-context-window": e.Window, "-tool-output-tokens": e.ToolOutput} {
+		if n > 0 {
+			args = append(args, flag, strconv.Itoa(n))
+		}
+	}
+	return args
 }
 
 func appendMemoryArgs(args []string, memory bool, ttl string) []string {

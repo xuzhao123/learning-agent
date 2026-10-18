@@ -193,6 +193,29 @@ action_key = 工具名 + ":" + 规范化参数
 
 D19–20 起，执行器在这条路径上多了几道关口：[runTool](../internal/agent/dispatch.go) 先核对本轮 `llm.Tools`（允许列表），菜单外的工具不执行、不重试；`ExecuteBatch` 在占并发槽位之前按 [风险规则](../internal/agent/approval.go) 问人确认，等人的时间不占槽位、不计入单次时限；每项调用一结束就写结果日志。关口的顺序与取舍见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#关口的实际顺序会影响谁先被打扰)。
 
+### 编码工具：读后才写与唯一匹配
+
+D23 起，文件读写有专门的工具（[workspace](../internal/workspace/workspace.go)），不再只靠 shell。三条机制各防一类错误：
+
+| 机制 | 数据结构 | 防住的错误 | 剩下的窗口 |
+| --- | --- | --- | --- |
+| 路径边界 | `os.Root` 以工作区为根逐级解析 | `../`、绝对路径、指向外面的符号链接 | 只管文件工具；shell 要靠 OS 沙箱 |
+| 读后才写 | `seen[path] = sha256(内容)`，读与自己的写入都更新 | 按过期内容写入，覆盖外部改动 | 账本在进程内存里，续跑和子 agent 要重读 |
+| 唯一匹配 | `strings.Count(text, old)` 必须为 1，否则报次数和行号 | 改错位置 | 缩进、空白不一致时“没找到”，靠错误信息让模型自己纠正 |
+
+核对与写入在同一把锁里完成：
+
+```go
+mu.Lock()
+defer mu.Unlock()
+data, _ := read(path)
+if seen[path] != hash(data) { return stale }   // 没读过或已被改
+os.WriteFile(...)                              // 实际经 root.WriteFile
+seen[path] = hash(updated)
+```
+
+不加锁时，两次并发写入会都先通过核对再各自写入。同一批里的 `edit_file`、`write_file` 还和 bash 一样按调用顺序串行，后一处修改可以建立在前一处之上。编辑格式的取舍（字符串替换、diff、补丁）见 [Day 23 笔记](../docs/day-23/day-23-notes.md#3-编辑格式怎样出错)。
+
 ### 进阶推演
 
 1. p=2 的批次里，第一项正在退避等待，这个许可要不要释放？  

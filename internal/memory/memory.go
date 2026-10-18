@@ -404,7 +404,7 @@ func sourceFromTranscript(question string, transcript []llm.Message, now time.Ti
 	parts, current := []string{}, -1
 	for _, m := range transcript {
 		switch {
-		case m.Role == "user" && !strings.HasPrefix(m.Content, llm.SummaryPrefix):
+		case llm.FromUser(m):
 			text, _, _ := strings.Cut(m.Content, "\n\n[程序说明]")
 			parts = append(parts, "[用户] "+text)
 			if text == question {

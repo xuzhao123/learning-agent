@@ -15,6 +15,7 @@ import (
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/tools"
+	"learning-agent/internal/workspace"
 )
 
 // 按工具名分发：检索、记忆、skill、浏览器与 MCP 在各自的包里；内置工具和 Day 2/3 实验工具交给 tools.Run。
@@ -90,6 +91,8 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 		return skills.Load(strings.TrimSpace(args.Name))
 	case "bash", "request_network_access":
 		return sandbox.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
+	case "read_file", "glob", "grep", "edit_file", "write_file":
+		return workspace.Run(ctx, call.Function.Name, call.Function.Arguments)
 	case "web_search", "open_page":
 		return browser.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
 	case "spawn_agent":

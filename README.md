@@ -81,6 +81,9 @@ go build -o bin/learning-agent .
 | Day 20 | 高风险操作确认与执行边界 | [笔记](docs/day-20/day-20-notes.md) | [实践](docs/day-20/day-20-lab.md) | — |
 | Day 21 | 审计日志与第三周复盘 | [笔记](docs/day-21/day-21-notes.md) · [复盘](docs/week-03-review.md) | [实践](docs/day-21/day-21-lab.md) | — |
 | Day 22 | Harness 参考架构与自用任务集 | [笔记](docs/day-22/day-22-notes.md) · [架构图](harness-architecture.html) | [实践](docs/day-22/day-22-lab.md) | — |
+| Day 23 | 编码工具与面向 agent 的接口 | [笔记](docs/day-23/day-23-notes.md) | [实践](docs/day-23/day-23-lab.md) | — |
+| Day 24 | 项目指令与提示词组装 | [笔记](docs/day-24/day-24-notes.md) | [实践](docs/day-24/day-24-lab.md) | — |
+| Day 25 | 统一权限策略 | [笔记](docs/day-25/day-25-notes.md) | [实践](docs/day-25/day-25-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -108,6 +111,7 @@ go build -o bin/learning-agent .
 | 知识与记忆 | [retrieval](internal/retrieval/)、[memory](internal/memory/) | 向量检索、规则写入、两路召回与重排 |
 | 工具扩展 | [tools](internal/tools/)、[mcp](internal/mcp/)、[skills](internal/skills/) | 本地工具、协议服务、按需加载知识 |
 | 多任务执行 | [queue](internal/queue/)、[子进程](internal/agent/child.go)、[子 agent](internal/agent/subagent.go) | worker、任务 ID、独立上下文与权限继承 |
+| 编码工具 | [workspace](internal/workspace/)、[permission](internal/permission/) | 读、找、搜、改；`os.Root` 路径边界、读后才写的版本核对、输出预算；项目指令、环境信息与系统提醒；权限规则与模式 |
 | 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/)、[netguard](internal/netguard/) | 页面读取、进程隔离、网络与资源边界、出口地址判断 |
 | 观测与实验 | [observer](internal/observer/)、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
 | 评测与归因 | [eval](internal/eval/)、[评测集](eval/cases.jsonl)、[观测台评测页](internal/observer/eval.go) | 题目与打分器、多次尝试与 pass^k、评审模型、消融与基线对比、归因卡片与回放验证 |
@@ -181,6 +185,9 @@ go build -o bin/learning-agent .
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
 | `-provider` | ark | 模型路由：`ark`（豆包，方舟）或 `deepseek`；子 agent 继承，续跑沿用 |
 | `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux）；工作目录按对话保留，续聊各轮共用，观测台可上传、下载 |
+| `-workspace` | 空 | D23：增加 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写；子 agent 继承。D25 起配合 `-bash` 时 bash 的 `/workspace` 就是这个仓库（`.git` 只读，`.env`、`.data` 看不到），本对话目录改挂 `/scratch` |
+| `-permission-mode` | edit | D25：plan（只读计划）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，规则与高风险确认照常） |
+| `-allow` / `-ask` / `-deny` | 空 | D25：权限规则，可重复，如 `-allow "Bash(go build *)"`、`-deny "Bash(git push *)"`、`-ask "Edit(internal/agent/**)"`；顺序 deny › ask › allow；子 agent 继承 |
 | `-bash-project-ro` | false | 配合 `-bash`：项目只读挂到 `/project`（`.env`、`.data`、`.git`、`bin` 除外） |
 | `-net-allow` | 空 | 配合 `-bash`：沙箱可经代理访问的域名（含子域名，可重复），由用户批准后添加 |
 | `-browser` | false | Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料；环境变量 `CHROME_PATH` 指定浏览器，系统不支持 Chrome 沙箱时设 `CHROME_NO_SANDBOX=1` |

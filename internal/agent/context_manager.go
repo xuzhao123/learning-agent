@@ -343,8 +343,8 @@ func (c *Context) keepUsers(recent []int, budget int) ([]llm.Message, []int) {
 	users, origins := []llm.Message{}, []int{}
 	for i := len(c.Transcript) - 1; i > 0; i-- {
 		m := c.Transcript[i]
-		if m.Role != "user" || skip[i] {
-			continue
+		if m.Role != "user" || strings.HasPrefix(m.Content, llm.ReminderPrefix) || skip[i] {
+			continue // harness 的提醒不是原话；需要时会重新追加
 		}
 		partial := llm.MessageTokens([]llm.Message{m}) > budget
 		if partial {
