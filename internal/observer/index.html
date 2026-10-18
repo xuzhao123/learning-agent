@@ -674,11 +674,11 @@ function apply(r, e) {
   }
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
-  if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + r.exit + "）";
+  if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + endLabel(r) + "）";
   if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
-    r.exit = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
+    r.exit = ""; r.termination = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
     if (e.embedding) { r.embedding = e.embedding; r.embeddingExplicit = true; }
     r.logs.push({ ...e, kind: "stdout", text: "用户续聊：" + e.text });
   }
@@ -825,6 +825,15 @@ function isEmpty(v) {
   }
   return false;
 }
+// B0 的 turn/completed 带结局（max_steps 等）；进程退出码只说明“不是正常结束”，界面优先显示结局，看得出是没做完还是出错。
+const OUTCOME_LABEL = { max_steps: "请求预算用完", context_error: "上下文放不下", hook_blocked: "被 hook 拦下", no_progress: "无进展熔断", repeated_action: "重复动作熔断",
+  invalid_tool_calls: "工具调用格式错误", checkpoint_error: "检查点写入失败", encoding_error: "编码错误", permanent: "不可重试的错误", permission: "权限拒绝", unknown_not_repeatable: "结果未知且不可重做", cancelled: "已取消", error: "出错" };
+function endLabel(r) {
+  if (!r.exit || r.exit === "exit 0" || !r.termination) return r.exit;
+  const at = r.termination.indexOf("："), outcome = at < 0 ? r.termination : r.termination.slice(0, at);
+  const detail = at < 0 ? "" : r.termination.slice(at + 1).replace(/^未完成：/, "");
+  return (OUTCOME_LABEL[outcome] || outcome) + (detail ? "（" + detail + "）" : "");
+}
 function analyze(r) {
   const seen = new Map(), failed = new Map(), backtracks = [], detours = [];
   for (const c of r.calls) for (const t of c.tools) {
@@ -937,7 +946,7 @@ function items(r) {
   const a = r.calls.filter((c) => !c.compact).at(-1);
   if (a && a.choice && !a.tools.length && a.choice.message.content) list.push({ id: "ans", type: "answer", turn: a.turn, step: a.step, run: r, call: a, hidden: true, label: "answer", sum: a.choice.message.content });
   const last = r.calls.at(-1);
-  list.push({ id: "end", type: "process", turn: last?.turn || 1, step: last?.step || 0, run: r, call: last, label: "exit", sum: r.exit || "运行中", bad: !!r.exit && r.exit !== "exit 0" });
+  list.push({ id: "end", type: "process", turn: last?.turn || 1, step: last?.step || 0, run: r, call: last, label: "exit", sum: endLabel(r) || "运行中", bad: !!r.exit && r.exit !== "exit 0" });
   return list;
 }
 
@@ -988,7 +997,7 @@ function renderStats(r, a) {
   add("总耗时", sec(a.totalMs));
   if (ui.replay) add("状态", "回放中");
   else if (!r.exit) add("状态", "运行中");
-  else add("状态", a.failed ? "失败：" + r.exit : a.clean ? "完成 · 干净" : "完成 · 有绕路", a.failed || !a.clean ? "bad" : "good");
+  else add("状态", a.failed ? "未正常结束：" + endLabel(r) : a.clean ? "完成 · 干净" : "完成 · 有绕路", a.failed || !a.clean ? "bad" : "good");
 }
 
 // ---------- 视图一：Trajectory 事件账本 + 瀑布时间轴 ----------
@@ -2325,7 +2334,7 @@ function drawChat() {
   const answered = last && last.choice && !last.tools.length && last.choice.message.content;
   if (r.exit && (r.exit !== "exit 0" || !answered)) {
     const card = el("div", "stopcard");
-    card.append(el("div", "err", (r.stopRequested ? "已按停止按钮中断：" : "agent 已停止：") + r.exit));
+    card.append(el("div", "err", (r.stopRequested ? "已按停止按钮中断：" : "agent 已停止：") + endLabel(r)));
     const tail = r.logs.filter((l) => !(l.text || "").startsWith("用户续聊：")).slice(-6);
     if (tail.length) card.append(el("pre", "", tail.map((l) => l.text).join("\n")));
     if (r.checkpoint) card.append(el("div", "meta", `检查点 ${r.checkpoint} 已保存：可以直接在下方继续提问，模型会看到哪些调用未执行或结果未知。`));
@@ -2359,7 +2368,7 @@ function renderShell() {
   status.className = r && r.exit && r.exit !== "exit 0" ? "bad" : "";
   const nSub = r ? Object.values(r.subs).reduce((n, s) => n + s.calls.length, 0) : 0;
   const calls = r ? `${r.calls.length + r.aux.length} 次` + (r.aux.length ? `（含辅助 ${r.aux.length}）` : "") + (nSub ? ` · 子 agent ${nSub} 次` : "") : "";
-  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? (r.stopRequested ? "正在停止…" : `运行中 · 模型调用 ${calls}`) : r.exit === "exit 0" ? `完成 · 模型调用 ${calls}` : r.stopRequested ? "已停止" : "未正常结束";
+  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? (r.stopRequested ? "正在停止…" : `运行中 · 模型调用 ${calls}`) : r.exit === "exit 0" ? `完成 · 模型调用 ${calls}` : r.stopRequested ? "已停止" : "未正常结束 · " + endLabel(r);
 }
 // 工具在设置里常驻；新对话按设置显示，进行中的对话按它开始时的快照显示。
 const TOOL_INFO = {
@@ -2423,7 +2432,7 @@ function syncComposer() {
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !$("query").value.trim();
   $("query").placeholder = r ? "继续提问…" : "给 agent 布置一个任务…";
   const steps = r ? r.maxSteps : Number(s?.values.max_steps || 0);
-  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 40) : "新对话") + (steps ? ` · 预算 ${steps} 次请求` : "") + (r && ui.toolsOpen ? " · " + ($("tools-link").title) : "");
+  $("mode-chip").textContent = (r ? "续聊：" + clip(r.query, 40) : "新对话") + (steps > 0 ? ` · 预算 ${steps} 次请求` : steps < 0 || (!r && s?.values.max_steps === "0") ? " · 请求次数不限" : "") + (r && ui.toolsOpen ? " · " + ($("tools-link").title) : "");
   $("hint").textContent = !r ? (toolOn("memory") ? "开头做向量+BM25召回、RRF融合与重排，相关记忆写进 system；要记的原话由模型调用 remember_memory 登记，程序校验后在本轮结束时连同来源保存" : toolOn("coding") ? "编码工具只在所选工作区里读写；改动请用 git 查看和回退" : "Enter 发送，Shift+Enter 换行；工具由设置决定，模型按需调用") : lab ? "对比实验使用独立问题；自行提问请新建对话" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次 ■ 强制结束" : "agent 正在回复，点 ■ 停止；本轮结束后可以继续提问") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : r.exit !== "exit 0" ? "上一轮中途停下：继续提问会从检查点接着聊" : "Enter 发送，会延续这条对话的上下文；工具沿用开始时的快照";
 }
@@ -2726,7 +2735,7 @@ async function openSettings() {
   const line = (label, node, key) => { const wrap = el("span"); wrap.append(node, document.createTextNode(" "), tag(key)); grid.append(el("span", "meta", label), wrap); };
   line("默认模型", select("provider", [["ark", "豆包（方舟）"], ["deepseek", "DeepSeek"]]), "provider");
   line("默认工作区", select("workspace", [["", "无工作区"], ...e.workspaces.map((w) => [w.name, w.name])]), "workspace");
-  num("max_steps", "模型请求预算", "每轮最多多少次模型请求，1–60");
+  num("max_steps", "模型请求预算", "每轮最多多少次模型请求；0 表示不限，靠重复动作与无进展熔断、停止按钮收住");
   num("context_window", "上下文窗口", "token，工具全开时每次请求要带全部工具定义，窗口小会很快压缩");
   num("tool_output", "工具输出上限", "单个工具结果写进上下文的 token 上限");
   line("默认权限模式", select("permission_mode", [["plan", "只读计划：不能改文件，bash 里工作区只读"], ["ask", "改动都问：改文件、跑 bash、调 MCP 前确认"], ["edit", "自动编辑：工作区内编辑与沙箱 bash 直接做"], ["full", "全权：不再询问，规则照常"]]), "permission_mode");

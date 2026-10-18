@@ -98,7 +98,7 @@ func run() error {
 	appServer := flag.Bool("app-server", false, "B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；问题与续聊上下文由 turn/start 给出")
 	flag.StringVar(&agent.Continues, "continues", "", "续聊时上一轮的检查点ID：本轮用新ID，记下续接关系，子任务可按 task_id 引用之前各轮派出的子任务")
 	parallel := flag.Int("parallel", 4, "同时执行的工具数，1 到 16")
-	maxSteps := flag.Int("max-steps", 10, "模型请求总次数，包含最终回答和上下文摘要")
+	maxSteps := flag.Int("max-steps", 10, "模型请求总次数，包含最终回答和上下文摘要；0 表示不限（靠熔断与停止收住）")
 	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
 	flag.BoolVar(&tools.LabEnabled, "lab-tools", false, "启用 Day 2 故障实验工具")
 	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）或 deepseek；地址、模型与密钥见 README")
@@ -288,8 +288,11 @@ func run() error {
 	if flag.NArg() != 0 || *parallel < 1 || *parallel > 16 {
 		return errors.New("使用 -question 提供问题，-parallel 范围为 1 到 16")
 	}
-	if *maxSteps < 1 || *retries < 0 || *retries > 5 {
-		return errors.New("max-steps 至少为1，retries 范围为0到5")
+	if *maxSteps < 0 || *retries < 0 || *retries > 5 {
+		return errors.New("max-steps 不能为负（0 表示不限），retries 范围为0到5")
+	}
+	if *maxSteps == 0 {
+		*maxSteps = llm.Unlimited
 	}
 	if *securityProtection && !tools.SecurityLabEnabled {
 		return errors.New("security-protection 需要配合 security-lab；普通任务默认标记工具资料")

@@ -35,7 +35,7 @@ var toolOrder = []string{"rag", "memory", "skills", "mcp", "subagents", "bash", 
 var builtin = map[string]string{
 	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "bash": "on", "browser": "on", "coding": "on",
 	"embedding": "ark", "memory_ttl": "", "provider": "ark", "workspace": "",
-	"max_steps": "20", "context_window": "32768", "tool_output": "4000",
+	"max_steps": "0", "context_window": "262144", "tool_output": "4000",
 	"permission_mode": "edit", "permission_rules": "",
 	"hooks": "",
 }
@@ -158,7 +158,7 @@ func valid(key, value string, f settingsFile) error {
 			return err
 		}
 	case "max_steps", "context_window", "tool_output":
-		limits := map[string][2]int{"max_steps": {1, 60}, "context_window": {4096, 1048576}, "tool_output": {64, 32768}}[key]
+		limits := map[string][2]int{"max_steps": {0, 1000}, "context_window": {4096, 1048576}, "tool_output": {64, 32768}}[key]
 		if n, err := strconv.Atoi(value); err != nil || n < limits[0] || n > limits[1] {
 			return fmt.Errorf("%s 范围为 %d 到 %d", key, limits[0], limits[1])
 		}

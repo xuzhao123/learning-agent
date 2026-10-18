@@ -67,7 +67,7 @@ type event struct {
 	RAG        bool            `json:"rag,omitempty"`            // 设置快照：本对话启用知识库检索，续聊沿用
 	Workspace  string          `json:"workspace,omitempty"`      // 设置快照：本对话的工作区名字与开始时解析出的目录，续聊沿用
 	WorkDir    string          `json:"workspace_dir,omitempty"`  //
-	MaxSteps   int             `json:"max_steps,omitempty"`      // 设置快照：模型请求预算、上下文窗口与工具输出上限；旧存档没有，按 agent 默认值
+	MaxSteps   int             `json:"max_steps,omitempty"`      // 设置快照：模型请求预算（-1 不限）、上下文窗口与工具输出上限；旧存档没有，按 agent 默认值
 	Window     int             `json:"context_window,omitempty"` //
 	ToolOutput int             `json:"tool_output,omitempty"`    //
 	Permission string          `json:"permission,omitempty"`     // D25：本轮的权限模式（续聊可以换）与权限规则快照
@@ -340,6 +340,9 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	snap.MaxSteps, _ = strconv.Atoi(settings.Values["max_steps"])
+	if snap.MaxSteps == 0 {
+		snap.MaxSteps = -1 // 设置里 0 表示不限；快照里 0 留给“旧存档没有这项、按 agent 默认值”
+	}
 	snap.Window, _ = strconv.Atoi(settings.Values["context_window"])
 	snap.ToolOutput, _ = strconv.Atoi(settings.Values["tool_output"])
 	if settings.on("skills") {
@@ -633,6 +636,9 @@ func snapshotArgs(e event, netAllow []string) []string {
 	}
 	if e.Hooks != "" {
 		args = append(args, "-hooks", e.Hooks)
+	}
+	if e.MaxSteps < 0 {
+		args = append(args, "-max-steps", "0")
 	}
 	for flag, n := range map[string]int{"-max-steps": e.MaxSteps, "-context-window": e.Window, "-tool-output-tokens": e.ToolOutput} {
 		if n > 0 {

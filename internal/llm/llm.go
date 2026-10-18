@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,18 @@ type Reply struct {
 
 var ErrContextLength = errors.New("模型服务报告上下文过长")
 var ErrModelBudget = errors.New("模型请求次数预算已用完（包含摘要和超窗重试）")
+
+// Unlimited 是 -max-steps 0（不限请求次数）在内部的取值：足够大，预算的加减比较照常成立，不用到处判断“不限”。
+// 防止无限循环靠重复动作与无进展熔断，以及人按停止。
+const Unlimited = 1 << 30
+
+// LimitText 用于日志：不限时不打印那个大数。
+func LimitText(limit int) string {
+	if limit >= Unlimited {
+		return "不限"
+	}
+	return strconv.Itoa(limit)
+}
 
 // 普通请求和摘要共享模型、工具定义和推理配置；摘要额外通过tool_choice禁用工具。
 // B1：请求一律流式，onDelta 收到每一段正文与推理增量（可以为 nil）；返回的仍是拼好的完整回复，
@@ -214,7 +227,7 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 	if aux {
 		config.Effort = MemoryEffort
 	}
-	fmt.Printf("Model request: %d/%d purpose=%s input_est=%d\n", n, c.Limit, purpose, ContextTokens(history, withTools))
+	fmt.Printf("Model request: %d/%s purpose=%s input_est=%d\n", n, LimitText(c.Limit), purpose, ContextTokens(history, withTools))
 	// D13：一次模型请求一个 chat span（CLIENT：调用进程外的服务）。用途区分主任务、摘要和记忆辅助调用。
 	ctx, span := telemetry.Begin(ctx, "chat "+config.Model, trace.SpanKindClient, semconv.GenAIOperationNameChat, semconv.GenAIProviderNameKey.String(config.Provider),
 		semconv.GenAIRequestModel(config.Model), attribute.String("agent.purpose", purpose), attribute.Int("agent.request.number", n),

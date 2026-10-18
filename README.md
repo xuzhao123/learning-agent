@@ -86,6 +86,7 @@ go build -o bin/learning-agent .
 | Day 25 | 统一权限策略 | [笔记](docs/day-25/day-25-notes.md) | [实践](docs/day-25/day-25-lab.md) | — |
 | Day 26 | Hooks 与斜杠命令 | [笔记](docs/day-26/day-26-notes.md) | [实践](docs/day-26/day-26-lab.md) | — |
 | Day 27 | 规划与第一次自用 | [笔记](docs/day-27/day-27-notes.md) | [实践](docs/day-27/day-27-lab.md) | — |
+| Day 28 | 第四周复盘 | [复盘](docs/week-04-review.md) | — | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -129,7 +130,7 @@ go build -o bin/learning-agent .
 | --- | --- | --- |
 | `-question` | 交互输入 | 本轮任务 |
 | `-provider` | ark | 选择方舟或 DeepSeek |
-| `-max-steps` | 10 | 模型请求预算，含摘要与辅助调用 |
+| `-max-steps` | 10 | 模型请求预算，含摘要与辅助调用；0 表示不限 |
 | `-parallel` | 4 | 独立工具并发上限 |
 | `-rag` / `-memory` | false | 按需启用知识检索或长期记忆 |
 | `-resume` | 空 | 按检查点 ID 续跑，配置沿用检查点 |
@@ -144,7 +145,7 @@ go build -o bin/learning-agent .
 | `-continues` | 空 | 续聊时上一轮的检查点ID：本轮用新ID并记下续接关系，子 agent 可按 task_id 引用之前各轮的子任务；观测台自动处理 |
 | `-app-server` | false | B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；观测台与父 agent 启动子进程时使用 |
 | `-parallel` | 4 | 工具执行并发，1到16 |
-| `-max-steps` | 10 | 模型请求总预算，包含最终回答与上下文摘要 |
+| `-max-steps` | 10 | 模型请求总预算，包含最终回答与上下文摘要；0 表示不限 |
 | `-retries` | 2 | 工具额外重试次数，0到5 |
 | `-lab-tools` | false | 显式开启故障实验工具：Day 2 的 always_fail、check_task_status，Day 8 的 slow_job |
 | `-security-lab` / `-security-protection` | false / false | D18–19：读取 clean/answer/tool 三份无害样本；再加 protection 为防护组，不组合私有资料、外部执行或续聊。普通任务默认有资料标记；观测台左侧有实验入口 |

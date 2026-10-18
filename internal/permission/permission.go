@@ -38,7 +38,12 @@ func Add(effect, text string) error {
 	if m == nil {
 		return fmt.Errorf("规则格式是 工具名 或 工具名(模式)，如 Bash(go build *)、Edit(internal/**)：%q", text)
 	}
-	rules = append(rules, rule{effect: effect, tool: m[1], pattern: strings.TrimSpace(m[2]), text: strings.TrimSpace(text)})
+	pattern := strings.TrimSpace(m[2])
+	// 调用里的域名由 host() 转成小写，规则里的也要转，否则 WebFetch(domain:GitHub.com) 永远匹配不到。
+	if domain, ok := strings.CutPrefix(pattern, "domain:"); ok {
+		pattern = "domain:" + strings.ToLower(domain)
+	}
+	rules = append(rules, rule{effect: effect, tool: m[1], pattern: pattern, text: strings.TrimSpace(text)})
 	return nil
 }
 

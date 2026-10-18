@@ -146,7 +146,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		// 预算跨续跑累计：否则“崩溃 → 续跑”就能绕过 max_steps 无限循环。用量同样累计，D15 的成本才是整个任务的。
 		client.Calls, client.Input, client.Completion, client.Cached = resume.Calls, resume.Input, resume.Output, resume.Cached
 		cp.Status, cp.Reason, cp.Error = "running", "", ""
-		fmt.Printf("Resume: id=%s completed_rounds=%d model_calls=%d/%d pending_calls=%d\n", cp.ID, completed, client.Calls, maxSteps, pendingCount(pending))
+		fmt.Printf("Resume: id=%s completed_rounds=%d model_calls=%d/%s pending_calls=%d\n", cp.ID, completed, client.Calls, llm.LimitText(maxSteps), pendingCount(pending))
 	}
 	// D20：私有数据的来源跨续跑、续聊延续：续跑取检查点，续聊取上一轮；父 agent 派出时带 -private-input。
 	privateSources = slices.Clone(cp.Private)
@@ -259,7 +259,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			}
 		}
 	}
-	fmt.Printf("Limits: max_steps=%d retries=%d repeat_limit=3 parallel=%d lab_tools=%t tool_timeout=%s\n", maxSteps, retries, parallel, tools.LabEnabled, ToolTimeout)
+	fmt.Printf("Limits: max_steps=%s retries=%d repeat_limit=3 parallel=%d lab_tools=%t tool_timeout=%s\n", llm.LimitText(maxSteps), retries, parallel, tools.LabEnabled, ToolTimeout)
 	if err := save(); err != nil {
 		return err
 	}
