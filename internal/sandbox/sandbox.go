@@ -105,10 +105,18 @@ var (
 	mu       sync.Mutex // 同一进程里的 bash 调用串行执行：它们共用一个工作目录
 	etcOnce  sync.Once
 	etcDir   string
-	cgroupOK = sync.OnceValue(func() bool {
-		return exec.Command("systemd-run", "--user", "--scope", "--quiet", "true").Run() == nil
-	})
+	cgroupOK = sync.OnceValue(func() bool { return systemdRun() == nil })
+	// systemd ≥254 的 systemd-run 会先把命令行参数里的 ${...} 换成它自己的环境变量：沙箱里 `x=hi; echo ${x}`
+	// 会打印空，还输出“Referenced but unset environment variable…”。旧版 systemd 没有这个替换，也不认这个参数，
+	// 所以带参数探测一次：认就加，不认就不加（旧版本来也不替换）。
+	noExpandEnv = sync.OnceValue(func() bool { return systemdRun("--expand-environment=no") == nil })
 )
+
+// systemdRun 用 systemd-run 跑一个 true：探测它能不能用，以及认不认 extra 里的参数。
+func systemdRun(extra ...string) error {
+	args := append([]string{"--user", "--scope", "--quiet"}, extra...)
+	return exec.Command("systemd-run", append(args, "true")...).Run()
+}
 
 func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 	if !Enabled {
@@ -227,8 +235,13 @@ func execute(ctx context.Context, callID, command string) (_ any, err error) {
 		// 每次执行一个有名字的 scope（一个 cgroup）：超时时按 cgroup 整体杀掉。
 		// 不能只杀进程组：bwrap 的 --new-session 让沙箱里的进程进了新的会话，进程组信号打不到它们。
 		unit = fmt.Sprintf("la-sandbox-%d-%d", os.Getpid(), time.Now().UnixNano())
-		argv = append([]string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", unit,
-			"-p", "MemoryMax=" + memoryMax, "-p", "MemorySwapMax=0", "-p", "TasksMax=" + tasksMax, "-p", "CPUQuota=" + cpuQuota, "--"}, argv...)
+		opts := []string{"--user", "--scope", "--quiet", "--collect", "--unit", unit}
+		if noExpandEnv() {
+			// 不让 systemd 替换命令行里的 ${...}：命令要原样交给沙箱里的 shell，否则模型写的 `${x}`、`${PIPESTATUS[0]}` 都变成空。
+			opts = append(opts, "--expand-environment=no")
+		}
+		opts = append(opts, "-p", "MemoryMax="+memoryMax, "-p", "MemorySwapMax=0", "-p", "TasksMax="+tasksMax, "-p", "CPUQuota="+cpuQuota, "--")
+		argv = append(append([]string{"systemd-run"}, opts...), argv...)
 	} else {
 		fmt.Println("Sandbox: cgroup 不可用（没有 systemd 用户会话），本次不限制内存、CPU 与进程数")
 	}

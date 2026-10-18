@@ -1,6 +1,7 @@
 // Package workspace 是 D23 的编码工具：在用户用 -workspace 指定的仓库里读、找、搜、改文件。
 // 所有路径都经 os.Root 访问，../ 与指向目录外的符号链接都出不去；
 // 编辑与覆盖之前核对“上次读到的内容”，对不上就拒绝，让模型重新读，而不是覆盖别人（或自己并行的另一次编辑）的改动。
+// “读过哪些文件”本来只在进程内存里，续聊换进程就会丢，所以由 agent 随检查点保存、开局恢复（见 Seen、RestoreSeen）。
 package workspace
 
 import (
@@ -404,6 +405,33 @@ func grep(ctx context.Context, expr, under, glob string, ignoreCase bool) (any, 
 		result["truncated"] = fmt.Sprintf("超过 %d 处，只列出前 %d 处；请缩小 path、glob 或改写正则", maxMatches, maxMatches)
 	}
 	return result, nil
+}
+
+// Seen 返回账本的副本，由 agent 随本轮检查点保存：续聊是新进程，靠它接上上一轮读过哪些文件。
+// 返回副本而不是这张表本身：调用方在锁外序列化，工具执行的同时可能还在往里写。
+func Seen() map[string]string {
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(seen))
+	for path, sum := range seen {
+		out[path] = sum
+	}
+	return out
+}
+
+// RestoreSeen 在开始工作时用检查点里的账本替换当前账本（nil 或空表示从空账本开始）。
+// 只恢复“读过”这个事实和当时的哈希，不凭它放行写入：fresh 仍比对当前内容的哈希，
+// 两轮之间被改过的文件照样要求重新 read_file。
+func RestoreSeen(ledger map[string]string) {
+	mu.Lock()
+	defer mu.Unlock()
+	seen = make(map[string]string, len(ledger))
+	for path, sum := range ledger {
+		seen[path] = sum
+	}
 }
 
 // fresh 在持锁时调用：确认模型读过这个文件，而且读过之后没被改过。

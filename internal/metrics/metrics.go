@@ -21,7 +21,7 @@ import (
 //
 //	1 任务完成率        完成的根任务 / 根任务总数（不含运行中的任务）；完成 ≠ 答对，答对率要 D16 的评测集打分
 //	2 异常结局与可恢复  非正常结局按原因分布；进程消失（running 且锁已释放）单列；其中能续跑的比例
-//	3 端到端延迟        已结束任务的 P50 / P95（开始到最后一次写检查点，含中断的那段时间）
+//	3 端到端延迟        已结束任务的 P50 / P95（开始到最后一次写检查点，含中断的那段时间）；另列模型请求的首字延迟 P50 / P95
 //	4 成本              每个任务的 token 与模型请求；单次完成成本 = 全部任务的用量 / 完成数（失败的花费也算进去）
 //	5 工具可靠性        每个工具的调用数、失败率、结果未知率、重试次数、P95 耗时
 type Report struct {
@@ -49,6 +49,12 @@ type Report struct {
 		P95     float64 `json:"p95_seconds"`
 		Missing int     `json:"missing"` // D15 之前的检查点没有开始时间
 	} `json:"latency"`
+	FirstToken struct {
+		Samples int     `json:"samples"` // 一次模型请求一个样本
+		P50     float64 `json:"p50_ms"`
+		P95     float64 `json:"p95_ms"`
+		Missing int     `json:"missing"` // 没有这个属性的请求：只回了工具调用、出错，或 B1 之前的 span
+	} `json:"first_token"`
 	Cost struct {
 		Input         int     `json:"input_tokens"`
 		Output        int     `json:"output_tokens"`
@@ -192,8 +198,36 @@ func Compute(since time.Duration, prefix string) (*Report, error) {
 	r.Cost.PerTaskCalls = ratioF(r.Cost.Calls, r.Tasks)
 	r.Cost.CacheHit = ratio(r.Cost.Cached, r.Cost.Input)
 	r.Spans.Traces = len(traces)
+	first, firstMissing := firstTokens(traces)
+	slices.Sort(first)
+	r.FirstToken.Samples, r.FirstToken.Missing = len(first), firstMissing
+	r.FirstToken.P50, r.FirstToken.P95 = rank(first, 0.5), rank(first, 0.95)
 	r.Tools = tools(traces)
 	return r, nil
+}
+
+// B1 首字延迟：一次模型请求一个样本，取 chat span 上的 agent.response.first_token_ms（毫秒）。
+// 只回了工具调用、出错或 B1 之前的请求没有这个属性，单列 missing；崩溃时未结束的 span 不落盘，样本会偏少。
+func firstTokens(traces map[string]bool) (durations []float64, missing int) {
+	for id := range traces {
+		data, err := os.ReadFile(telemetry.Path(id))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			var span telemetry.Record
+			if json.Unmarshal([]byte(line), &span) != nil || span.Attributes["gen_ai.operation.name"] != "chat" {
+				continue
+			}
+			ms, ok := span.Attributes["agent.response.first_token_ms"].(float64)
+			if !ok {
+				missing++
+				continue
+			}
+			durations = append(durations, ms)
+		}
+	}
+	return durations, missing
 }
 
 // 工具指标从这些任务的 trace 里读 execute_tool span：Observation 的四种结局记在 agent.tool.status，重试是 span 事件。
@@ -275,6 +309,7 @@ func print(r *Report) {
 	slices.Sort(outcomes)
 	fmt.Printf("2 异常结局     %s；进程消失 %d 个；异常里能续跑的占 %s\n  结局分布：%s\n", pct(r.Reliability.Abnormal), r.Reliability.Vanished, pct(r.Reliability.ResumeShare), strings.Join(outcomes, " "))
 	fmt.Printf("3 端到端延迟   P50 %.1fs  P95 %.1fs（样本 %d；%d 个旧检查点没有开始时间）\n", r.Latency.P50, r.Latency.P95, r.Latency.Samples, r.Latency.Missing)
+	fmt.Printf("  首字延迟     P50 %.0fms  P95 %.0fms（样本 %d 次模型请求，来自 trace；%d 次没有首字延迟）\n", r.FirstToken.P50, r.FirstToken.P95, r.FirstToken.Samples, r.FirstToken.Missing)
 	fmt.Printf("4 成本         每任务 %.0f tokens、%.1f 次模型请求；每完成一个任务 %.0f tokens；缓存命中 %s（%d 个旧检查点没有用量）\n", r.Cost.PerTaskTokens, r.Cost.PerTaskCalls, r.Cost.PerDoneTokens, pct(r.Cost.CacheHit), r.Cost.Missing)
 	fmt.Printf("5 工具可靠性   来自 %d 个 trace（%d 个任务没有 trace；崩溃时正在执行的工具不会出现在这里）\n", r.Spans.Traces, r.Spans.Missing)
 	fmt.Printf("  %-24s %6s %8s %8s %8s %6s %10s\n", "工具", "调用", "失败", "结果未知", "未执行", "重试", "P95")

@@ -51,6 +51,8 @@ Traces    []string  `json:"traces,omitempty"`     // 每次运行的 trace_id，
 
 分位数用最近秩法（第 ceil(p×n) 个），与观测台 `/trace-metrics` 相同。
 
+延迟那行下面另列首字延迟 P50 / P95：来自这些 trace 里 `gen_ai.operation.name=chat` 的 span 属性 `agent.response.first_token_ms`（毫秒，B1 才记），样本单位是一次模型请求，不是任务。缺失只算有 chat span 但没有该属性的请求（只回了工具调用、报错）；崩溃时没结束的 span 根本不在 trace 里，既不算样本也不算缺失，只会让样本偏少，所以读数要结合样本数。
+
 ## 3. 实验记录
 
 用 Day 10 的 9 道示例题（去重后 10 道）加 2 道故障题，组成 12 个新任务，经队列（3 个 worker）用真实方舟运行：

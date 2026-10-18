@@ -16,6 +16,7 @@ go run . observe                                                   # 新对话�
 ```text
 bash(command)
   systemd-run --user --scope --unit la-sandbox-…   cgroup：内存 512M、无 swap、CPU 1 核、最多 64 个进程
+                                                 （认这个参数时再加 --expand-environment=no，见 2.1）
     └ bwrap                                       namespace 全部隔离；/usr 只读；/workspace 可写；根目录只读
         └ seccomp（--seccomp 3）                   拒绝 ptrace、mount、unshare、bpf、io_uring 等
             └ /.sandbox/agent sandbox-init        1 号进程：在 127.0.0.1:3128 转发代理
@@ -47,6 +48,20 @@ bash(command)
 
 - 不加 `--remount-ro /` 时，沙箱的根目录是 bwrap 建的内存盘，`echo hi > /etc/x` 能成功。不影响宿主机，但没必要允许；
 - 不加 `--as-pid-1` 时，1 号进程是 bwrap 自己，`cat /proc/1/cmdline` 能看到完整的 bwrap 参数，包括宿主机上的项目路径和临时目录。
+
+命令是原样交给沙箱里的 shell 的，`${...}` 不能被别人先替换掉，于是还要处理 `systemd-run` 自己的一次展开：
+
+```go
+noExpandEnv = sync.OnceValue(func() bool { return systemdRun("--expand-environment=no") == nil })
+...
+if noExpandEnv() {
+	opts = append(opts, "--expand-environment=no")
+}
+```
+
+systemd 254 起，`systemd-run` 会先把命令行参数里的 `${...}` 按它自己的环境替换，再交给子进程：`x=hi; echo ${x}` 这样一条命令会打印空，还多一行 “Referenced but unset environment variable…”。`--expand-environment=no` 关掉这次替换。旧版 systemd 没有替换、也不认这个参数（认了会直接报错），所以先用 `systemd-run --user --scope --quiet --expand-environment=no true` 探测一次，成功才把它加进真正的命令行；新版本来就不替换。探测与真正的执行分开，避免旧版因为这个参数而让每次 bash 调用都失败。
+
+验证方式：在沙箱外跑一条含 `${x}` 的命令（先赋值再用），看输出是不是变量值、有没有展开警告；再把 `--expand-environment=no` 从探测里去掉，确认旧版 systemd 上 bash 照样能执行。
 
 ### 2.2 seccomp 程序
 

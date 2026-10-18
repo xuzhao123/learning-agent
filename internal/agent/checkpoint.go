@@ -47,7 +47,10 @@ type Checkpoint struct {
 	Summary   []string  `json:"summary"`
 	Progress  progress  `json:"progress"`          // 循环检测：最近的动作与见过的结果，跨续跑累计
 	Private   []string  `json:"private,omitempty"` // D20：本任务已读入的私有数据来源；非空时外发类工具要用户确认
-	UpdatedAt time.Time `json:"updated_at"`
+	// D23：“读过才能改”的账本（相对路径 → 读取时的内容哈希）。续聊是新进程，靠它接上上一轮读过哪些文件；
+	// 只恢复“读过”这个事实和当时的哈希，编辑前仍比对当前内容，两轮之间被改过照样拒绝。回放分叉不继承它，见 ForkSnapshot。
+	Seen      map[string]string `json:"seen,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // 由 main 设置：CheckpointID 为空表示不写检查点（Day 3/4 实验）；Resume 不为空表示本次是续跑。
@@ -254,6 +257,8 @@ func ForkSnapshot(src *Checkpoint, id string, messages []llm.Message, step, call
 	rounds := step
 	messages = append(slices.Clone(messages), llm.Message{Role: "user", Content: note})
 	// 循环检测按保留的调用与结果重新算一遍，和原来的运行在这一点上一致；私有数据来源沿用原任务（只会更严）。
+	// D23 的账本不继承：分叉后的 View 被截断过，账本里可能有截断点之后才读的文件，凭它改文件等于改一个
+	// 自己没看过的版本。从空账本开始，代价最多是重新读一次，方向是安全的一侧。
 	cp := &Checkpoint{ID: id, Args: src.Args, Question: src.Question, Status: "running", Step: step, Calls: calls, Messages: messages,
 		StartedAt: time.Now().UTC(), Fork: &Fork{From: src.ID, Rounds: rounds, Note: note}, Progress: replayProgress(messages), Private: src.Private}
 	for _, line := range src.Summary {

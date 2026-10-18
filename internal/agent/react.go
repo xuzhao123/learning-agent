@@ -150,10 +150,17 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	}
 	// D20：私有数据的来源跨续跑、续聊延续：续跑取检查点，续聊取上一轮；父 agent 派出时带 -private-input。
 	privateSources = slices.Clone(cp.Private)
+	// D23：读后才能改的账本同样跨进程接上——续跑用自己检查点里的，续聊用上一轮的；全新任务从空账本开始。
+	// 只搬“读过”这个事实和当时的哈希，编辑前照常比对当前内容（见 workspace.RestoreSeen）。
+	ledger := cp.Seen
 	if resume == nil && Continues != "" {
 		if prev, err := LoadCheckpoint(Continues); err == nil {
 			privateSources = slices.Clone(prev.Private)
+			ledger = prev.Seen
 		}
+	}
+	if workspace.Dir != "" {
+		workspace.RestoreSeen(ledger)
 	}
 	if PrivateInput {
 		markPrivate("parent")
@@ -199,6 +206,8 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		}
 		cp.Step, cp.Calls, cp.Messages, cp.Summary, cp.Progress, cp.Private = completed, client.Calls, conversation.View, summary, loop, privateSources
 		cp.Input, cp.Output, cp.Cached = client.Input, client.Completion, client.Cached
+		// D23：读后才能改的账本随检查点走：续聊是新进程，靠它接上上一轮读过哪些文件。没有工作区时为空，不写进文件。
+		cp.Seen = workspace.Seen()
 		return cp.write()
 	}
 	if CheckpointID != "" {

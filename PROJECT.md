@@ -14,7 +14,7 @@
 
 ## 下一阶段
 
-Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22–D26 已完成，下一步：D27 规划。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。
+Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22–D27 已完成，下一步：D28 复盘。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。
 
 ## 课程进度
 
@@ -49,8 +49,9 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 | Day 24：提示词组装 | 有工作区时：根目录 AGENTS.md（无则 CLAUDE.md，≤32KB）写进系统提示词；环境信息（目录、分支与 HEAD、改动数、日期、系统）作为第一条 `<system-reminder>`；读写文件后按需加载子目录 AGENTS.md，读过的文件被别人改了、续聊时环境或项目指令变了，都在下次请求前追加提醒，不改写前面；记忆与压缩保留区排除提醒。DeepSeek 在 worktree 真实运行 3 次：子目录约定被按需加载并遵守、外部修改后模型先重读再改、续聊追加两条提醒且前缀仍命中缓存（10206 中 6784）。2026-10-18 修复：压缩后视图里没有旧环境提醒，续聊会误报“环境和上一轮不同”；现在改为重新给一份环境信息，已用 DeepSeek 续聊复验；同日修复子目录项目指令在压缩后不再重发（进程内仍记为已加载），改为每次压缩后按视图重算，临时 worktree 中 DeepSeek 真实运行，4 次压缩后再碰该目录均重发原文 | 待复述：为什么按变化频率排序、为什么变化用追加、提醒为什么不算用户原话 | [Day 24 笔记](docs/day-24/day-24-notes.md)、[实践](docs/day-24/day-24-lab.md) |
 | Day 25：统一权限 | 每次工具调用经 允许列表 → 用户规则（deny › ask › allow）→ 权限模式（plan/ask/edit/full，默认 edit）→ D20 风险规则 → 确认；拒绝记审计、不执行，询问并入 `tool/requestApproval`；ask 模式下只读命令不问。bash 挂载工作区：plan 只读，`.git` 只读，`.env`/`.data` 不可见，本对话目录挂 `/scratch`，Go 工具链离线可用。观测台设置加默认模式与规则，输入框“权限”每轮可换。DeepSeek 真实运行：沙箱内 go build/vet 通过、边界检查（.env、.data、git commit 失败）、plan 不改文件、规则拒绝复合命令、无界面时询问按拒绝、观测台确认后编辑落盘、续聊切 plan；发现并补上 ask 模式下只读命令也要确认的问题 | 待复述：为什么拒绝优先、规则与沙箱各挡什么、为什么 .git 只读 | [Day 25 笔记](docs/day-25/day-25-notes.md)、[实践](docs/day-25/day-25-lab.md) |
 | Day 26：Hooks 与斜杠命令 | 四个事件 UserPromptSubmit、PreToolUse、PostToolUse、Stop，配置沿用 Claude Code 格式（`-hooks` 或观测台平台设置，不读工作区里的配置）；stdin 写 JSON，退出码 2 或 JSON 拦截，其他错误失败放行；执行前 hook 能拒绝、要求确认、免掉模式默认的询问、改写参数，改写后仍过权限规则。本仓库 hooks：密钥拦截、生成文件保护、gofmt 反馈、编译不过不许结束。斜杠命令：个人级 `commands/`、项目级 `.agents/commands/`，观测台输入 `/` 弹出菜单。DeepSeek 真实运行与观测台验证见实践 | 待复述 | [Day 26 实践](docs/day-26/day-26-lab.md) |
+| Day 27：规划与第一次自用 | 不做上下文内 todo（D37 消融候选）；计划模式 = D25 的 plan 权限 + 人在下一轮切到 edit 批准。用常驻 `test` 账号在 clone 里自用：T5 两版方案后暂停；T2（metrics 汇总首字延迟 P50/P95）由 harness 方案→批准→实施→按 review 修文档，沙箱外核对 metrics、协议事件与 trace 三处一致。按原因给失败的工具调用分类，交给 harness 自己修三处：systemd-run 吃掉 `${…}`、环境提醒补 bash 里的 `/workspace`、读文件记录随检查点跨续聊；真实运行验证后合入。观察：64K 窗口下跨文件任务反复压缩耗尽预算，128K 正常完成 | 待复述：规划的三个问题、为什么限制放在权限层、失败调用怎样分类 | [Day 27 笔记](docs/day-27/day-27-notes.md)、[实践](docs/day-27/day-27-lab.md) |
 | 扩展：结构化协议（B0） | `-app-server` 模式，JSON-RPC 双向：turn/start、turn/interrupt、item/turn 通知、联网审批请求；观测台与 RunChild 作为界面，去掉终端文本解析；审批当轮生效、续接链、队列、页面新旧存档均用真实模型验证 | 待反馈 | [B0 实践](docs/bonus-protocol/protocol-lab.md) |
-| 扩展：流式输出（B1） | 所有模型请求 `stream: true` + `include_usage`，`llm.Stream` 按 index 重组工具调用，流结束后再做截断与空回答检查；主任务正文边收边打印；协议加 `item/delta`（只发主任务与摘要），completed 带首字延迟；观测台代理逐行转发并 flush，用同一份拼接逻辑存档完整响应（记 chunk 数与首字延迟），delta 只在内存不落盘；页面实时显示推理与正文。DeepSeek 真实运行：命令行工具参数重组与用量、协议 220 条 delta 拼接与答案一致、观测台 delta 先于 response 且存档无 delta、存档续聊正确、生成中停止记 499 与 cancelled；方舟仍 403 | 待用户复述：流式为什么不让工具更早执行、代理为什么不能整段缓冲 | [B1 笔记](docs/bonus-streaming/streaming-notes.md)、[实践](docs/bonus-streaming/streaming-lab.md) |
+| 扩展：流式输出（B1） | 所有模型请求 `stream: true` + `include_usage`，`llm.Stream` 按 index 重组工具调用，流结束后再做截断与空回答检查；主任务正文边收边打印；协议加 `item/delta`（只发主任务与摘要），completed 带首字延迟；观测台代理逐行转发并 flush，用同一份拼接逻辑存档完整响应（记 chunk 数与首字延迟），delta 只在内存不落盘；页面实时显示推理与正文。DeepSeek 真实运行：命令行工具参数重组与用量、协议 220 条 delta 拼接与答案一致、观测台 delta 先于 response 且存档无 delta、存档续聊正确、生成中停止记 499 与 cancelled；`go run . metrics` 另列首字延迟 P50/P95（样本按模型请求算，取自 chat span）；方舟仍 403 | 待用户复述：流式为什么不让工具更早执行、代理为什么不能整段缓冲 | [B1 笔记](docs/bonus-streaming/streaming-notes.md)、[实践](docs/bonus-streaming/streaming-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证；第三级：`load_skill(name, file)` 经 `os.Root` 只读 `references/*.md`。用户提供的 visualization skill 接入：观测台把 ```echarts 与 ```html type="renderer" 渲染进无同源的沙箱 iframe，整页重建时 iframe 停放后认领、不重载。DeepSeek 真实运行：命令行读 SKILL.md 与两份参考后输出 echarts；观测台中 renderer（TCP 握手时序图）与 echarts（销量双轴图）均显示，重复渲染和续聊后 iframe 保持同一个；方舟仍 403 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
 | 扩展：子 agent | 独立上下文、子进程、权限继承、幂等与父任务恢复已有验证 | 用户追问换措辞导致哈希失配，回答见 [Q15](docs/deep-questions.md#q15)；复述待确认 | [子 agent 实践](docs/bonus-subagents/subagents-lab.md) |
 | 扩展：模型路由 | 方舟/DeepSeek 手动路由、工具调用、子 agent 继承与续聊已有记录 | 待反馈 | [路由实践](docs/bonus-routing/routing-lab.md) |
@@ -91,10 +92,11 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 | 观测台设置 | 工具全开后每次请求带全部工具定义，MCP 中心启用的 server 每个对话都要连接（`go run` 的示例 server 首次要编译）；租户层只读展示，没有租户级设置，也没有仓库内的项目级权限文件 | 工具定义按需加载（H04）；项目级配置与信任（H13） |
 | 对话沙箱 | 回放分叉从空目录开始，不还原分叉时的文件；命令行从同一轮续聊两次会共用目录；上传只到顶层、10 MB、不覆盖，面板不支持删除 | 分叉时给目录拍快照；进阶计划 A6 换成每会话一台微虚拟机 |
 | 审计 | 没有锚定，能写文件的人重算整条链本地发现不了；命令行运行的记录没有用户名（只有观测台发起的才有）；单文件无轮转与保留期限；参数哈希未加盐；没有定期校验与告警 | 定期把最新哈希存到别处；认证后记录用户 ID；轮转、归档与校验告警，见 [Day 21 实践](docs/day-21/day-21-lab.md#5-当前没有覆盖的范围) |
-| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span（D15 指标已改以检查点为准）；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；长 span 开始时落记录，见 [Q19](docs/deep-questions.md#q19)；告警按评测课程补齐 |
+| 可观测性 | 重试等事件用 span event（OTel 已宣布弃用该 API），终端仍是文本行；kill -9 丢失未结束的 span（D15 指标已改以检查点为准，首字延迟仍只读 trace，样本按模型请求算，缺 span 时会偏少）；无采样、无 Metrics SDK 与告警；GenAI 约定仍在变 | 带 trace_id 的结构化日志经 Logs API 导出；长 span 开始时落记录，见 [Q19](docs/deep-questions.md#q19)；告警按评测课程补齐 |
 | 评测 | 主分 17 题，95% 区间约 ±13 个百分点；评审模型与人工判断没有系统校准；留出 4 题已在修正打分器时看过；一次回归约 20 分钟，未接 CI | 从真实失败持续补题与新留出题；抽样做评审一致率；冒烟子集接 CI（进阶计划 B6） |
 | 结构化协议 | 观测台重启后不能接管正在运行的 agent；旧存档仍靠兼容层的正则还原 | 事件落盘与按序号补读（进阶计划 B2/B3） |
-| 流式输出 | delta 不落盘，观测台中途重启看不到半段；存档是按 chunk 还原的完整响应，不是逐字原文；只解析 OpenAI 兼容格式；首字延迟未进 `go run . metrics`；取消后上游中止时延未单独测量 | 指标汇总 TTFT；其他协议适配 |
+| 流式输出 | delta 不落盘，观测台中途重启看不到半段；存档是按 chunk 还原的完整响应，不是逐字原文；只解析 OpenAI 兼容格式；取消后上游中止时延未单独测量；首字延迟只算带正文或推理的回复，只回工具调用的请求（约一半）记为缺失 | 其他协议适配；决定工具参数的第一段是否算首字 |
+| 自用与观测台 | 预算耗尽显示成“失败：exit status 1”，看不出是没做完；批准靠手动切权限；设置在对话开始时拍快照，续聊不能调窗口与预算，平台默认 64K 对编码任务偏小；plan 模式仍给写工具，模型会先试一次；最后的编译检查依赖模型自己结束（预算耗尽时 Stop hook 不跑）；T5 未完成 | 显示协议结局；D34 批准按钮；编码任务默认窗口；D28 复盘决定 plan 模式是否隐藏写工具 |
 
 ## 理解确认
 
@@ -112,5 +114,6 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 - 评测：为什么每道题要一个结果打分器和一个过程打分器、过程不查顺序；标准误为什么按题聚类；消融时为什么排除 with_only 检查。
 - 归因：为什么只记第一个上游错误；回放验证为什么要保留前缀、配安慰剂对照；fault-unknown 的回放里，为什么只补事实（rp1）反而引出了重做。
 - 注入防护：为什么正文自称 system 不能增加权限；资料标记和允许列表各保证什么；两组都通过时能得出什么结论。
+- 规划：规划包含哪三个问题；计划模式的限制为什么放在权限层；预算耗尽为什么不等于失败；失败的工具调用怎样按责任分类。
 - 审计：调用链为什么不能兼作审计；哈希链能发现哪些篡改、发现不了哪一种；为什么人的点击要由界面和 agent 各记一次。
 - 高风险确认：确认请求为什么只能由界面上的人回答；没有界面为什么默认拒绝；“致命三要素”怎样对应本项目的工具；结果日志能和不能解决什么；无进展为什么比较结果而不是参数。

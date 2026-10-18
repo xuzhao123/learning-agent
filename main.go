@@ -492,6 +492,8 @@ func run() error {
 		if sandbox.Enabled {
 			// D25：bash 看到的 /workspace 就是这个仓库；plan 模式挂成只读。
 			sandbox.Project, sandbox.ProjectWrite, sandbox.GoCache = workspace.Dir, permission.Mode != "plan", tenant.Here("gocache")
+			// 环境信息里写清 bash 里的工作区路径：编码工具用的是宿主机路径，bash 里是 /workspace。
+			workspace.BashMount = "/workspace"
 		}
 	}
 	if *hooksConfig != "" {

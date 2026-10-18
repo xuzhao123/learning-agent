@@ -129,11 +129,19 @@ func git(args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// BashMount 是同一份工作区在 bash 沙箱里的挂载点。由 main 在“开了 bash 沙箱、而且工作区挂了进去”时设成 /workspace：
+// 编码工具（read_file、edit_file 等）按宿主机路径算相对路径，bash 里却是另一个路径，环境信息要说清，否则模型会拿宿主机路径 cd 失败、白花一轮。
+// 由 main 设置而不是让 workspace 去 import sandbox：文件工具不该为了 bash 的挂载点依赖沙箱包，两者都由 main 组装。
+var BashMount string
+
 // Environment 是给模型看的环境信息。只放会影响决策、而且便宜可得的事实；变了就整份重发一次。
 func Environment() string {
 	var b strings.Builder
 	b.WriteString("<environment>\n")
 	fmt.Fprintf(&b, "工作区：%s\n", Dir)
+	if BashMount != "" {
+		fmt.Fprintf(&b, "bash 里的工作区：%s（bash 命令里 cd、grep 都用这个路径；read_file、edit_file、write_file 等文件工具的 path 仍写相对工作区根目录的路径，不要带 %s 前缀）\n", BashMount, BashMount)
+	}
 	if branch := git("rev-parse", "--abbrev-ref", "HEAD"); branch != "" {
 		fmt.Fprintf(&b, "git 分支：%s（HEAD %s）\n", branch, git("log", "-1", "--format=%h %s"))
 		lines := strings.Split(git("status", "--porcelain"), "\n")

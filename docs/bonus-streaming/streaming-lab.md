@@ -80,4 +80,4 @@ if stream.FinishReason != "stop" && stream.FinishReason != "tool_calls" {
 - 存档是按 chunk 还原的完整响应，不是逐字原文，SSE 注释与心跳行不留。
 - 增量不落盘：观测台在生成中途重启，页面看不到已经生成的半段，只能等运行结束的结果。
 - 只解析 OpenAI 兼容的 chat/completions 流式格式；其他协议（如 Responses API 的事件类型）需要另写适配。
-- 首字延迟以第一段非空正文或推理为准；记在 modelCall 的 completed 与 chat span 的 `agent.response.first_token_ms` 上，`go run . metrics` 还没有汇总它。
+- 首字延迟以第一段非空正文或推理为准；记在 modelCall 的 completed 与 chat span 的 `agent.response.first_token_ms` 上，`go run . metrics` 据此汇总 P50 / P95（样本按模型请求算，见 [Day 15 实践](../day-15/day-15-lab.md#22-统计)）。取消后上游中止的时延还没有单独测量。

@@ -178,6 +178,18 @@ delta 2：工具索引0，arguments = "3*180"}
 
 故障转移前要确认历史能被目标模型接受、请求是否包含不兼容字段。辅助摘要可以单独路由，主对话迁移则需要更严谨的历史转换。
 
+### 规划：同一个循环里的三件事
+
+“规划”不是循环之外的另一个组件，而是三个不同的问题，各有各的落点：
+
+| 问题 | 落点 | 失败时 |
+| --- | --- | --- |
+| 一个上下文里不迷路 | 上下文内的 todo 清单：模型反复把目标与进度写到上下文末尾 | 几十步后忘了目标 |
+| 跨会话接力 | 进度文件 + 版本历史，新会话先读再做 | 重做或误以为做完 |
+| 和人对齐 | 计划模式：只读调查、交出方案，人确认后切到可写模式继续同一个循环 | 方向一开始就错 |
+
+todo 清单靠复述抵抗长上下文里的遗忘，模型越强价值越低，留不留要用有、无清单的消融数据决定；进度文件只要上下文有限就一直需要。计划模式的限制必须落在权限层（拒绝写工具、执行环境只读），提示词只是告知。本项目 D27 不做 todo 工具，用 D25 的 plan 权限加一次人工切换完成“计划 → 批准 → 实施”，见 [Day 27 笔记](../docs/day-27/day-27-notes.md)。
+
 ### 对照已有实现
 
 [callModel 与 Client.CallKeeping](../internal/llm/llm.go)负责结束原因、请求计数和用途；[Message](../internal/llm/protocol.go)保留已知的 reasoning_content、encrypted_content 和工具字段。
@@ -211,6 +223,6 @@ delta 2：工具索引0，arguments = "3*180"}
 - Simon Willison，[Designing agentic loops](https://simonwillison.net/2025/Sep/30/designing-agentic-loops/)（2025）：设计循环的关键是给哪些工具、在什么环境里运行、怎样限制风险。
 - HumanLayer，[12-factor agents](https://github.com/humanlayer/12-factor-agents)：“自己掌控控制流”“把错误压缩进上下文”等几条与执行循环直接相关。
 
-本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Day 1 动手](../docs/day-01/day-01-lab.md) · [模型路由笔记](../docs/bonus-routing/routing-notes.md) · [流式输出笔记](../docs/bonus-streaming/streaming-notes.md) · [流式输出实践](../docs/bonus-streaming/streaming-lab.md)
+本项目课程：[Day 1 笔记](../docs/day-01/day-01-notes.md) · [Day 1 动手](../docs/day-01/day-01-lab.md) · [模型路由笔记](../docs/bonus-routing/routing-notes.md) · [流式输出笔记](../docs/bonus-streaming/streaming-notes.md) · [流式输出实践](../docs/bonus-streaming/streaming-lab.md) · [Day 27 规划笔记](../docs/day-27/day-27-notes.md)
 
 [上一篇：Agent 全景](01-agent-overview.md) · [下一篇：工具与编排](03-tools-and-orchestration.md) · [术语表](TERMS.md)

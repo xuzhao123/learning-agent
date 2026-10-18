@@ -85,6 +85,7 @@ go build -o bin/learning-agent .
 | Day 24 | 项目指令与提示词组装 | [笔记](docs/day-24/day-24-notes.md) | [实践](docs/day-24/day-24-lab.md) | — |
 | Day 25 | 统一权限策略 | [笔记](docs/day-25/day-25-notes.md) | [实践](docs/day-25/day-25-lab.md) | — |
 | Day 26 | Hooks 与斜杠命令 | [笔记](docs/day-26/day-26-notes.md) | [实践](docs/day-26/day-26-lab.md) | — |
+| Day 27 | 规划与第一次自用 | [笔记](docs/day-27/day-27-notes.md) | [实践](docs/day-27/day-27-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
