@@ -434,16 +434,19 @@ const loginHTML = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>登录 · Learning Agent</title>
 <style>
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 14px system-ui, sans-serif; background: #f6f6f4; color: #222; }
-form { width: 300px; padding: 28px; border: 1px solid #ddd; border-radius: 12px; background: #fff; }
-h1 { margin: 0 0 18px; font-size: 18px; }
-label { display: block; margin: 0 0 12px; color: #555; }
-input { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
-button { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: #2f6f4f; color: #fff; font: inherit; cursor: pointer; }
-#err { min-height: 18px; margin: 10px 0 0; color: #b42318; font-size: 13px; }
-@media (prefers-color-scheme: dark) { body { background: #171717; color: #eee; } form { background: #222; border-color: #333; } input { background: #1a1a1a; color: #eee; border-color: #444; } label { color: #aaa; } }
+:root { --bg: #f9f9f9; --panel: #fff; --text: #0d0d0d; --muted: #6b6b6b; --line: #ebebeb; }
+@media (prefers-color-scheme: dark) { :root { --bg: #141414; --panel: #1f1f1f; --text: #ececec; --muted: #a3a3a3; --line: #2d2d2d; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 14px/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif; -webkit-font-smoothing: antialiased; }
+form { width: 320px; padding: 32px 28px 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 28px rgba(0,0,0,.06); }
+.mark { display: grid; place-items: center; width: 32px; height: 32px; margin-bottom: 14px; border-radius: 8px; background: var(--text); color: var(--panel); }
+h1 { margin: 0 0 20px; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+label { display: block; margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+input { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: inherit; outline: 0; }
+input:focus { border-color: var(--muted); }
+button { width: 100%; margin-top: 6px; padding: 9px; border: 0; border-radius: 10px; background: var(--text); color: var(--panel); font: inherit; font-weight: 500; cursor: pointer; }
+#err { min-height: 18px; margin: 10px 0 0; color: #d03b2f; font-size: 13px; }
 </style></head><body>
-<form id="f"><h1>Learning Agent 观测台</h1>
+<form id="f"><div class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 7 5 5-5 5"/><path d="M13 17h6"/></svg></div><h1>登录 Learning Agent</h1>
 <label>用户名<input id="name" autocomplete="username" required autofocus></label>
 <label>密码<input id="password" type="password" autocomplete="current-password" required></label>
 <button>登录</button><p id="err"></p></form>
