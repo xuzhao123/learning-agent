@@ -19,7 +19,9 @@ import (
 	"learning-agent/internal/agent"
 	"learning-agent/internal/audit"
 	"learning-agent/internal/browser"
+	"learning-agent/internal/commands"
 	"learning-agent/internal/eval"
+	"learning-agent/internal/hooks"
 	"learning-agent/internal/labs"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
@@ -150,6 +152,7 @@ func run() error {
 	flag.Var(&allowRules, "allow", "D25：允许规则，如 Bash(go build *)、Edit(docs/**)（可重复）")
 	flag.Var(&askRules, "ask", "D25：询问规则，如 Edit(internal/agent/**)（可重复）")
 	flag.Var(&denyRules, "deny", "D25：拒绝规则，如 Bash(git push *)、Read(.env)（可重复）；顺序 deny › ask › allow")
+	hooksConfig := flag.String("hooks", "", "D26：生命周期 hooks 配置（Claude Code 的 hooks 格式）：JSON 原文或文件路径；命令在宿主机上运行，只由用户提供")
 	workspaceDir := flag.String("workspace", "", "D23：增加编码工具 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写")
 	subagents := flag.Bool("subagents", false, "增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程）")
 	flag.IntVar(&agent.SubagentSteps, "subagent-steps", agent.SubagentSteps, "每个子 agent 的模型请求预算，1到20")
@@ -491,6 +494,24 @@ func run() error {
 			sandbox.Project, sandbox.ProjectWrite, sandbox.GoCache = workspace.Dir, permission.Mode != "plan", tenant.Here("gocache")
 		}
 	}
+	if *hooksConfig != "" {
+		if err := hooks.Load(*hooksConfig); err != nil {
+			return err
+		}
+		// hook 命令在工作区里运行（没有工作区时在 harness 目录），路径写成绝对的，hook 拿到的 cwd 才可靠。
+		hooks.Harness, _ = os.Getwd()
+		hooks.Dir = workspace.Dir
+		if hooks.Dir == "" {
+			hooks.Dir = hooks.Harness
+		}
+		configured := []string{}
+		for _, event := range hooks.Events {
+			if hooks.Has(event) {
+				configured = append(configured, event)
+			}
+		}
+		fmt.Printf("Hooks: events=%s dir=%s\n", strings.Join(configured, ","), hooks.Dir)
+	}
 	if permission.Mode != "edit" || len(allowRules)+len(askRules)+len(denyRules) > 0 {
 		fmt.Printf("Permission: %s\n", permission.Describe())
 	}
@@ -550,7 +571,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {
@@ -616,6 +637,18 @@ func run() error {
 		sandboxID = first
 	}
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
+	hooks.Session = first
+	// D26：/名字 开头的输入是斜杠命令，展开成模板里的提示词再交给 agent；续跑的问题已经是展开后的。
+	if agent.Resume == nil {
+		prompt, name, err := commands.Expand(*question, ".", workspace.Dir)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			protocol.Event("capability/event", "command", fmt.Sprintf("Command: /%s 展开为 %d 字的提示词", name, len([]rune(prompt))))
+			*question = prompt
+		}
+	}
 	turnStarted(agent.CheckpointID)
 	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
 }

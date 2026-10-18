@@ -168,6 +168,10 @@ func readResource(dir, relativeName string) ([]byte, error) {
 
 “可以加载某个 Skill”与“可以执行其中任何命令”必须是两个决定。即使正文可信，用户当前任务也可能没有授权对外发送或修改数据。
 
+### 斜杠命令：用户触发的另一种按需内容
+
+Skill 由模型看索引决定是否加载；斜杠命令由用户输入 `/名字 参数` 触发，harness 把模板展开成本轮问题（D26，[commands.go](../internal/commands/commands.go)）。两者都只是文字，区别在触发者：固定流程（评审、按清单做任务）适合命令，什么时候用由场景决定的知识适合 Skill。命令名打错直接报错，不发给模型；Skill 描述写得差则表现为该用时没用，只能靠评测发现。
+
 ### 对照已有实现
 
 [Scan、parseFrontmatter、Prompt、Load](../internal/skills/skills.go)提供简化元数据解析和按索引加载，当前是知识型 Skill。

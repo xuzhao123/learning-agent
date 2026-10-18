@@ -72,6 +72,7 @@ type event struct {
 	ToolOutput int             `json:"tool_output,omitempty"`    //
 	Permission string          `json:"permission,omitempty"`     // D25：本轮的权限模式（续聊可以换）与权限规则快照
 	Rules      []string        `json:"permission_rules,omitempty"`
+	Hooks      string          `json:"hooks,omitempty"`          // D26：平台设置里的 hooks 配置原文快照，续聊沿用
 	NetAllow   []string        `json:"net_allow,omitempty"`      // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
 	Task       string          `json:"task,omitempty"`           // 发出这次请求的 agent 任务ID（X-Agent-Task）
 	Sub        bool            `json:"sub,omitempty"`            // 请求来自子 agent：不进入父对话流、不参与续聊恢复
@@ -159,6 +160,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	if err != nil {
 		return err
 	}
+	hooksBase = dir
 	s := &server{agentDir: dir, addr: *addr, agentBin: agentBin, auth: authState, evals: evals{jobs: map[string]*evalJob{}}}
 	s.loadRuns()
 	mux := http.NewServeMux()
@@ -197,6 +199,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /memory/{id}/forget", s.forgetMemory)
 	// Skills/MCP 是平台配置：所有账号可以查看、使用已开启的；只有平台账号能修改。
 	mux.HandleFunc("GET /settings", s.getSettings)
+	mux.HandleFunc("GET /commands", s.listCommands)
 	mux.HandleFunc("PUT /settings", s.putSettings("user"))
 	mux.HandleFunc("PUT /settings/platform", platform(s.putSettings("platform")))
 	mux.HandleFunc("POST /settings/workspaces", platform(s.addWorkspace))
@@ -331,6 +334,10 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		snap.Permission = input.Permission
+	}
+	if snap.Hooks, err = hooksConfig(settings.Values["hooks"]); err != nil {
+		http.Error(w, "平台设置里的 hooks 无法使用："+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	snap.MaxSteps, _ = strconv.Atoi(settings.Values["max_steps"])
 	snap.Window, _ = strconv.Atoi(settings.Values["context_window"])
@@ -623,6 +630,9 @@ func snapshotArgs(e event, netAllow []string) []string {
 	for _, line := range e.Rules {
 		effect, rule, _ := strings.Cut(line, ":")
 		args = append(args, "-"+strings.TrimSpace(effect), strings.TrimSpace(rule))
+	}
+	if e.Hooks != "" {
+		args = append(args, "-hooks", e.Hooks)
 	}
 	for flag, n := range map[string]int{"-max-steps": e.MaxSteps, "-context-window": e.Window, "-tool-output-tokens": e.ToolOutput} {
 		if n > 0 {

@@ -14,7 +14,7 @@
 
 ## 下一阶段
 
-Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22–D25 已完成，下一步：D26 Hooks 与斜杠命令。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。
+Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22–D26 已完成，下一步：D27 规划。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。
 
 ## 课程进度
 
@@ -48,6 +48,7 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 | Day 23：编码工具 | `-workspace` 下的 read_file、glob、grep、edit_file、write_file：经 `os.Root` 限定目录，读后才写（内容哈希核对、核对与写入同锁），唯一匹配，输出分页与上限；编辑与写入加入顺序名单，读到工作区内容记为私有来源，写入沿用 D21 审计。DeepSeek 在 git worktree 中真实运行 6 次：定位并修改、重复匹配被拒后补上下文、`../` 与符号链接越界被拒、外部修改后写入被拒并重读、同批两处编辑、目标缺失时如实报告；同批顺序执行只按代码确认 | 待复述：为什么不只给 shell、读后才写防什么、为什么核对与写入要同锁 | [Day 23 笔记](docs/day-23/day-23-notes.md)、[实践](docs/day-23/day-23-lab.md) |
 | Day 24：提示词组装 | 有工作区时：根目录 AGENTS.md（无则 CLAUDE.md，≤32KB）写进系统提示词；环境信息（目录、分支与 HEAD、改动数、日期、系统）作为第一条 `<system-reminder>`；读写文件后按需加载子目录 AGENTS.md，读过的文件被别人改了、续聊时环境或项目指令变了，都在下次请求前追加提醒，不改写前面；记忆与压缩保留区排除提醒。DeepSeek 在 worktree 真实运行 3 次：子目录约定被按需加载并遵守、外部修改后模型先重读再改、续聊追加两条提醒且前缀仍命中缓存（10206 中 6784） | 待复述：为什么按变化频率排序、为什么变化用追加、提醒为什么不算用户原话 | [Day 24 笔记](docs/day-24/day-24-notes.md)、[实践](docs/day-24/day-24-lab.md) |
 | Day 25：统一权限 | 每次工具调用经 允许列表 → 用户规则（deny › ask › allow）→ 权限模式（plan/ask/edit/full，默认 edit）→ D20 风险规则 → 确认；拒绝记审计、不执行，询问并入 `tool/requestApproval`；ask 模式下只读命令不问。bash 挂载工作区：plan 只读，`.git` 只读，`.env`/`.data` 不可见，本对话目录挂 `/scratch`，Go 工具链离线可用。观测台设置加默认模式与规则，输入框“权限”每轮可换。DeepSeek 真实运行：沙箱内 go build/vet 通过、边界检查（.env、.data、git commit 失败）、plan 不改文件、规则拒绝复合命令、无界面时询问按拒绝、观测台确认后编辑落盘、续聊切 plan；发现并补上 ask 模式下只读命令也要确认的问题 | 待复述：为什么拒绝优先、规则与沙箱各挡什么、为什么 .git 只读 | [Day 25 笔记](docs/day-25/day-25-notes.md)、[实践](docs/day-25/day-25-lab.md) |
+| Day 26：Hooks 与斜杠命令 | 四个事件 UserPromptSubmit、PreToolUse、PostToolUse、Stop，配置沿用 Claude Code 格式（`-hooks` 或观测台平台设置，不读工作区里的配置）；stdin 写 JSON，退出码 2 或 JSON 拦截，其他错误失败放行；执行前 hook 能拒绝、要求确认、免掉模式默认的询问、改写参数，改写后仍过权限规则。本仓库 hooks：密钥拦截、生成文件保护、gofmt 反馈、编译不过不许结束。斜杠命令：个人级 `commands/`、项目级 `.agents/commands/`，观测台输入 `/` 弹出菜单。DeepSeek 真实运行与观测台验证见实践 | 待复述 | [Day 26 实践](docs/day-26/day-26-lab.md) |
 | 扩展：结构化协议（B0） | `-app-server` 模式，JSON-RPC 双向：turn/start、turn/interrupt、item/turn 通知、联网审批请求；观测台与 RunChild 作为界面，去掉终端文本解析；审批当轮生效、续接链、队列、页面新旧存档均用真实模型验证 | 待反馈 | [B0 实践](docs/bonus-protocol/protocol-lab.md) |
 | 扩展：流式输出（B1） | 所有模型请求 `stream: true` + `include_usage`，`llm.Stream` 按 index 重组工具调用，流结束后再做截断与空回答检查；主任务正文边收边打印；协议加 `item/delta`（只发主任务与摘要），completed 带首字延迟；观测台代理逐行转发并 flush，用同一份拼接逻辑存档完整响应（记 chunk 数与首字延迟），delta 只在内存不落盘；页面实时显示推理与正文。DeepSeek 真实运行：命令行工具参数重组与用量、协议 220 条 delta 拼接与答案一致、观测台 delta 先于 response 且存档无 delta、存档续聊正确、生成中停止记 499 与 cancelled；方舟仍 403 | 待用户复述：流式为什么不让工具更早执行、代理为什么不能整段缓冲 | [B1 笔记](docs/bonus-streaming/streaming-notes.md)、[实践](docs/bonus-streaming/streaming-lab.md) |
 | 扩展：Skills | 索引常驻、正文按需加载、坏文件处理已有验证 | 待反馈 | [Skills 实践](docs/bonus-skills/skills-lab.md) |
@@ -85,6 +86,8 @@ Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指�
 | 组合工具 | D20：读到私有数据（bash、记忆、子 agent）后，浏览器与 MCP 调用要人工确认，标记传给子 agent；粒度是任务级、不追踪具体值。bash 向白名单域名外发不经确认；允许域名内的路径和数据没有细分权限（开放重定向已实测拦下，大域名与域前置仍是风险） | 跨工具数据流与高风险审批，见 [Q12](docs/deep-questions.md#q12)、[Q17](docs/deep-questions.md#q17)、[Q18](docs/deep-questions.md#q18) |
 | 多租户 | 会话在内存、无 HTTPS、无多因素认证与账号删除；模型密钥、调用链、Skills/MCP 配置共享；同一系统用户、未按租户加密；第三方 stdio MCP 拿得到代理令牌；配额只有并发数 | TLS 与持久会话；按租户的 token/磁盘配额与费用；按租户的系统用户或加密，见 [Day 20 实践](docs/day-20/day-20-lab.md#多租户部分没有覆盖的范围) |
 | 运行数据 | 工作目录总大小、截图、检查点与 trace 文件缺少配额或自动清理；沙箱目录改为按对话后保留得更久 | 磁盘配额与保留期限 |
+| 权限规则 | 规则里的域名不转小写，`WebFetch(domain:GitHub.com)` 永远匹配不到（D26 用 `/review` 评审时由模型发现） | `Add` 时把 domain 值转小写，和沙箱白名单用同一套归一化 |
+| Hooks | 只有四个事件；失败放行，hook 不在沙箱里；没有项目级配置与信任确认；续跑补齐中断批次时不跑 hook | 按需加事件；项目信任（H13）后再读工作区配置 |
 | 观测台设置 | 工具全开后每次请求带全部工具定义，MCP 中心启用的 server 每个对话都要连接（`go run` 的示例 server 首次要编译）；租户层只读展示，没有租户级设置，也没有仓库内的项目级权限文件 | 工具定义按需加载（H04）；项目级配置与信任（H13） |
 | 对话沙箱 | 回放分叉从空目录开始，不还原分叉时的文件；命令行从同一轮续聊两次会共用目录；上传只到顶层、10 MB、不覆盖，面板不支持删除 | 分叉时给目录拍快照；进阶计划 A6 换成每会话一台微虚拟机 |
 | 审计 | 没有锚定，能写文件的人重算整条链本地发现不了；命令行运行的记录没有用户名（只有观测台发起的才有）；单文件无轮转与保留期限；参数哈希未加盐；没有定期校验与告警 | 定期把最新哈希存到别处；认证后记录用户 ID；轮转、归档与校验告警，见 [Day 21 实践](docs/day-21/day-21-lab.md#5-当前没有覆盖的范围) |

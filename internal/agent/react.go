@@ -12,6 +12,7 @@ import (
 
 	"learning-agent/internal/audit"
 	"learning-agent/internal/browser"
+	"learning-agent/internal/hooks"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/memory"
 	"learning-agent/internal/protocol"
@@ -80,7 +81,24 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			root.SetAttributes(semconv.ErrorTypeKey.String(reason))
 		}
 	}()
-	if memory.Active != nil {
+	// D26：用户提交的 hook 最先运行。被拦下的问题不进记忆检索、不发给模型，检查点里也不留原文。
+	var submitted hooks.Result
+	if resume == nil && hooks.Has("UserPromptSubmit") {
+		submitted = hooks.Run(ctx, "UserPromptSubmit", "", map[string]any{"prompt": question})
+		if submitted.Block {
+			question = "（这个问题被 UserPromptSubmit hook 拦下）"
+			// 启动参数里的 -question 也换掉：检查点会原样存下启动参数。
+			for i, arg := range CheckpointArgs {
+				name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+				if name == "question" && strings.Contains(arg, "=") {
+					CheckpointArgs[i] = "-question=" + question
+				} else if name == "question" && i+1 < len(CheckpointArgs) {
+					CheckpointArgs[i+1] = question
+				}
+			}
+		}
+	}
+	if memory.Active != nil && !submitted.Block {
 		memory.Active.Client = client
 		// 新对话开头检索长期记忆写进 system；续聊、续跑沿用首轮 system，不重新拼接，保持前缀稳定，需要时用 search_memory。
 		if history == nil && resume == nil {
@@ -118,6 +136,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	var loop progress // 循环检测：最近的动作与见过的结果（见 approval.go）
 	completed := 0    // 已经完整结束的轮次（模型回答 + 工具结果都已写回）
 	var pending *llm.Message
+	stopHookActive := false // D26：本轮已经因为 Stop hook 继续过；传给 hook，让它别无限地要求继续
 	if resume != nil {
 		cp, completed, summary, loop = resume, resume.Step, resume.Summary, resume.Progress
 		conversation, pending, err = resumeContext(resume, options)
@@ -198,7 +217,7 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			}
 		}()
 	}
-	if memory.Active != nil {
+	if memory.Active != nil && !submitted.Block {
 		// 本轮结束时写入（成功、失败或熔断都执行）；保存失败向上返回，不只打印。
 		defer func() {
 			_, span := telemetry.Begin(ctx, "upsert_memory", trace.SpanKindInternal, semconv.GenAIOperationNameKey.String("upsert_memory"))
@@ -213,9 +232,15 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 	if workspace.Dir != "" && resume == nil {
 		environment(conversation, history != nil)
 	}
+	if submitted.Block {
+		return stopRun("hook_blocked", "UserPromptSubmit hook 拦下了这个问题："+submitted.Reason, summary)
+	}
 	if resume == nil {
 		conversation.Append(llm.Message{Role: "user", Content: question})
 		protocol.ItemCompleted(CheckpointID, protocol.Item{ID: "user", Type: "userMessage", Data: map[string]string{"text": question}})
+		if submitted.Context != "" {
+			conversation.Append(llm.Reminder("[hook UserPromptSubmit] " + submitted.Context))
+		}
 	}
 	if memory.Active != nil {
 		// remember_memory 的引文只能来自本次会话里用户说过的话（不含摘要、模型回答和工具结果）。
@@ -269,6 +294,18 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 			conversation.RecordReply(response)
 			reply := response.Message
 			// 正文已在模型请求里边收边打印（B1 流式），这里不再整段重复打印。
+			if len(reply.ToolCalls) == 0 && hooks.Has("Stop") {
+				// D26：模型想结束时先问 Stop hook（例如“编译不过就不算完”）。拦下时把原因作为提醒追加，接着请求模型；预算照常计数。
+				r := hooks.Run(ctx, "Stop", "", map[string]any{"stop_hook_active": stopHookActive, "last_assistant_message": reply.Content})
+				if r.Block {
+					stopHookActive, completed = true, step
+					conversation.Append(llm.Reminder("[hook Stop] 还不能结束：" + r.Reason))
+					if err := save(); err != nil {
+						return stopRun("checkpoint_error", err.Error(), summary)
+					}
+					continue
+				}
+			}
 			if len(reply.ToolCalls) == 0 {
 				completed, cp.Answer = step, reply.Content
 				fmt.Println("Termination: no_tool_calls")
@@ -368,8 +405,31 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 		}()
 		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
 		defer func() { writeJournal(result) }()
-		// D25：先按用户的权限规则和模式判断。拒绝就不执行；询问和 D20 的高风险确认走同一条确认路径。
+		// D26：执行前 hook 最先运行。它可以拒绝、要求确认、放行模式默认的询问，或改写参数；改写后的参数照样要过下面的权限规则。
+		var hooked hooks.Result
+		if hooks.Has("PreToolUse") {
+			hooked = hooks.Run(ctx, "PreToolUse", call.Function.Name, map[string]any{"tool_name": call.Function.Name, "tool_input": rawArgs(call), "tool_use_id": call.ID})
+			if hooked.Block {
+				fmt.Printf("Hook deny [%s]: %s\n", call.ID, hooked.Reason)
+				return llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "denied", Error: "PreToolUse hook 拒绝了这项操作：" + hooked.Reason}
+			}
+			if hooked.Input != nil {
+				record := audit.Record{Actor: "program", Event: "hook_rewrite", CallID: call.ID, Tool: call.Function.Name, Detail: "PreToolUse hook 改写了参数"}
+				record.Args(string(hooked.Input))
+				audit.Log(ctx, record)
+				fmt.Printf("Hook rewrite [%s]: %s\n", call.ID, hooked.Input)
+				call.Function.Arguments = string(hooked.Input)
+			}
+		}
+		// D25：再按用户的权限规则和模式判断。拒绝就不执行；询问和 D20 的高风险确认走同一条确认路径。
 		effect, why := permission.Decide(call.Function.Name, call.Function.Arguments)
+		// hook 的意见只能收紧规则、放开模式默认：用户写的 deny、ask 规则不会被 hook 的 allow 绕过。
+		switch {
+		case hooked.Decision == "ask" && effect != "deny":
+			effect, why = "ask", "PreToolUse hook 要求确认："+hooked.Reason
+		case hooked.Decision == "allow" && effect == "ask" && !strings.HasPrefix(why, "规则"):
+			effect, why = "allow", "PreToolUse hook 放行："+hooked.Reason
+		}
 		span.SetAttributes(attribute.String("agent.tool.permission", effect))
 		if effect == "deny" {
 			record := audit.Record{Actor: "program", Event: "permission_deny", CallID: call.ID, Tool: call.Function.Name, Decision: "deny", Detail: why}
@@ -403,14 +463,27 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 		}
 		select {
 		case slots <- struct{}{}:
-			defer func() { <-slots }()
 			span.AddEvent("slot_acquired")
-			return runWithRetry(ctx, call, retries)
+			result = runWithRetry(ctx, call, retries)
+			<-slots
 		case <-ctx.Done():
 			// 还在排队就被取消：一次都没开始，可以放心重做。
 			result.Status, result.Error = "not_run", ctx.Err().Error()
 			return result
 		}
+		if hooked.Input != nil {
+			result.Note = "参数被 PreToolUse hook 改写为 " + call.Function.Arguments
+		}
+		// D26：工具成功后运行 PostToolUse hook（如格式检查）。它撤销不了已经做完的事，只能把反馈附在结果上给模型看。
+		if result.Status == "ok" && hooks.Has("PostToolUse") {
+			r := hooks.Run(ctx, "PostToolUse", call.Function.Name, map[string]any{"tool_name": call.Function.Name, "tool_input": rawArgs(call), "tool_response": result.Result, "tool_use_id": call.ID})
+			if r.Block {
+				result.Hook = strings.TrimSpace(r.Reason + "\n" + r.Context)
+			} else {
+				result.Hook = r.Context
+			}
+		}
+		return result
 	}
 	var wg sync.WaitGroup
 	var ordered []int
@@ -428,6 +501,14 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 	})
 	wg.Wait()
 	return results
+}
+
+// hook 的输入里工具参数按 JSON 对象给出；模型给的参数不是合法 JSON 时原样作为字符串。
+func rawArgs(call llm.ToolCall) any {
+	if json.Valid([]byte(call.Function.Arguments)) {
+		return json.RawMessage(call.Function.Arguments)
+	}
+	return call.Function.Arguments
 }
 
 // 续跑时补齐中断前那一批，按顺序查三处：

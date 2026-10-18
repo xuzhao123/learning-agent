@@ -156,6 +156,11 @@ button { cursor: pointer; }
 #composer-wrap { flex: none; padding: 0 24px 14px; }
 #composer { max-width: 780px; margin: 0 auto; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 2px 12px rgba(0,0,0,.06); }
 #composer:focus-within { border-color: color-mix(in srgb, var(--text) 30%, var(--line)); }
+#composer { position: relative; }
+#slash { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); max-height: 260px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 4px 16px rgba(0,0,0,.1); z-index: 5; }
+.slash-item { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; text-align: left; cursor: pointer; }
+.slash-item:hover, .slash-item.on { background: color-mix(in srgb, var(--text) 7%, var(--panel)); }
+.slash-name { font: 600 13px var(--mono); }
 #query { display: block; width: 100%; max-height: 220px; padding: 12px 16px 4px; border: 0; outline: 0; resize: none; background: none; }
 .crow { display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px 14px; }
 #mode-chip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
@@ -497,7 +502,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
       <div id="chat-scroll"><div id="thread"></div></div>
       <div id="composer-wrap">
         <form id="composer">
-          <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…"></textarea>
+          <div id="slash" hidden></div>
+          <textarea id="query" rows="1" placeholder="给 agent 布置一个任务…（/ 选命令）"></textarea>
           <div class="crow"><span id="mode-chip"></span><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定，换模型请新建对话"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：编码工具只在这个仓库里读写；对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换；规则来自设置"><option value="plan">权限：只读计划</option><option value="ask">权限：改动都问</option><option value="edit">权限：自动编辑</option><option value="full">权限：全权</option></select><button id="tools-link" type="button" class="link"></button><button id="send" aria-label="发送">↑</button></div>
         </form>
         <p id="hint"></p>
@@ -653,7 +659,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {} }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {} }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -756,6 +762,13 @@ function applyNotify(r, method, p, time) {
   }
   // skill 索引与 MCP 连接在 agent 启动时发生，归到本轮开头的“能力”卡片。
   else if (method === "capability/event") r.caps.push({ turn: r.memTurn, kind: p.kind, text: p.text, count: p.count });
+  // D26：工具前后的 hook 挂在那次工具调用上；Stop 挂在被拦下的那次回答后面；UserPromptSubmit 归到本轮开头的能力卡片。
+  else if (method === "hook/completed") {
+    const h = { event: p.event, outcome: p.kind, command: p.command, output: p.output || "", text: p.text };
+    if (p.call_id) (r.hookCalls[p.call_id] ||= []).push(h);
+    else if (p.event === "Stop" && r.calls.length) (r.hookAfter[r.calls.at(-1).n] ||= []).push(h);
+    else r.caps.push({ turn: r.memTurn, kind: "hook", text: p.text });
+  }
   // 浏览器画面按“任务ID/调用ID”保存；续聊每轮是新进程、新任务ID，所以记下当时的任务ID。
   else if (method === "browser/navigate") r.web[p.call_id] = { task: r.checkpoint, url: p.url };
   else if (method === "subagent/started") Object.assign(r.subCalls[p.call_id] ??= {}, { task: p.task_id, text: p.task, state: "running" });
@@ -1682,10 +1695,13 @@ function capsCard(r, turn) {
   const loaded = logs.find((l) => l.kind === "skills_loaded");
   const tools = logs.filter((l) => l.kind === "mcp_register").length;
   const errors = logs.filter((l) => ["skill_error", "mcp_error", "mcp_skip"].includes(l.kind)).length;
+  const hookRuns = logs.filter((l) => l.kind === "hook").length, command = logs.find((l) => l.kind === "command");
   const parts = [];
   if (r.skills.length) parts.push(`Skills ${loaded ? loaded.count : "?"}/${r.skills.length} 个索引写进 system`);
   if (r.mcp.length) parts.push(`MCP ${r.mcp.length} 个 server · 注册 ${tools} 个工具`);
   if (errors) parts.push(`${errors} 条跳过`);
+  if (command) parts.push(command.text.replace(/^Command: /, "命令 "));
+  if (hookRuns) parts.push(`UserPromptSubmit hook ${hookRuns} 次`);
   const rows = [];
   if (r.skills.length) rows.push(el("div", "meta", "skill：" + r.skills.join("、") + " · 模型判断相关时调用 load_skill 读取全文"));
   for (const m of r.mcp) rows.push(el("div", "meta", `MCP ${m.name}：${m.command}`));
@@ -1694,6 +1710,14 @@ function capsCard(r, turn) {
   sk.onclick = () => openSkills(); mc.onclick = () => openMCP();
   links.append(sk, mc);
   return step(`caps-${turn}`, [el("span", "ico cap" + (errors ? " bad" : ""), "✦"), el("span", "", parts.join(" · ") || "能力")], [...rows, links]);
+}
+// D26：hook 运行记录。结局 ok（放行或补充上下文）、block（拦截，原因交给模型或用户）、error（hook 自己出错，照常继续）。
+const HOOK_OUTCOME = { ok: "通过", block: "拦截", error: "出错（照常继续）" };
+function hookCard(key, hooks) {
+  const blocked = hooks.some((h) => h.outcome === "block");
+  const head = [el("span", "ico cap" + (blocked ? " bad" : ""), "⚑"), el("span", "hub-chip", "HOOK"), el("span", "", hooks.map((h) => `${h.event} ${HOOK_OUTCOME[h.outcome] || h.outcome}`).join(" · "))];
+  const rows = hooks.flatMap((h) => [el("div", "meta", `${h.event} · ${HOOK_OUTCOME[h.outcome] || h.outcome} · ${h.command}`), ...(h.output ? [el("pre", h.outcome === "block" ? "err" : "", h.output)] : [])]);
+  return step(key, head, rows);
 }
 // 记忆辅助调用：保留原始输入输出与 token 用量，显示为卡片中的一行，不当作 assistant 回答。
 function auxCard(r, c) {
@@ -1755,6 +1779,7 @@ function renderCall(box, r, c, last) {
   }
   if (m.content && c.tools.length) { const mid = md(m.content); mid.classList.add("mid"); box.append(mid); }
   for (const t of c.tools) {
+    if (r.hookCalls[t.id]) box.append(hookCard(`h${c.n}-${t.index}`, r.hookCalls[t.id]));
     if (ui.run.approvals[t.id]) box.append(approvalCard(ui.run, t.id));
     if (t.name === "spawn_agent" && !r.isSub) { box.append(agentCard(r, t)); continue; }
     if (WEB_TOOLS.includes(t.name)) { box.append(webCard(r, t)); continue; }
@@ -1814,6 +1839,7 @@ function renderCall(box, r, c, last) {
     }
     box.append(meta);
   }
+  if (r.hookAfter[c.n]) box.append(hookCard(`hs${c.n}`, r.hookAfter[c.n]));
   if (last && !r.exit && c.tools.length && c.tools.every((t) => t.done)) box.append(el("div", "shimmer", "思考中…"));
 }
 // ---------- 子 agent ----------
@@ -2612,7 +2638,7 @@ async function openSettings() {
     if (blocked) text.append(el("div", "err", blocked));
   }
   panel.append(tools);
-  panel.append(el("h3", "", "工作区"), el("p", "meta", "对话里只能选这里登记的目录（本机上的 git 仓库）。编码工具只在所选目录里读写，bash 暂时还看不到它。只有平台账号能登记。"));
+  panel.append(el("h3", "", "工作区"), el("p", "meta", "对话里只能选这里登记的目录（本机上的 git 仓库）。编码工具只在所选目录里读写，bash 在沙箱里把它挂到 /workspace。只有平台账号能登记。"));
   const wsBox = el("div", "set-box");
   if (!e.workspaces.length) wsBox.append(el("div", "set-row", e.blocked.coding ? "编码工具不可用：" + e.blocked.coding : "还没有登记工作区"));
   for (const w of e.workspaces) {
@@ -2653,6 +2679,14 @@ async function openSettings() {
   const rulesWrap = el("span"); rulesWrap.append(rules, tag("permission_rules"));
   grid.append(el("span", "meta", "权限规则"), rulesWrap);
   panel.append(grid, el("p", "meta", "权限模式在每条对话的输入框旁边还能换（每轮生效）；规则在对话开始时拍进快照。D20 的高风险确认（删除记忆、破坏性 MCP、含私有数据后的外发、续跑重做）在任何模式下都照常询问。"));
+  // D26：hooks 在本机以观测台的身份运行命令，不在沙箱里，所以只有平台账号能改；个人设置里不生效。
+  panel.append(el("h3", "", "Hooks"), el("p", "meta", "在固定时刻运行本机命令：用户提交（UserPromptSubmit）、工具执行前（PreToolUse）、工具成功后（PostToolUse）、模型准备结束（Stop）。格式同 Claude Code 的 hooks 段；填配置原文，或相对 agent 目录的文件路径（如 hooks/hooks.json）。对话开始时读成原文拍进快照。命令不在沙箱里运行，只有平台账号能设置。"));
+  const hooksBox = el("textarea"); hooksBox.rows = 3; hooksBox.style.width = "100%"; hooksBox.value = values.hooks;
+  hooksBox.placeholder = "hooks/hooks.json\n或 {\"hooks\": {\"PostToolUse\": [{\"matcher\": \"edit_file|write_file\", \"hooks\": [{\"type\": \"command\", \"command\": \"...\"}]}]}}";
+  hooksBox.disabled = !data.can_edit_platform;
+  hooksBox.oninput = () => { values.hooks = hooksBox.value; };
+  const hooksWrap = el("div", "set-box"); hooksWrap.append(hooksBox, tag("hooks"));
+  panel.append(hooksWrap);
   const actions = el("div", "set-actions"), mine = el("button", "ghost", "保存为我的设置"), reset = el("button", "ghost", "恢复继承");
   const saveTo = async (url, body) => { try { await hubCall("PUT", url, body); await loadSettings(); openSettings(); } catch (err) { alert(err.message); } };
   mine.onclick = () => saveTo("/settings", values);
@@ -3102,7 +3136,32 @@ $("tools-link").onclick = () => { if (ui.run) { ui.toolsOpen = !ui.toolsOpen; sy
 $("settings").onclick = () => openSettings();
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };
-$("query").oninput = () => { autosize(); syncComposer(); };
+$("query").oninput = () => { autosize(); syncComposer(); syncSlash(); };
+// D26：斜杠命令。输入框里只有 /前缀 时列出命令（个人级 commands/、所选工作区的 .agents/commands/）；展开由 agent 做。
+async function loadCommands() {
+  const ws = ui.run ? ui.run.workspace || "" : $("workspace").value;
+  if (ui.commands && ui.commandsFor === ws) return;
+  try { const res = await fetch("/commands?workspace=" + encodeURIComponent(ws)); ui.commands = res.ok ? await res.json() : []; } catch { ui.commands = []; }
+  ui.commandsFor = ws;
+}
+async function syncSlash() {
+  const box = $("slash"), m = /^\/([a-z0-9_-]*)$/.exec($("query").value);
+  if (!m) { box.hidden = true; return; }
+  await loadCommands();
+  const list = ui.commands.filter((c) => c.name.startsWith(m[1]));
+  box.replaceChildren(...list.map((c) => {
+    const b = el("button", "slash-item");
+    b.type = "button";
+    b.append(el("span", "slash-name", "/" + c.name + (c.argument_hint ? " " + c.argument_hint : "")), el("span", "meta", (c.scope === "project" ? "项目 · " : "个人 · ") + (c.description || "")));
+    b.onmousedown = (ev) => ev.preventDefault();
+    b.onclick = () => { $("query").value = "/" + c.name + " "; box.hidden = true; $("query").focus(); syncComposer(); };
+    return b;
+  }));
+  if (!list.length) box.append(el("div", "meta", ui.commands.length ? "没有匹配的命令" : "没有可用的命令：放在 commands/ 或工作区的 .agents/commands/"));
+  box.hidden = false;
+}
+$("query").onblur = () => { $("slash").hidden = true; };
+$("workspace").addEventListener("change", () => { ui.commands = null; });
 window.addEventListener("popstate", restoreRunURL);
 // 多租户：会话过期或被注销时，接口返回 401，回到登录页。
 const rawFetch = window.fetch.bind(window);

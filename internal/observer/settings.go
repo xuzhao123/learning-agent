@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"learning-agent/internal/commands"
+	"learning-agent/internal/hooks"
 	"learning-agent/internal/llm"
 )
 
@@ -35,6 +37,31 @@ var builtin = map[string]string{
 	"embedding": "ark", "memory_ttl": "", "provider": "ark", "workspace": "",
 	"max_steps": "20", "context_window": "32768", "tool_output": "4000",
 	"permission_mode": "edit", "permission_rules": "",
+	"hooks": "",
+}
+
+// D26：hooks 在宿主机上以观测台的身份运行命令，只能由平台设置；值是配置原文（以 { 开头）或相对 agent 目录的文件路径，
+// 对话开始时读成原文拍进快照，之后改文件不影响已经开始的对话。
+var hooksBase string
+
+func hooksConfig(value string) (string, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(text, "{") {
+		path := text
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(hooksBase, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("读取 hooks 配置：%w", err)
+		}
+		text = string(data)
+	}
+	_, err := hooks.Parse(text)
+	return text, err
 }
 
 // 权限规则一行一条：allow: Bash(go build *)、ask: Edit(internal/agent/**)、deny: Bash(git push *)。语法由 agent 的 permission 包校验。
@@ -126,6 +153,10 @@ func valid(key, value string, f settingsFile) error {
 				return fmt.Errorf("权限规则一行一条，格式如 allow: Bash(go build *)：%q", line)
 			}
 		}
+	case "hooks":
+		if _, err := hooksConfig(value); err != nil {
+			return err
+		}
 	case "max_steps", "context_window", "tool_output":
 		limits := map[string][2]int{"max_steps": {1, 60}, "context_window": {4096, 262144}, "tool_output": {64, 32768}}[key]
 		if n, err := strconv.Atoi(value); err != nil || n < limits[0] || n > limits[1] {
@@ -199,6 +230,9 @@ func (s *server) effectiveFor(u *user) (effective, settingsFile, error) {
 		values map[string]string
 	}{{"platform", f.Platform}, {"user", f.Users[u.Name]}} {
 		for key, value := range layer.values {
+			if layer.name == "user" && key == "hooks" {
+				continue
+			}
 			if _, ok := builtin[key]; ok && valid(key, value, f) == nil {
 				e.Values[key], e.Source[key] = value, layer.name
 			}
@@ -270,6 +304,10 @@ func (s *server) putSettings(layer string) http.HandlerFunc {
 		for key, value := range want {
 			if err := valid(key, value, f); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if layer == "user" && key == "hooks" && value != base[key] {
+				http.Error(w, "hooks 会在本机上运行命令，只能在平台设置里配置", http.StatusForbidden)
 				return
 			}
 			if base[key] != value {
@@ -375,4 +413,21 @@ func (s *server) deleteWorkspace(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Write([]byte("ok"))
+}
+
+// D26：斜杠命令列表，输入框打 / 时显示。个人级来自 agent 目录的 commands/，项目级来自所选工作区的 .agents/commands/；
+// 展开由 agent 做，这里只列名字和说明。
+func (s *server) listCommands(w http.ResponseWriter, req *http.Request) {
+	e, _, err := s.effectiveFor(current(req))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dir := ""
+	if name := req.URL.Query().Get("workspace"); name != "" && e.on("coding") {
+		if i := slices.IndexFunc(e.Workspaces, func(w workspaceDir) bool { return w.Name == name }); i >= 0 {
+			dir = e.Workspaces[i].Path
+		}
+	}
+	writeJSON(w, commands.List(s.agentDir, dir))
 }

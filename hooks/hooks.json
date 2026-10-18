@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "\"$AGENT_HARNESS_DIR/hooks/secret-guard.sh\"", "timeout": 5}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "edit_file|write_file", "hooks": [{"type": "command", "command": "\"$AGENT_HARNESS_DIR/hooks/protect-generated.sh\"", "timeout": 5}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "edit_file|write_file", "hooks": [{"type": "command", "command": "\"$AGENT_HARNESS_DIR/hooks/gofmt.sh\"", "timeout": 10}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "\"$AGENT_HARNESS_DIR/hooks/go-check.sh\"", "timeout": 300}]}
+    ]
+  }
+}

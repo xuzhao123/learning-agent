@@ -135,7 +135,8 @@ type Observation struct {
 	Result    any    `json:"result,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Attempts  int    `json:"attempts"`
-	Note      string `json:"note,omitempty"` // 执行器附加的说明（如无进展提示），不是工具输出
+	Note      string `json:"note,omitempty"`          // 执行器附加的说明（如无进展提示），不是工具输出
+	Hook      string `json:"hook_feedback,omitempty"` // D26：PostToolUse hook 的反馈（如格式检查没过），不是工具输出
 }
 
 // 不可重试的错误：参数错误、未知工具、业务拒绝。同样的输入再试一次结果也一样，重试只会浪费时间。

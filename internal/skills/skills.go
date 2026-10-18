@@ -88,7 +88,7 @@ func readSkill(path string) (Skill, string, error) {
 	if err != nil {
 		return Skill{}, "", err
 	}
-	fields, body, err := parseFrontmatter(string(data))
+	fields, body, err := ParseFrontmatter(string(data))
 	if err != nil {
 		return Skill{}, "", err
 	}
@@ -113,7 +113,7 @@ func readSkill(path string) (Skill, string, error) {
 
 // 只解析顶层 key: value；缩进行属于上一个键的嵌套值（如 metadata），v1 跳过。
 // 不引入 YAML 库，所以不支持 | 和 > 多行值，遇到时明确报错而不是读错。
-func parseFrontmatter(text string) (map[string]string, string, error) {
+func ParseFrontmatter(text string) (map[string]string, string, error) {
 	text = strings.ReplaceAll(strings.TrimPrefix(text, "\ufeff"), "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
 		return nil, "", errors.New("缺少开头的 --- frontmatter")
