@@ -48,7 +48,7 @@ const ragLabTitle = "Day 4 检索实验（10题无检索 / 有检索对比）"
 type event struct {
 	Seq        int             `json:"seq"`
 	Time       time.Time       `json:"time"`
-	Kind       string          `json:"kind"` // request、response、stdout、stderr、exit、notify、delta 等
+	Kind       string          `json:"kind"` // request、response、stdout、stderr、exit、notify、delta、rewind 等
 	Call       int             `json:"call,omitempty"`
 	Status     int             `json:"status,omitempty"`
 	Millis     int64           `json:"ms,omitempty"`
@@ -183,6 +183,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.HandleFunc("POST /runs/{id}/network", s.decideNetwork)
 	mux.HandleFunc("POST /runs/{id}/approval", s.decideTool)
+	mux.HandleFunc("POST /runs/{id}/rewind", s.rewindRun)
 	mux.HandleFunc("GET /runs/{id}/files", s.listFiles)
 	mux.HandleFunc("GET /runs/{id}/files/{path...}", s.downloadFile)
 	mux.HandleFunc("POST /runs/{id}/files", s.uploadFile)
@@ -706,6 +707,89 @@ func (s *server) forgetMemory(w http.ResponseWriter, req *http.Request) {
 	w.Write(output)
 }
 
+// D29：撤销某一轮及之后各轮的文件改动，对话退回到它的上一轮。文件由 agent 的 rewind 命令恢复（和记忆删除一样，
+// 改动用户数据的事交给 agent，观测台不自己写工作区）；这里核对这一轮属于这条对话、对话没有在运行，再把结果记进对话记录。
+// dry_run 只预览：页面先列出会恢复、删除的文件和冲突，人确认后再真正执行。
+func (s *server) rewindRun(w http.ResponseWriter, req *http.Request) {
+	r := s.runOf(w, req)
+	if r == nil {
+		return
+	}
+	var input struct {
+		Turn   string `json:"turn"`
+		DryRun bool   `json:"dry_run"`
+	}
+	if json.NewDecoder(req.Body).Decode(&input) != nil || !taskPattern.MatchString(input.Turn) {
+		http.Error(w, "需要这一轮的检查点ID", http.StatusBadRequest)
+		return
+	}
+	r.mu.Lock()
+	turns := r.turnIDs()
+	running := !r.Done
+	r.mu.Unlock()
+	if !slices.Contains(turns, input.Turn) {
+		http.Error(w, "这一轮不属于这条对话", http.StatusNotFound)
+		return
+	}
+	if running {
+		http.Error(w, "对话正在运行，停下之后再撤销", http.StatusConflict)
+		return
+	}
+	u := current(req)
+	args := []string{"rewind"}
+	if r.Tenant != "" {
+		args = append(args, "-tenant", r.Tenant)
+	}
+	if input.DryRun {
+		args = append(args, "-dry-run")
+	}
+	cmd := s.agentCommand(req.Context(), append(args, input.Turn)...)
+	cmd.Env = append(os.Environ(), "AGENT_USER="+u.Name, "AGENT_CONVERSATION_ID="+r.ID)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	result := json.RawMessage(output)
+	if !json.Valid(result) {
+		result = nil
+	}
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{"error": strings.TrimPrefix(strings.TrimSpace(stderr.String()), "Error: "), "result": result})
+		return
+	}
+	if !input.DryRun {
+		// 对话已经结束，记录文件关了：临时以追加方式打开（同联网审批）。
+		r.mu.Lock()
+		file, err := os.OpenFile(filepath.Join(s.runsDir(r.Tenant), r.ID+".jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			r.mu.Unlock()
+			http.Error(w, "文件已撤销，但无法写入对话记录", http.StatusInternalServerError)
+			return
+		}
+		r.file = file
+		r.mu.Unlock()
+		r.add(event{Kind: "rewind", Text: input.Turn, Body: result})
+		file.Close()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(output)
+}
+
+// 这条对话各轮 agent 的检查点ID（turn/started 通知；子 agent 的包在 subagent/message 里，不会混进来）。调用方持有 r.mu。
+func (r *run) turnIDs() []string {
+	ids := []string{}
+	for _, e := range r.events {
+		var p struct {
+			TurnID string `json:"turn_id"`
+		}
+		if e.Kind == "notify" && e.Method == "turn/started" && json.Unmarshal(e.Body, &p) == nil && p.TurnID != "" && !slices.Contains(ids, p.TurnID) {
+			ids = append(ids, p.TurnID)
+		}
+	}
+	return ids
+}
+
 type resumeInput struct {
 	Messages  []json.RawMessage `json:"messages"`
 	Usage     json.RawMessage   `json:"usage,omitempty"`
@@ -718,7 +802,8 @@ type resumeInput struct {
 }
 
 // 调用方持有r.mu。请求里的View已经包含摘要，直接延续它，不重新拼接所有旧请求。
-// 上一轮中途停下（停止按钮、超时、出错）时，改从 agent 的检查点接着聊。
+// 上一轮中途停下（停止按钮、超时、出错）时，改从 agent 的检查点接着聊；
+// D29 撤销之后同样走检查点：接着的是撤销点的上一轮，它的检查点就是那时模型看到的上下文，和恢复后的文件同一时刻。
 func (r *run) resumeHistory() (*resumeInput, error) {
 	if id := r.lastCheckpoint(); id != "" && r.events[len(r.events)-1].Text != "exit 0" {
 		result, err := r.checkpointHistory(id)
@@ -846,11 +931,19 @@ func (r *run) checkpointHistory(id string) (*resumeInput, error) {
 
 // 最近一轮 agent 的检查点ID：来自它的 turn/started 通知（子 agent 的通知包在 subagent/message 里，不会混进来）。
 // B0 之前的存档没有通知，退回到当时打印的 “Checkpoint: id=…” 行。
+// D29：最近一次是撤销时，返回撤销后对话接着的那一轮（空表示连第一轮也撤销了）。
 func (r *run) lastCheckpoint() string {
 	for i := len(r.events) - 1; i >= 0; i-- {
 		e := r.events[i]
 		if e.Kind == "start" || e.Kind == "continue" {
 			return ""
+		}
+		if e.Kind == "rewind" {
+			var p struct {
+				Continues string `json:"continues"`
+			}
+			json.Unmarshal(e.Body, &p)
+			return p.Continues
 		}
 		if e.Kind == "notify" && e.Method == "turn/started" {
 			var p struct {
@@ -904,13 +997,18 @@ func (r *run) canContinue() bool {
 			return false
 		}
 	}
-	// 用户的网络审批（allow/deny）可能追加在 exit 之后，不算对话进程的事件。
-	i := len(r.events) - 1
-	for i >= 0 && (r.events[i].Kind == "allow" || r.events[i].Kind == "deny") {
+	// 用户的网络审批（allow/deny）与撤销（rewind）可能追加在 exit 之后，不算对话进程的事件。
+	i, rewound := len(r.events)-1, false
+	for i >= 0 && (r.events[i].Kind == "allow" || r.events[i].Kind == "deny" || r.events[i].Kind == "rewind") {
+		rewound = rewound || r.events[i].Kind == "rewind"
 		i--
 	}
 	if r.Query == ragLabTitle || r.Source != "" || !r.Done || i < 0 || r.events[i].Kind != "exit" {
 		return false
+	}
+	// D29：撤销之后从撤销点的上一轮接着聊；连第一轮也撤销了，就没有可以接着的对话。
+	if rewound {
+		return r.lastCheckpoint() != ""
 	}
 	if r.events[i].Text == "exit 0" {
 		return r.calls > 0

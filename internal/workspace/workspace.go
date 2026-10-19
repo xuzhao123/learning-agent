@@ -2,6 +2,7 @@
 // 所有路径都经 os.Root 访问，../ 与指向目录外的符号链接都出不去；
 // 编辑与覆盖之前核对“上次读到的内容”，对不上就拒绝，让模型重新读，而不是覆盖别人（或自己并行的另一次编辑）的改动。
 // “读过哪些文件”本来只在进程内存里，续聊换进程就会丢，所以由 agent 随检查点保存、开局恢复（见 Seen、RestoreSeen）。
+// D29：每次写入之前先存快照，按轮撤销见 snapshot.go。
 package workspace
 
 import (
@@ -490,9 +491,13 @@ func editFile(p, oldString, newString string, replaceAll bool) (any, error) {
 	if !replaceAll {
 		updated = strings.Replace(text, oldString, newString, 1)
 	}
+	if err := snapshot(path, data, true); err != nil {
+		return nil, fmt.Errorf("写入前的快照没存下来，%s 没有改：%w", path, err)
+	}
 	if err := root.WriteFile(path, []byte(updated), 0o644); err != nil {
 		return nil, fmt.Errorf("写入 %s 失败：%w", path, err)
 	}
+	written(path, []byte(updated))
 	seen[path] = hash([]byte(updated))
 	note(path)
 	replaced := 1
@@ -531,12 +536,12 @@ func writeFile(p, content string) (any, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	created := false
+	var current []byte
 	if info, err := root.Stat(path); err == nil {
 		if info.IsDir() {
 			return nil, llm.Permanent(fmt.Errorf("%s 是目录", path))
 		}
-		current, err := read(path)
-		if err != nil {
+		if current, err = read(path); err != nil {
 			return nil, err
 		}
 		if err := fresh(path, current); err != nil {
@@ -554,9 +559,13 @@ func writeFile(p, content string) (any, error) {
 	} else {
 		return nil, llm.Permanent(fmt.Errorf("无法访问 %s：%v", path, err))
 	}
+	if err := snapshot(path, current, !created); err != nil {
+		return nil, fmt.Errorf("写入前的快照没存下来，%s 没有改：%w", path, err)
+	}
 	if err := root.WriteFile(path, []byte(content), 0o644); err != nil {
 		return nil, fmt.Errorf("写入 %s 失败：%w", path, err)
 	}
+	written(path, []byte(content))
 	seen[path] = hash([]byte(content))
 	note(path)
 	return map[string]any{"path": path, "created": created, "bytes": len(content), "lines": strings.Count(content, "\n") + boolInt(!strings.HasSuffix(content, "\n") && content != "")}, nil

@@ -34,7 +34,7 @@ harness 指包在模型外面、让它在真实环境里可靠干活的那一层
 | 扩展 | H16 | MCP | 客户端：stdio、Streamable HTTP、多 server（已有）；服务端（已有）；远程鉴权、动态工具列表（缺） | 部分 | MCP client / server | D6–7 |
 | 扩展 | H17 | 插件打包 | 把 skills、hooks、MCP、命令打成一个包（缺） | 缺 | plugins | 未排期 |
 | 会话与状态 | H18 | 会话记录与恢复 | 会话持久化与续跑（已有）；续聊、分叉（已有）；会话命令：恢复、分叉、压缩（缺） | 部分 | rollout · thread/resume · fork | D9 · D30 |
-| 会话与状态 | H19 | 文件检查点与回退 | 改文件前快照（缺）；按步回退，与对话对齐（缺） | 缺 | rewind · thread/revert | D29 |
+| 会话与状态 | H19 | 文件检查点与回退 | 改文件前快照：编辑与写入工具（已有）；按轮撤销，文件与对话一起退、冲突即拒绝（已有）；bash 的改动（缺）；只退文件或只退对话（缺） | 部分 | /rewind · ghost commit（Codex 已移除） | D29 |
 | 会话与状态 | H20 | 规划与长任务 | 计划模式：只读出方案，人确认后切换（手动切，按钮待 D34）（部分）；跨会话接力：进度文件 + git（缺）；上下文内 todo 清单（D37 消融决定是否需要）（缺） | 部分 | plan mode · 进度文件 · Todo | D25 · D31 · D37 |
 | 多 agent | H21 | 子 agent | 独立上下文，只回摘要（已有）；权限继承与幂等恢复（已有）；fork 当前对话、后台运行（缺）；发消息、等待、中断子 agent（缺） | 部分 | Agent / Task 工具 · 子 agent 定义 · send_message / wait_agent | D10+ · D38–D40 |
 | 界面与协议 | H22 | 客户端协议 | Thread / Turn / Item 事件（已有）；流式增量（已有）；审批请求由 harness 发起（已有）；运行中插话（缺）；结构化向用户提问（缺）；回复分段（过程说明 / 最终回答）（缺）；断线重连与事件补读（缺） | 部分 | app-server · Agent SDK 消息流 · request_user_input | B0 · B1 · D33 · D34 |

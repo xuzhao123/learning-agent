@@ -89,6 +89,9 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .banner { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--faint); font-size: 12px; }
 .banner::before, .banner::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 .a { margin: 4px 0 8px; }
+/* D29：被撤销的轮次留在对话里，淡化显示 */
+.u.rewound div, .a.rewound { opacity: .45; }
+.utools { display: flex; justify-content: flex-end; margin: -12px 0 8px; }
 .step { margin: 1px 0; font-size: 13px; color: var(--muted); }
 .step > summary { display: flex; align-items: center; gap: 8px; padding: 3px 6px; margin: 0 -6px; border-radius: 6px; list-style: none; cursor: pointer; }
 .step > summary::-webkit-details-marker { display: none; }
@@ -718,7 +721,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map() }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -763,7 +766,7 @@ function apply(r, e) {
     const opensTurn = !turn || r.turnPending || r.caseStart || (users.length > 0 && lastMain?.turn === turn.n && lastMain.choice && !lastMain.tools.length);
     const userMessage = opensTurn ? (r.pending ? { role: "user", content: r.pending } : users.at(-1)) : null;
     if (opensTurn) {
-      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel };
+      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel, checkpoint: r.checkpoint };
       r.turns.push(turn);
     }
     const step = isCompact ? 0 : ++turn.steps;
@@ -810,6 +813,14 @@ function apply(r, e) {
   }
   else if (e.kind === "decision") { const a = r.approvals[e.text]; if (a) a.state = (e.body || {}).decision; }
   else if (e.kind === "allow" || e.kind === "deny") { r.netDecision[e.text] = e.kind; delete r.netPending[e.text]; }
+  else if (e.kind === "rewind") {
+    // D29：撤销了这一轮及之后各轮的文件改动；对话从撤销点的上一轮接着聊（它的检查点），这几轮留着、淡化显示。
+    const b = e.body || {}, hit = r.turns.filter((t) => (b.turns || []).includes(t.checkpoint));
+    for (const t of hit) t.rewound = true;
+    const range = hit.length > 1 ? `第 ${hit[0].n}–${hit.at(-1).n} 轮` : hit.length ? `第 ${hit[0].n} 轮` : `${(b.turns || []).length} 轮`;
+    r.rewindNotes[r.turns.length + 1] = `已撤销${range}：恢复 ${(b.restore || []).length} 个文件，删除 ${(b.delete || []).length} 个新建文件` + (b.continues ? "；接着上一轮聊" : "；第一轮也撤销了，请新建对话");
+    r.checkpoint = b.continues || ""; r.rewoundAll = !b.continues;
+  }
   else if (e.kind === "stop") { r.stopRequested = true; r.logs.push({ ...e, kind: "stdout", text: e.text }); }
   else if (e.kind === "exit") {
     r.exit = e.text || "exit"; r.tEnd = time; r.netPending = {};
@@ -2380,14 +2391,28 @@ function drawChat() {
   flow.forEach((f, i) => {
     if (f.kind === "case") { box.append(el("div", "banner", f.text)); group = null; return; }
     if (f.kind === "user" && r.interrupted?.[f.turn]) box.append(el("div", "banner", r.interrupted[f.turn]));
-    if (f.kind === "user") { const u = el("div", "u"); u.append(el("div", "", f.text)); box.append(u); group = null; return; }
+    if (f.kind === "user" && r.rewindNotes[f.turn]) box.append(el("div", "banner", r.rewindNotes[f.turn]));
+    const turn = r.turns[(f.turn ?? f.call?.turn) - 1];
+    if (f.kind === "user") {
+      const u = el("div", turn?.rewound ? "u rewound" : "u"); u.append(el("div", "", f.text)); box.append(u); group = null;
+      // D29：有工作区的对话，每一轮都可以撤销（连同之后各轮）；正在运行、回放中、导入的对话不行。
+      if (turn?.checkpoint && !turn.rewound && r.workspace && r.exit && !r.source && !ui.replay && !ui.loading) {
+        const tools = el("div", "utools"), b = el("button", "link", "撤销到这一轮之前");
+        b.title = "把这一轮及之后用 edit_file / write_file 改过的文件放回去，对话退回上一轮";
+        b.onclick = () => rewindTurn(r, turn);
+        tools.append(b); box.append(tools);
+      }
+      return;
+    }
+    const fresh = () => { group = el("div", turn?.rewound ? "a rewound" : "a"); box.append(group); return group; };
     if (f.kind === "compact") return box.append(renderCompact(f.call));
-    if (f.kind === "aux") { if (!group) box.append(group = el("div", "a")); group.append(auxCard(r, f.call)); return; }
-    if (f.kind === "caps") { const card = capsCard(r, f.turn); if (card) { if (!group) box.append(group = el("div", "a")); group.append(card); } return; }
-    if (f.kind === "memory") { const card = memoryCard(r, f.turn, f.phase); if (card) { if (!group) box.append(group = el("div", "a")); group.append(card); } return; }
-    if (!group) box.append(group = el("div", "a"));
+    if (f.kind === "aux") { if (!group) fresh(); group.append(auxCard(r, f.call)); return; }
+    if (f.kind === "caps") { const card = capsCard(r, f.turn); if (card) { if (!group) fresh(); group.append(card); } return; }
+    if (f.kind === "memory") { const card = memoryCard(r, f.turn, f.phase); if (card) { if (!group) fresh(); group.append(card); } return; }
+    if (!group) fresh();
     renderCall(group, r, f.call, i === flow.length - 1);
   });
+  if (r.rewindNotes[r.turns.length + 1]) box.append(el("div", "banner", r.rewindNotes[r.turns.length + 1]));
   if (r.pending) {
     const u = el("div", "u"); u.append(el("div", "", r.pending)); box.append(u);
     const a = el("div", "a");
@@ -2460,7 +2485,7 @@ async function loadSettings() {
   syncComposer();
 }
 function syncComposer() {
-  const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && r.exit && r.exit !== "exit 0" && !r.checkpoint;
+  const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && ((r.exit && r.exit !== "exit 0" && !r.checkpoint) || r.rewoundAll);
   const lab = r?.query === RAG_LAB_TITLE, s = ui.settings?.effective;
   ui.picked ||= {};
   // 一条对话固定一个模型和一个工作区：续聊沿用开始时的选择（换模型请新建对话）。
@@ -2599,6 +2624,28 @@ $("attribute").onclick = async () => {
   } catch {}
   attribute(r.id);
 };
+// D29：先预览（dry_run）列出会恢复、删除的文件；有冲突就不做，没有冲突再由人确认执行。
+async function rewindTurn(r, t) {
+  const call = async (dryRun) => {
+    const res = await fetch(`/runs/${encodeURIComponent(r.id)}/rewind`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turn: t.checkpoint, dry_run: dryRun }) });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+    if (!res.ok) throw new Error(data?.error || text);
+    return data;
+  };
+  const list = (label, xs) => xs?.length ? `\n${label}：\n  ${xs.join("\n  ")}` : "";
+  let plan;
+  try { plan = await call(true); } catch (err) { return alert(err.message); }
+  if (plan.conflicts?.length) return alert(`不能撤销：这些文件在 agent 最后一次编辑之后又被改过（bash、人或别的程序），撤销会覆盖那些改动。${list("冲突", plan.conflicts)}`);
+  const n = plan.turns.length, none = !plan.restore.length && !plan.delete.length;
+  const text = `撤销第 ${t.n} 轮${n > 1 ? `及之后，共 ${n} 轮` : ""}：文件放回这一轮开始之前，对话${plan.continues ? "退回上一轮" : "也全部撤销，之后需要新建对话"}。`
+    + list("恢复", plan.restore) + list("删除（这几轮新建的）", plan.delete) + (none ? "\n这几轮没有用编码工具改过文件。" : "")
+    + "\n\n只撤销 edit_file、write_file 的改动；bash 改的文件没有快照。确定？";
+  if (!confirm(text)) return;
+  try { await call(false); } catch (err) { return alert(err.message); }
+  show(r.id, false);
+}
 async function attribute(runID) {
   if (!confirm("自动归因这段对话的最后一轮：\n1. DeepSeek 读完整轨迹，判断成败、写出评分标准，指出决定性的那一步和原因；\n2. 失败时从那一步之前分叉回放：插入纠正跑 3 次、插入“继续。”作对照跑 3 次，按这段对话当时的模型真实调用。\n开始？")) return;
   try {

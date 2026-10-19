@@ -87,6 +87,7 @@ go build -o bin/learning-agent .
 | Day 26 | Hooks 与斜杠命令 | [笔记](docs/day-26/day-26-notes.md) | [实践](docs/day-26/day-26-lab.md) | — |
 | Day 27 | 规划与第一次自用 | [笔记](docs/day-27/day-27-notes.md) | [实践](docs/day-27/day-27-lab.md) | — |
 | Day 28 | 第四周复盘 | [笔记](docs/day-28/day-28-notes.md) · [复盘](docs/week-04-review.md) | [实践](docs/day-28/day-28-lab.md) | — |
+| Day 29 | 文件快照与回退 | [笔记](docs/day-29/day-29-notes.md) | [实践](docs/day-29/day-29-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -200,4 +201,4 @@ go build -o bin/learning-agent .
 
 </details>
 
-观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-tenant 租户] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“评测与归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-tenant 租户] [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。
+观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-tenant 租户] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“评测与归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-tenant 租户] [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。`go run . rewind [-tenant 租户] [-dry-run] <轮次ID>` 撤销这一轮及之后各轮用编码工具改过的文件，对话退回上一轮；观测台对话里每条消息下的“撤销到这一轮之前”是同一功能，见 [Day 29 实践](docs/day-29/day-29-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。

@@ -64,7 +64,7 @@ Skills：按需补充某类任务的做事方法
 | 7 | [MCP 工具协议](07-mcp.md) | 工具服务如何被发现、接入和调用 |
 | 8 | [Skills 知识与流程](08-skills.md) | 把做事方法按需加载给模型 |
 | 9 | [运行时与可靠性](09-runtime-reliability.md) | 预算、重试、熔断、超时和取消 |
-| 10 | [持久化与恢复](10-checkpoints-and-recovery.md) | 检查点、写前日志与崩溃窗口 |
+| 10 | [持久化与恢复](10-checkpoints-and-recovery.md) | 检查点、写前日志与崩溃窗口；文件快照与按轮撤销 |
 | 11 | [任务调度](11-task-scheduling.md) | 队列、并发上限、幂等与投递语义 |
 | 12 | [子 Agent](12-subagents.md) | 上下文隔离、委派与结果汇总 |
 | 13 | [浏览器与代码执行](13-browser-and-execution.md) | 让模型读取页面、运行受限代码 |

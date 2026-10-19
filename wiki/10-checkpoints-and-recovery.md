@@ -15,6 +15,7 @@
 | Atomic write | 读者看到完整旧状态或完整新状态 |
 | Lock | 防止两个执行者同时修改或恢复同一任务 |
 | Idempotency | 重复提交同一业务操作，效果不重复产生 |
+| 文件快照 | 改文件之前先存一份旧内容，之后可以按轮撤销 |
 
 ## 检查点需要保存什么
 
@@ -80,6 +81,14 @@
 已完成任务再次被领取，直接返回已保存结果，而不是重新调用模型。这样节省成本，也避免重复副作用。
 
 但同一个任务 ID 配了不同内容时不能静默返回旧答案。应检查身份与参数是否一致，更多说明见 [任务调度](11-task-scheduling.md)。
+
+## 文件也要能退回去
+
+检查点恢复的是 agent 自己的进度，编码 agent 还会改用户的文件。改坏了，用户想要的是“撤销刚才那一轮”，git 做不到这个粒度：工作区里还混着用户没提交的修改，而且对话不会跟着退。
+
+做法和写前日志同源：改一个文件之前，先把它当时的内容存好，再写入。撤销某一轮时，这一轮及之后各轮改过的文件放回原样，对话也接回上一轮的检查点。文件和对话一起退，模型看到的历史和磁盘上的文件才是同一个时刻。
+
+快照只认得 harness 自己的文件工具。shell 命令、人手动的修改不在里面；远程副作用（推送、调接口）任何回退都撤不回，只能靠执行前的审批。
 
 ## 技术展开
 
@@ -190,6 +199,23 @@ func atomicWrite(path string, data []byte) error {
 
 常见更强办法是给每次执行权一个递增 fencing token，由结果接收端拒绝旧 token。它不是“多加一个时间戳”，必须实际参与写入校验。
 
+### 文件快照：按轮合并与冲突核对
+
+一个文件在一轮里改多次，撤销只需要两个值：第一次改之前的内容（要恢复成它），最后一次改之后的哈希（用来核对）。撤销跨几轮时按文件合并：取最早的“之前”、最晚的“之后”。
+
+```text
+当前内容 == 最晚的“之后”  → 恢复
+当前内容 == 最早的“之前”  → 已经恢复过，跳过（让撤销可以安全重做）
+两者都不是                → 冲突：之后被别人改过，整次撤销都不做
+```
+
+几个窗口与取舍：
+
+- **先存快照再写**。反过来时，崩溃在“写完、未存”之间的改动就再也撤不回。快照存不下就不写。
+- **写入中途崩溃**。清单里“之前”已存、“之后”未确认；撤销时照样恢复，但不核对这一项。
+- **全有或全无**。有一个冲突就一个文件也不动，最后才标记“已撤销”；中途失败可以重做。
+- **逐文件还是整个工作树**。逐文件快照只覆盖文件工具，不误伤人的修改；整个工作树快照（如 git 的无分支提交）覆盖 shell 改动，但每轮扫描整个仓库，恢复时会连带抹掉人在这段时间里的修改。Claude Code 选了前者；Codex 曾实现后者，后来移除。
+
 ### 对照已有实现
 
 [Checkpoint.write、LockCheckpoint、resumeContext](../internal/agent/checkpoint.go)提供临时文件替换、flock 和未确认调用恢复；[Run 与 replayBatch](../internal/agent/react.go)以执行边界保存消息，恢复可重复调用或回填未知。
@@ -197,6 +223,8 @@ func atomicWrite(path string, data []byte) error {
 当前写入没有文件/目录 fsync、状态版本迁移或分布式 fencing；模型请求计费也不是独立耐久账本。上述更强写入和状态结构是学习用设计，不作为当前实现保证。
 
 D20 起缩小了“结果未知”的范围：每项调用一结束就写 `.calls/` 下的结果日志（[writeJournal](../internal/agent/approval.go)），续跑时 [replayBatch](../internal/agent/react.go) 按“日志里有 → 取回；可重复 → 重做；其余 → 问人要不要重做，拒绝或没人答就回填未知”处理。私有数据来源、动作窗口与无进展计数也存进检查点，换进程不清零。多租户补充后检查点放在租户目录下（[checkpointDir](../internal/agent/checkpoint.go)），别的租户用同一个任务ID续跑找不到它。细节见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#结果日志与做完没有)。
+
+D29 的文件快照按轮放在检查点旁边（[snapshot](../internal/workspace/snapshot.go)），只覆盖 `edit_file`、`write_file`；[Rewind](../internal/agent/rewind.go) 沿续接链找到之后各轮、加锁、核对冲突、先写审计再恢复，被撤销的轮次留作记录，不能续跑或接着聊。子 agent 的改动记在派出它的那一轮。bash 的改动、单独退文件或对话、快照的保留期限都还没有做。
 
 ### 进阶推演
 
@@ -221,6 +249,9 @@ D20 起缩小了“结果未知”的范围：每项调用一结束就写 `.call
 4. 把有副作用的工具误标为可重复，或者检查点只存 View，续跑会怎样？  
    前者会让程序替模型把副作用再做一遍；后者能保证下一步输入相同，但不保证之后的压缩与不中断时一致。详见 [Q13](../docs/deep-questions.md#q13)、[Q14](../docs/deep-questions.md#q14)。
 
+5. 撤销一轮之前，发现某个文件既不是 agent 最后写入的版本、也不是原来的版本，应该怎么办？  
+   说明之后有别人改过它。整次撤销都不做，把冲突交给人处理；覆盖它会丢掉别人的修改。
+
 ## 延伸阅读
 
 - Temporal，[The definitive guide to Durable Execution](https://temporal.io/blog/what-is-durable-execution)：“持久化执行”的思路：每一步落盘、崩溃后从断点继续，和检查点同源。
@@ -228,7 +259,8 @@ D20 起缩小了“结果未知”的范围：每项调用一结束就写 `.call
 - Brandur Leach，[Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency)（Stripe，2017）：幂等键怎样让“结果未知”的请求可以安全重试。
 - Martin Kleppmann，[How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)（2016）：锁会过期，为什么需要 fencing token。
 - Dan Luu，[Files are hard](https://danluu.com/file-consistency/)：fsync、rename 与文件系统真实的一致性保证。
+- Claude Code 文档，[Checkpointing](https://code.claude.com/docs/en/checkpointing)：按提示词自动快照、代码与对话分别回退，以及 Bash 改动不跟踪等限制。
 
-本项目课程：[Day 9 笔记](../docs/day-09/day-09-notes.md) · [Day 9 动手](../docs/day-09/day-09-lab.md)
+本项目课程：[Day 9 笔记](../docs/day-09/day-09-notes.md) · [Day 9 动手](../docs/day-09/day-09-lab.md) · [Day 29 笔记](../docs/day-29/day-29-notes.md) · [Day 29 动手](../docs/day-29/day-29-lab.md)
 
 [上一篇：运行时与可靠性](09-runtime-reliability.md) · [下一篇：任务调度](11-task-scheduling.md) · [术语表](TERMS.md)

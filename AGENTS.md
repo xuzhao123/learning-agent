@@ -35,12 +35,13 @@
 - 续聊每轮用新的检查点ID，以 `continues` 串成续接链，旧检查点不覆盖；`spawn_agent(task_id)` 只接受续接链上派出的子任务。浏览器与沙箱代理的出口判断共用 `internal/netguard`。
 - Day 15 指标的结局、耗时与成本以检查点为准，trace 只用于工具层归因；`go run . metrics` 只读 `.data/`，不请求模型。完成率不等于答对率，答对率要等 D16 的评测集与打分。
 - Day 16–17 评测集放 `eval/cases.jsonl`（提交，属于任务输入）：固定题目、参考答案与打分器，不写死模型回答或工具顺序；运行记录、人工归因备注与回放放 `.data/eval/`，不提交。打分先用确定性检查，开放题由与被测模型不同的供应商（默认 DeepSeek）三票评审；每个试次是一个新任务，经 `agent.RunChild` 执行，过程取自 B0 协议事件，结局与用量以检查点为准。留出题调试时不跑。回放验证从检查点分叉（`agent.ForkCheckpoint`），不改原检查点。观测台的“评测与归因”页面与 `go run . eval` 读写同一份记录，每个试次在观测台里是一条可打开的对话。对话的“归因”按钮：诊断读观测台重建的完整轨迹与当时的工具列表（不许编造轨迹外的事实），写评分标准并给出初判；失败时从那次决定的请求快照分叉（`agent.ForkSnapshot`），以“纠正 3 次 + 安慰剂 3 次”回放验证，结论以回放为准。
-- 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP），`go run . queue` 是任务队列，`go run . metrics` 统计指标，`go run . eval` 跑评测与归因，`go run . audit` 查看并校验审计日志。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
+- 单一入口：`go run .` 是 agent，`go run . observe` 是观测台（含内置 MCP），`go run . queue` 是任务队列，`go run . metrics` 统计指标，`go run . eval` 跑评测与归因，`go run . audit` 查看并校验审计日志，`go run . rewind` 按轮撤销文件改动。代码按功能放在 `internal/` 对应的包里，新功能沿用这个划分，不再新建独立 go.mod。
 - Day 22 起（harness 阶段）：编码工具直接读写用户指定的真实仓库目录（工作区可写），bash 仍在沙箱内，只把该目录挂载为可写；写入受统一权限策略约束，回退靠文件快照。目标仓库自带的测试与任务里的校验命令属于任务输入和打分器（同 `eval/cases.jsonl`），本项目仍不编写 `*_test.go`。新增模型协议须有对应供应商密钥（只放 `.env` 或环境变量），没有就不接，也不模拟。
 - 观测台设置（D23 后用户要求）：工具常驻，由 `.data/settings.json`（不提交）按 内置默认 › 平台 › 个人 合并，租户策略与本机条件只会关掉工具；对话只选模型和工作区，开始时把设置拍成快照写进 start 事件，续聊照快照启动。工作区只能由平台账号登记本机 git 仓库，对话按名字选，租户须明确开通 `workspace`。实验入口不受设置影响。
 - Day 24 提示词组装：有工作区时根目录 AGENTS.md（无则 CLAUDE.md）进系统提示词；环境信息与运行中的变化都以 `<system-reminder>` 用户消息追加在末尾，不改写已发出的内容；提醒不是用户原话，记忆与压缩保留区用 `llm.FromUser` 排除。验证用的子目录 AGENTS.md 只在临时 worktree 里创建。
 - Day 25 统一权限：每次工具调用先过允许列表，再按用户规则（deny › ask › allow，`-allow/-ask/-deny` 或观测台设置）与权限模式（`-permission-mode` plan/ask/edit/full，默认 edit）决定，询问与 D20 高风险确认走同一条 `tool/requestApproval`；D20 风险规则在任何模式下都照常。有工作区且启用 bash 时，沙箱 `/workspace` 挂工作区（plan 只读），`.git` 只读、`.env` 换空、`.data` 换空目录，本对话目录挂 `/scratch`，Go 工具链与模块缓存只读挂入、编译缓存按租户单独存放。验证在临时 clone/worktree 中进行，用完删除。
 - Day 26 Hooks 与斜杠命令：hooks 配置沿用 Claude Code 格式，只来自 `-hooks`（用户）或观测台平台设置（个人层不能改），不读工作区里的配置；hook 命令在宿主机运行，只给最少的环境变量，拦截写审计。`hooks/` 与 `commands/`、`.agents/commands/` 只放本仓库真实使用的；验证用的临时 hook 只用命令行传入。斜杠命令只是提示词模板，不执行命令。
+- Day 29 文件快照：只覆盖 edit_file、write_file，写入前存快照，存不下就不写；快照按轮放在 `.data/checkpoints/<轮次ID>.files/`（不提交），子 agent 的改动记在派出它的那一轮。撤销沿续接链撤销这一轮及之后各轮，文件与对话一起退；有冲突（最后一次写入后又被改过）整次不做；被撤销的轮次保留记录、不能续跑或接着聊。撤销是人的动作：命令行或观测台按钮，先写审计。验证在临时 clone 中进行，用完删除。
 - 导入其他 agent 的对话（用户要求）：观测台“导入对话”只接受 Codex 的 rollout 与 Claude Code 的会话 JSONL，转成同一种存档放进当前租户的 runs 目录，只读、不续聊、不提交；解析在 `internal/transcript`。验证只用真实的会话文件，不手写或生成假记录；用户提供的原始文件不放进 docs。
 - Day 27 规划与自用：不做上下文内的 todo 工具（D37 用消融决定）；计划模式沿用 D25 的 plan 权限，批准由人在下一轮切到 edit。自用在常驻 `test` 账号下、`.data/selfuse/` 里的 `git clone --local` 中进行；harness 的改动先人工 review、在沙箱外用真实模型验证，再合回主仓库，验收后删除 clone 与临时检查点。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。

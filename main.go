@@ -42,7 +42,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；go run . eval 跑 D16 评测与 D17 归因；go run . audit 查看并校验 D21 审计日志；其余用法都是 agent 本身。
+// 唯一入口：go run . observe 启动观测台（含内置远程 MCP）；go run . queue 运行任务队列；go run . metrics 统计 D15 指标；go run . eval 跑 D16 评测与 D17 归因；go run . audit 查看并校验 D21 审计日志；go run . rewind 按轮撤销 D29 的文件改动；其余用法都是 agent 本身。
 func main() {
 	run := run
 	if len(os.Args) > 1 && os.Args[1] == "observe" {
@@ -66,6 +66,14 @@ func main() {
 	// D21：列出并校验审计日志；只读 .data/audit，不请求模型。
 	if len(os.Args) > 1 && os.Args[1] == "audit" {
 		if err := audit.Run(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// D29：撤销某一轮及之后各轮改过的文件（观测台的“撤销”按钮也走这里）；不请求模型。
+	if len(os.Args) > 1 && os.Args[1] == "rewind" {
+		if err := agent.RewindCommand(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 			os.Exit(1)
 		}
@@ -176,6 +184,9 @@ func run() error {
 		}
 		if !agent.Resumable(cp) {
 			return fmt.Errorf("任务 %s 因 %s 停止，续跑结果也一样；要重做请换一个任务ID", cp.ID, cp.Reason)
+		}
+		if agent.Rewound(cp.ID) {
+			return fmt.Errorf("任务 %s 这一轮已经撤销，不能续跑", cp.ID)
 		}
 		// 用首次启动的参数重新解析：工具开关、预算、超时都和中断前一致。通信方式以本次命令行为准。
 		wantAppServer := *appServer
@@ -616,6 +627,9 @@ func run() error {
 		if _, err := agent.LoadCheckpoint(agent.Continues); err != nil || history == nil {
 			return fmt.Errorf("continues 需要配合续聊上下文，且上一轮的检查点 %s 要存在", agent.Continues)
 		}
+		if agent.Rewound(agent.Continues) {
+			return fmt.Errorf("%s 这一轮已经撤销，请接着它之前的一轮聊", agent.Continues)
+		}
 	}
 	unlock, err := agent.LockCheckpoint(agent.CheckpointID)
 	if err != nil {
@@ -631,6 +645,15 @@ func run() error {
 		return fmt.Errorf("任务ID %s 已有检查点：续跑用 -resume %s，重做请换一个ID", agent.CheckpointID, agent.CheckpointID)
 	}
 	llm.TaskID = agent.CheckpointID
+	if workspace.Dir != "" {
+		// D29：改文件之前的快照按轮存放。子 agent 继承父进程的环境变量，它的改动记在派出它的那一轮里。
+		turn := os.Getenv("AGENT_FILES_TURN")
+		if turn == "" || !agent.ValidID(turn) {
+			turn = agent.CheckpointID
+			os.Setenv("AGENT_FILES_TURN", turn)
+		}
+		workspace.SnapshotDir, workspace.SnapshotTask = agent.SnapshotDir(turn), agent.CheckpointID
+	}
 	if browser.Enabled {
 		browser.FrameDir = tenant.Here("browser", agent.CheckpointID)
 	}
