@@ -37,6 +37,7 @@ import (
 	"learning-agent/internal/telemetry"
 	"learning-agent/internal/tenant"
 	"learning-agent/internal/tools"
+	"learning-agent/internal/websearch"
 	"learning-agent/internal/workspace"
 
 	"go.opentelemetry.io/otel/trace"
@@ -149,6 +150,7 @@ func run() error {
 	taskID := flag.String("task-id", "", "Day 9：检查点ID（字母、数字和 ._-）；不给则生成随机 UUID")
 	resume := flag.String("resume", "", "Day 9：从这个ID的检查点续跑；配置取自检查点，须单独使用")
 	flag.BoolVar(&browser.Enabled, "browser", false, "Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料（CHROME_PATH 可指定浏览器）")
+	flag.BoolVar(&websearch.Enabled, "ds-search", false, "增加 ds_search 与 ds_fetch，用 DeepSeek 的搜索与抓取 API 查资料（读取 DEEPSEEK_API_KEY）")
 	flag.BoolVar(&sandbox.Enabled, "bash", false, "Day 12：增加 bash 与 request_network_access，在 bubblewrap 沙箱里执行命令（仅 Linux）")
 	flag.BoolVar(&sandbox.ProjectRO, "bash-project-ro", false, "配合 -bash：把项目目录只读挂到 /project（.env、.data、.git 除外）")
 	var netAllow stringList
@@ -310,8 +312,8 @@ func run() error {
 	}
 	if tools.SecurityLabEnabled {
 		// 对照实验也只允许读固定样本、做数学运算；不给私有资料、外网或写入能力。
-		if *contextLab || *ragLab || tools.LabEnabled || retrieval.Enabled || *searchQuery != "" || *memoryEnabled || *memoryForget != "" || *memorySearch != "" || skills.Enabled || len(mcpCommands) > 0 || *subagents || browser.Enabled || sandbox.Enabled || *workspaceDir != "" || *historyStdin || history != nil || agent.Continues != "" {
-			return errors.New("security-lab 不与其他实验、检索、记忆、MCP、Skills、子 agent、浏览器、Bash、工作区或续聊组合")
+		if *contextLab || *ragLab || tools.LabEnabled || retrieval.Enabled || *searchQuery != "" || *memoryEnabled || *memoryForget != "" || *memorySearch != "" || skills.Enabled || len(mcpCommands) > 0 || *subagents || browser.Enabled || websearch.Enabled || sandbox.Enabled || *workspaceDir != "" || *historyStdin || history != nil || agent.Continues != "" {
+			return errors.New("security-lab 不与其他实验、检索、记忆、MCP、Skills、子 agent、浏览器、网页搜索、Bash、工作区或续聊组合")
 		}
 		agent.LabelToolData = *securityProtection
 	}
@@ -338,8 +340,8 @@ func run() error {
 	if (len(mcpCommands) > 0 || skills.Enabled) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
 		return errors.New("mcp-server与skills用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
-	if (*taskID != "" || *subagents || browser.Enabled || *timeout != 0) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
-		return errors.New("task-id、subagents、browser与timeout用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
+	if (*taskID != "" || *subagents || browser.Enabled || websearch.Enabled || *timeout != 0) && (*contextLab || *ragLab || *searchQuery != "" || *memoryForget != "" || *memorySearch != "") {
+		return errors.New("task-id、subagents、browser、ds-search与timeout用于普通问答与续聊，不与实验、search-docs、memory-search或memory-forget组合")
 	}
 	if *timeout < 0 || agent.ToolTimeout <= 0 || agent.SubagentSteps < 1 || agent.SubagentSteps > 20 {
 		return errors.New("timeout不能为负，tool-timeout须大于0，subagent-steps范围为1到20")
@@ -471,6 +473,9 @@ func run() error {
 		llm.Tools = append(llm.Tools, browser.Definitions...)
 		defer browser.Close()
 	}
+	if websearch.Enabled {
+		llm.Tools = append(llm.Tools, websearch.Definitions...)
+	}
 	if (sandbox.ProjectRO || len(netAllow) > 0) && !sandbox.Enabled {
 		return errors.New("bash-project-ro与net-allow需要配合-bash")
 	}
@@ -587,7 +592,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "provider": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "ds-search": true, "provider": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {
@@ -663,6 +668,13 @@ func run() error {
 	sandbox.Dir = tenant.Here("sandbox", first)
 	if sandbox.Enabled {
 		sandboxID = first
+	}
+	// D30：过长的工具输出存进本对话的目录，模型用 read_output 读回。工具从第一次请求就提供，
+	// 不在中途加：工具列表是请求前缀的一部分，中途变化会让之前的提示词缓存全部失效。
+	// D18 实验的工具范围是固定的，不加。
+	if !tools.SecurityLabEnabled {
+		agent.OutputDir = tenant.Here("outputs", first)
+		llm.Tools = append(llm.Tools, agent.ReadOutputDefinition)
 	}
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	hooks.Session = first

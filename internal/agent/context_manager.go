@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -18,6 +19,9 @@ import (
 )
 
 const compactInstruction = "[上下文压缩请求]"
+
+// 视图里存成文件的工具结果（见 outputs.go）；清理旧结果时把名字留在占位里，模型之后还能读回来。
+var savedName = regexp.MustCompile(`"saved_output":"([A-Za-z0-9_-]+)"`)
 
 var errContextPrepare = errors.New("上下文准备失败")
 
@@ -47,10 +51,13 @@ type Context struct {
 	tailStart, summaryAt   int
 	stepsSinceCompact      int
 	forceFull              bool
+	// D30：已经提醒过模型的用量档位（50、75）；压缩后用量回落，清零重新计。
+	announced int
 }
 
 func NewContext(system func() string, options ContextOptions, withTools bool) *Context {
 	c := &Context{options: options, system: system, withTools: withTools, tailStart: 1, summaryAt: -1}
+	outputBudget = options.ToolOutput
 	c.Append(llm.Message{Role: "system", Content: system()})
 	return c
 }
@@ -109,15 +116,20 @@ func rebuildContext(history HistoryInput, options ContextOptions) *Context {
 	return c
 }
 
-// 同一条工具结果只在首次进入View时截断；完整原文不受影响，之后追加不改写已有前缀。
+// 同一条工具结果只在首次进入View时处理；完整原文不受影响，之后追加不改写已有前缀。
+// D30：超过上限的结果先存成文件、视图里放开头结尾和文件名（见 outputs.go）；存不了（实验、不是 JSON）才截掉中间。
 func (c *Context) Append(m llm.Message) {
 	m.ToolCalls = append([]llm.ToolCall(nil), m.ToolCalls...)
 	c.Transcript = append(c.Transcript, m)
 	view := m
 	view.ToolCalls = append([]llm.ToolCall(nil), m.ToolCalls...)
 	if m.Role == "tool" && llm.TextTokens(m.Content) > c.options.ToolOutput {
-		view.Content = shorten(m.Content, c.options.ToolOutput, "中间省略%d字，模型无法再读取这部分")
-		fmt.Printf("Truncate: tool_call_id=%s original_chars=%d view_tokens=%d\n", m.ToolCallID, utf8.RuneCountInString(m.Content), llm.TextTokens(view.Content))
+		if saved, ok := saveOutput(m.Content, c.options.ToolOutput); ok {
+			view.Content = saved
+		} else {
+			view.Content = shorten(m.Content, c.options.ToolOutput, "中间省略%d字，模型无法再读取这部分")
+			fmt.Printf("Truncate: tool_call_id=%s original_chars=%d view_tokens=%d\n", m.ToolCallID, utf8.RuneCountInString(m.Content), llm.TextTokens(view.Content))
+		}
 	}
 	c.View = append(c.View, view)
 	c.origins = append(c.origins, len(c.Transcript)-1)
@@ -180,6 +192,7 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 	}
 	fmt.Printf("Context: used=%d(%s) cap=%d trigger=%d %s action=%s\n", before, source, cap, cap*9/10, c.parts(), action)
 	if action == "none" {
+		c.remindUsage(before, cap)
 		return nil
 	}
 	// D13：压缩单独一个 span；摘要请求（purpose=compact 的 chat span）挂在它下面。
@@ -230,6 +243,9 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 			}
 			chars := utf8.RuneCountInString(c.Transcript[c.origins[i]].Content)
 			placeholder := fmt.Sprintf("[较早的工具结果已清理：%s，原%d字]", names[clean[i].ToolCallID], chars)
+			if m := savedName.FindStringSubmatch(clean[i].Content); m != nil {
+				placeholder = fmt.Sprintf("[较早的工具结果已清理：%s，原%d字；完整内容可用 read_output 读取，name=%s]", names[clean[i].ToolCallID], chars, m[1])
+			}
 			if llm.TextTokens(placeholder) >= llm.TextTokens(clean[i].Content) {
 				continue // 本来就短的结果不替换，替换反而更长。
 			}
@@ -325,9 +341,29 @@ func (c *Context) finishCompact(before, cleared, summarized, kept, retries int) 
 	c.LastUsage, c.UsageAt, c.forceFull = 0, 0, false
 	c.stepsSinceCompact = 0
 	c.CompactCount++
+	// D30：告诉模型刚压缩过。不说的话，它以为之前读过的内容还在，找不到时只能猜；说了它才知道该重读，而且有 read_output 可用。
+	c.announced = 0
+	c.Append(llm.Reminder("[上下文已压缩] 较早的工具结果或对话已经清理或换成摘要，原文不在上下文里了。需要其中的细节时重新读取；工具结果里有 saved_output 的，用 read_output 读。"))
 	// 摘要会把子目录项目指令的提醒并进去，原文不在视图里了；按新视图重新标记，之后用到那个目录时再发一次原文。
 	workspace.Prime(c.reminders())
 	fmt.Printf("Compact: before=%d after=%d cleared_tools=%d summarized=%dmsgs kept_groups=%d kept_user=%d retries=%d %s\n", before, llm.ContextTokens(c.View, c.withTools), cleared, summarized, kept, max(0, c.summaryAt-1), retries, c.parts())
+}
+
+// D30：用量越过 50%、75% 时各提醒模型一次。到 90% 会自动压缩，模型提前知道，就会少整份读大文件、多用分页和搜索。
+// 只在越过档位时发，不是每次请求都发：每条提醒都会留在上下文里，次次都发反而占地方。
+func (c *Context) remindUsage(used, capacity int) {
+	level := 0
+	for _, l := range []int{50, 75} {
+		if used*100 >= capacity*l {
+			level = l
+		}
+	}
+	if level <= c.announced {
+		return
+	}
+	c.announced = level
+	c.Append(llm.Reminder(fmt.Sprintf("[上下文用量] 已用约 %d%%（%d / %d token）。到 90%% 会自动压缩，较早的工具结果与对话会换成摘要。读文件尽量用 offset/limit 或 grep 只取需要的部分，不要整份重读。", used*100/capacity, used, capacity)))
+	fmt.Printf("Context reminder: level=%d used=%d cap=%d\n", level, used, capacity)
 }
 
 // reminders 返回视图里 harness 追加的提醒原文（不是用户原话）。

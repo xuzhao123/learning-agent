@@ -27,13 +27,13 @@ import (
 // 新对话开始时把合并结果拍成快照写进 start 事件，续聊沿用快照，之后改设置不影响已经开始的对话。
 // 文件放 .data/settings.json（不提交）。
 
-// 工具开关：设置键 → 租户策略里的功能名。编码工具要求租户明确开通 workspace（工作区是本机目录，不随“全部功能”默认放行）。
-var toolFeatures = map[string]string{"rag": "rag", "memory": "memory", "skills": "skills", "mcp": "mcp", "subagents": "subagents", "bash": "bash", "browser": "browser", "coding": "workspace"}
-var toolOrder = []string{"rag", "memory", "skills", "mcp", "subagents", "bash", "browser", "coding"}
+// 工具开关：设置键 → 租户策略里的功能名。DeepSeek 搜索和浏览器一样是上网查资料，共用 browser 功能。编码工具要求租户明确开通 workspace（工作区是本机目录，不随“全部功能”默认放行）。
+var toolFeatures = map[string]string{"rag": "rag", "memory": "memory", "skills": "skills", "mcp": "mcp", "subagents": "subagents", "bash": "bash", "browser": "browser", "ds_search": "browser", "coding": "workspace"}
+var toolOrder = []string{"rag", "memory", "skills", "mcp", "subagents", "bash", "browser", "ds_search", "coding"}
 
 // 检索和记忆默认关：检索的系统提示词是为知识库问答写的，会要求每个知识问题先查资料；记忆每次新对话都要多发几次模型请求做召回。
 var builtin = map[string]string{
-	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "bash": "on", "browser": "on", "coding": "on",
+	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "bash": "on", "browser": "on", "ds_search": "on", "coding": "on",
 	"embedding": "ark", "memory_ttl": "", "provider": "ark", "workspace": "",
 	"max_steps": "0", "context_window": "262144", "tool_output": "4000",
 	"permission_mode": "edit", "permission_rules": "",
@@ -188,6 +188,10 @@ func (s *server) unavailable(key string, skills []string, servers []mcpServer) s
 			}
 		}
 		return "没有找到 Chrome：在启动观测台的环境里设置 CHROME_PATH"
+	case "ds_search":
+		if _, err := llm.LoadConfig("deepseek"); err != nil {
+			return "没有 DeepSeek 密钥：在 .env 或环境变量里配置 DEEPSEEK_API_KEY"
+		}
 	case "skills":
 		if len(skills) == 0 {
 			return "Skills 中心里没有启用的 skill"

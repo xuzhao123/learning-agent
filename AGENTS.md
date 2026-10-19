@@ -27,6 +27,7 @@
 - Day 8 按用户任务在 `-lab-tools` 中增加 `slow_job`（真实等待、响应取消），用于观察超时、取消与续跑；不模拟模型输出。错误是否可重试由工具封装用 `llm.Permanent` 标记，执行器不解析错误文本。
 - Day 9–10 检查点与队列日志放 `.data/checkpoints/`，不提交；任务队列与子 agent 都通过 `agent.RunChild` 为每个任务启动一个 agent 子进程（一个进程只跑一个任务），不在同一进程里并发运行多个 agent。示例任务放 `queue/tasks.jsonl`。
 - Day 11 浏览器用 chromedp，只做读取型工具（web_search、open_page），每次调用一个标签页；不伪装 User-Agent、不绕过验证码；画面写到 `.data/browser/<任务ID>/<调用ID>.jpg`，观测台只读这些文件。`CHROME_PATH`、`CHROME_NO_SANDBOX` 只从环境变量读取。
+- DeepSeek 搜索（用户要求）：`-ds-search` 增加 ds_search、ds_fetch，直接调 DeepSeek Search/Fetch API（`internal/websearch`），与浏览器工具并存、不替换；密钥沿用 `DEEPSEEK_API_KEY`，观测台设置项 `ds_search` 与浏览器共用租户功能 `browser`；外发确认与 WebSearch/WebFetch 权限规则同浏览器工具。
 - 模型路由只做手动选择：路由表在 `llm.Providers`（方舟、DeepSeek，均为 OpenAI 兼容接口），`-provider` 选择；观测台按 agent 在 `X-Agent-Upstream` 里声明的地址转发，不复制路由表。各家密钥只放 `.env` 或环境变量。
 - Day 12 沙箱用 bubblewrap + seccomp（纯 Go 生成 BPF）+ systemd-run cgroup，不用 Docker；每次 bash 调用一个新沙箱，工作目录按对话 `.data/sandbox/<对话第一轮的检查点ID>`（续聊、续跑共用，子 agent 与回放分叉各自一个）；观测台可上传、预览、下载其中的文件，只经 `os.Root` 访问、按附件下载；默认断网，联网只经 agent 内的白名单代理，白名单只能由用户（`-net-allow` 或观测台审批）添加。安全验证用真实模型执行检查命令，不写测试文件。
 - Day 13 调用链用 OpenTelemetry Go SDK（版本须兼容 go.mod 的 Go 版本），属性按 GenAI 语义约定；每次交互一个 trace，同一对话用 gen_ai.conversation.id 归组；跨进程用 TRACEPARENT、traceparent 头与 MCP _meta。span 写 `.data/traces/<trace_id>.jsonl`，不提交；外部平台只通过 OTEL_* 环境变量接入；提示词与工具内容默认不采集。指标从 span 汇总，不引入 Prometheus。
@@ -42,6 +43,7 @@
 - Day 25 统一权限：每次工具调用先过允许列表，再按用户规则（deny › ask › allow，`-allow/-ask/-deny` 或观测台设置）与权限模式（`-permission-mode` plan/ask/edit/full，默认 edit）决定，询问与 D20 高风险确认走同一条 `tool/requestApproval`；D20 风险规则在任何模式下都照常。有工作区且启用 bash 时，沙箱 `/workspace` 挂工作区（plan 只读），`.git` 只读、`.env` 换空、`.data` 换空目录，本对话目录挂 `/scratch`，Go 工具链与模块缓存只读挂入、编译缓存按租户单独存放。验证在临时 clone/worktree 中进行，用完删除。
 - Day 26 Hooks 与斜杠命令：hooks 配置沿用 Claude Code 格式，只来自 `-hooks`（用户）或观测台平台设置（个人层不能改），不读工作区里的配置；hook 命令在宿主机运行，只给最少的环境变量，拦截写审计。`hooks/` 与 `commands/`、`.agents/commands/` 只放本仓库真实使用的；验证用的临时 hook 只用命令行传入。斜杠命令只是提示词模板，不执行命令。
 - Day 29 文件快照：只覆盖 edit_file、write_file，写入前存快照，存不下就不写；快照按轮放在 `.data/checkpoints/<轮次ID>.files/`（不提交），子 agent 的改动记在派出它的那一轮。撤销沿续接链撤销这一轮及之后各轮，文件与对话一起退；有冲突（最后一次写入后又被改过）整次不做；被撤销的轮次保留记录、不能续跑或接着聊。撤销是人的动作：命令行或观测台按钮，先写审计。验证在临时 clone 中进行，用完删除。
+- Day 30 上下文预算：不接分词器，计数沿用服务端用量 + 增量粗估，改动前先用 `.data/` 存档实测；过长工具输出存进 `.data/outputs/<对话第一轮ID>/`（不提交），模型用 `read_output` 读回，工具从第一次请求就提供、不在中途改工具列表；用量提醒只在越过档位与压缩后发，以 `<system-reminder>` 追加；缓存过期只做观测，不提前压缩。
 - 导入其他 agent 的对话（用户要求）：观测台“导入对话”只接受 Codex 的 rollout 与 Claude Code 的会话 JSONL，转成同一种存档放进当前租户的 runs 目录，只读、不续聊、不提交；解析在 `internal/transcript`。验证只用真实的会话文件，不手写或生成假记录；用户提供的原始文件不放进 docs。
 - Day 27 规划与自用：不做上下文内的 todo 工具（D37 用消融决定）；计划模式沿用 D25 的 plan 权限，批准由人在下一轮切到 edit。自用在常驻 `test` 账号下、`.data/selfuse/` 里的 `git clone --local` 中进行；harness 的改动先人工 review、在沙箱外用真实模型验证，再合回主仓库，验收后删除 clone 与临时检查点。
 - 避免为了生产系统、测试注入或未来需求增加接口、通用配置、复杂分层和大量防御性代码。

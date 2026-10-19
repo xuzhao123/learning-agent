@@ -245,7 +245,7 @@ func (s *server) evalAttach(evalID string) eval.Attach {
 			provider = c.Args[i+1]
 		}
 		args := c.ArmArgs(t.Arm)
-		r.add(event{Kind: "start", Text: c.Question, Eval: label, Subagents: slices.Contains(args, "-subagents"), Browser: slices.Contains(args, "-browser"),
+		r.add(event{Kind: "start", Text: c.Question, Eval: label, Subagents: slices.Contains(args, "-subagents"), Browser: slices.Contains(args, "-browser"), DSSearch: slices.Contains(args, "-ds-search"),
 			Bash: slices.Contains(args, "-bash"), Provider: provider, Embedding: "ark", Trace: span.SpanContext().TraceID().String(), Protocol: true})
 		out := &lines{r: r}
 		child := agent.ChildIO{Out: out, Notify: r.handle, Env: []string{"LLM_API_URL=http://" + s.addr + "/llm/" + id, "AGENT_CONVERSATION_ID=" + id, "AGENT_PROXY_TOKEN=" + r.token}}

@@ -63,9 +63,9 @@ func subject(name, arguments string) (category, value string) {
 		return "Edit", clean(args.Path)
 	case "read_file", "glob", "grep":
 		return "Read", clean(args.Path)
-	case "open_page":
+	case "open_page", "ds_fetch":
 		return "WebFetch", "domain:" + host(args.URL)
-	case "web_search":
+	case "web_search", "ds_search":
 		return "WebSearch", args.Query
 	}
 	return name, ""

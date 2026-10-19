@@ -215,7 +215,32 @@ Termination: max_steps
 - SSRF：Day 12 起，除了打开前检查起始地址，还用 CDP Fetch 拦截标签页的每个请求（跳转、子资源），解析到内网就让请求失败（见 [Day 12 项目实践](../day-12/day-12-lab.md) 3.6）。仍挡不住 DNS 重绑定和 WebSocket。
 - 网页内容的提示词注入只靠 system prompt 里的一句规则，没有做检测；Week 3 专门做攻防。
 - 浏览器没有纳入 Bash 沙箱。当前代码默认保留 Chrome 自身沙箱；只有显式设置 `CHROME_NO_SANDBOX=1` 才关闭，关闭后渲染进程与 agent 拥有相同权限。
-- 不伪装 User-Agent、不绕过验证码，所以搜索可能失败；没有接入搜索 API。
+- 不伪装 User-Agent、不绕过验证码，所以搜索可能失败；正式搜索接口见 §5 的 DeepSeek 搜索 API。
 - 去掉 UA 伪装之后的方舟端到端复测（Day 14）：`open_page` 打开 go.dev、pkg.go.dev、GitHub 均正常；`web_search` 每次都报 `Inspected target navigated or closed (-32000)`，是必应页面在无头浏览器里读取时被脚本跳转，提交 `5592b88` 的旧版本同样复现。跳转后的页面也没有结果，D14 起改为在同一标签页再读一次、仍失败就不可重试，不再白白重试 3 次；模型随后改用 `open_page` 打开已知网站。见 [Day 14 实践](../day-14/day-14-lab.md#43-d11-复测web_search-不可用)。
 - 截图只保留每个调用的最后一帧，不保存录像；`.data/browser/` 不会自动清理。
 - 帧率不受控：screencast 每次重绘都会发帧，靠 ack 和文件覆盖控制。
+
+## 5. 补充：DeepSeek 搜索 API
+
+浏览器里的必应搜索被页面跳转阻断（§4），而 DeepSeek 提供了正式的 [Search 与 Fetch API](https://api-docs.deepseek.com/guides/search/)：本机发一次 JSON 请求，搜索与抓取在服务端完成。`-ds-search` 把它们接成两个工具，和 `web_search`、`open_page` 并存，便于对照。
+
+| 工具 | 接口 | 返回给模型 |
+| --- | --- | --- |
+| `ds_search(query, count?)` | `POST /v1/tools/search` | 标题、链接、站点、发布时间、`rerank_score`（0–3，≥1.5 算高质量）、`authority`（0–4，≥3 算权威）、600–800 字的 `summary` |
+| `ds_fetch(url, find?)` | `POST /v1/tools/fetch` | 标题与 Markdown 正文；给 `find` 只留含关键词的段落，正文上限 6000 字 |
+
+读代码：[`internal/websearch/websearch.go`](../../internal/websearch/websearch.go)。值得看的是 `post` 的错误分类：文档规定 408、429、5xx 可以等待重试，其余 4xx 不改参数就不该重试，所以只把后者包成 `llm.Permanent`，执行器照常按 Day 8 的规则处理。搜索结果只保留模型用得上的字段，丢掉给界面用的短 `snippet` 和图标地址。
+
+和浏览器工具的差别：
+
+- 没有本机浏览器，也就没有画面、SSRF 拦截与 Chrome 沙箱的问题；抓取由 DeepSeek 按自己的安全策略决定（拒绝时返回 403）。
+- 搜索词与 URL 发给 DeepSeek 而不是目标网站，所以同样算外发：读过私有数据后要人确认（Day 20），权限规则沿用 `WebSearch(...)`、`WebFetch(domain:...)`（Day 25）。
+- 按成功请求计费（Search 与 Fetch 各 0.75 美元/千次，空结果与失败不计费），账号级限速 Search 100 QPS、Fetch 25 QPS。
+
+动手：
+
+```bash
+go run . -provider deepseek -ds-search -question "DeepSeek 的 Search API 每秒最多能调用多少次？查官方文档并给出来源链接。"
+```
+
+10-19 用 DeepSeek 模型实际运行：模型先 `ds_search`，再对官方页面 `ds_fetch(find=QPS)` 核对，回答 Search 100 QPS、Fetch 25 QPS 并给出中英文官方链接，还指出搜索摘要里“5 次/秒”的说法与原文不符。同一时间方舟返回 HTTP 403，没能用方舟验证。观测台里在设置中打开“DeepSeek 搜索”即可，续聊沿用对话开始时的快照。

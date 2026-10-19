@@ -63,7 +63,7 @@ const (
 	tasksMax    = "64"
 	cpuQuota    = "100%"
 	tmpSize     = "67108864" // /tmp 是内存盘，最多 64MB
-	outputLimit = 8 << 10    // 输出保留开头和结尾各 8KB
+	outputLimit = 128 << 10  // 输出保留开头和结尾各 128KB：过长的结果由上下文存成文件（D30），这里只防内存被撑爆
 )
 
 var Definitions = []map[string]any{

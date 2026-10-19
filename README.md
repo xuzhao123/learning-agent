@@ -45,11 +45,12 @@ go build -o bin/learning-agent .
 | 线上向量模型 | 与方舟共用 `ARK_API_KEY` | `-embedding ark` |
 | 本地向量模型 | 不需要 embedding API 密钥；首次使用会下载模型 | `-embedding local`；聊天请求仍使用选定的线上模型 |
 | 浏览器 | 本机安装 Chrome/Chromium；`CHROME_PATH` 可指定可执行文件 | `-browser`；仅环境变量读取浏览器配置 |
+| DeepSeek 搜索 | 与 DeepSeek 聊天模型共用 `DEEPSEEK_API_KEY`；Search/Fetch 按成功请求计费 | `-ds-search`；与选用哪家聊天模型无关 |
 | Bash 沙箱 | Linux、bubblewrap；cgroup 资源限制依赖 systemd 用户会话 | `-bash`；缺少资源限制时的行为见 [Day 12 实践](docs/day-12/day-12-lab.md) |
 | 观测台登录 | 账号在 `.data/users.json`，用 `go run . observe -add-user` 添加；平台账号与租户账号的区别见 [Day 20 实践](docs/day-20/day-20-lab.md#6-多租户与登录补充) | 没有账号时观测台拒绝启动 |
 | 调用链追踪 | 无需配置，span 写入 `.data/traces/`；`OTEL_EXPORTER_OTLP_ENDPOINT` 另发给 Jaeger 等 OTLP 平台；`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` 采集提示词与工具内容 | 默认只记元数据；接入步骤见 [Day 13 实践](docs/day-13/day-13-lab.md#4-接入外部平台) |
 
-默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器和 Bash 按需开启。
+默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器、DeepSeek 搜索和 Bash 按需开启。
 
 推理强度默认 `high`。API 输出上限默认省略，显式设置 `-max-output-tokens` 才发送；本地上下文规划仍保留输出空间，省略 API 参数不代表无限输出。向量检索直接在 agent 进程内执行。
 
@@ -88,6 +89,7 @@ go build -o bin/learning-agent .
 | Day 27 | 规划与第一次自用 | [笔记](docs/day-27/day-27-notes.md) | [实践](docs/day-27/day-27-lab.md) | — |
 | Day 28 | 第四周复盘 | [笔记](docs/day-28/day-28-notes.md) · [复盘](docs/week-04-review.md) | [实践](docs/day-28/day-28-lab.md) | — |
 | Day 29 | 文件快照与回退 | [笔记](docs/day-29/day-29-notes.md) | [实践](docs/day-29/day-29-lab.md) | — |
+| Day 30 | 上下文预算 | [笔记](docs/day-30/day-30-notes.md) | [实践](docs/day-30/day-30-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -154,7 +156,7 @@ go build -o bin/learning-agent .
 | `-context-window` | 12288 | 配置的总窗口，学习实验值 |
 | `-max-output-tokens` | 0 | 0省略API输出上限；大于0才传max_completion_tokens（含推理） |
 | `-reasoning-reserve` | 1024 | 输入容量额外安全余量 |
-| `-tool-output-tokens` | 2000 | 工具结果进入View时的粗估上限 |
+| `-tool-output-tokens` | 2000 | 工具结果进入View时的粗估上限；超过时完整内容存进 `.data/outputs/`，视图里放预览，模型用 `read_output` 读回（D30） |
 | `-keep-groups` | 2 | 最近组超20%配额或挤占摘要空间时逐步减少，可到0 |
 | `-reasoning-effort` | high | 所有请求统一的推理强度：minimal、low、medium、high |
 | `-context-lab` | false | 33轮召回与约束保留，再运行真实大工具输出实验 |
@@ -198,6 +200,7 @@ go build -o bin/learning-agent .
 | `-bash-project-ro` | false | 配合 `-bash`：项目只读挂到 `/project`（`.env`、`.data`、`.git`、`bin` 除外） |
 | `-net-allow` | 空 | 配合 `-bash`：沙箱可经代理访问的域名（含子域名，可重复），由用户批准后添加 |
 | `-browser` | false | Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料；环境变量 `CHROME_PATH` 指定浏览器，系统不支持 Chrome 沙箱时设 `CHROME_NO_SANDBOX=1` |
+| `-ds-search` | false | 增加 ds_search 与 ds_fetch，调用 DeepSeek 的 Search/Fetch API（服务端执行，没有画面）；子 agent 继承。说明见 [Day 11 实践 §5](docs/day-11/day-11-lab.md#5-补充deepseek-搜索-api) |
 
 </details>
 

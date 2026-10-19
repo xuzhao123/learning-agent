@@ -91,7 +91,8 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .a { margin: 4px 0 8px; }
 /* D29：被撤销的轮次留在对话里，淡化显示 */
 .u.rewound div, .a.rewound { opacity: .45; }
-.utools { display: flex; justify-content: flex-end; margin: -12px 0 8px; }
+.utools { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin: -12px 0 8px; }
+.utools .meta { font-size: 12px; color: var(--faint); }
 .step { margin: 1px 0; font-size: 13px; color: var(--muted); }
 .step > summary { display: flex; align-items: center; gap: 8px; padding: 3px 6px; margin: 0 -6px; border-radius: 6px; list-style: none; cursor: pointer; }
 .step > summary::-webkit-details-marker { display: none; }
@@ -223,6 +224,19 @@ select.pick:disabled { background-image: none; padding-right: 8px; }
 #send svg { width: 16px; height: 16px; stroke-width: 2; }
 #send:disabled { opacity: .2; cursor: default; }
 #send.stop.force { background: var(--err); color: #fff; }
+/* 输入框里发送键左侧的上下文用量环（参考 Codex 客户端）：中性色环，弧长是已用容量，悬浮看数字明细。 */
+#ctx-ring { position: relative; flex: none; display: grid; place-items: center; width: 30px; height: 30px; margin-left: 6px; border-radius: 50%; cursor: default; }
+#ctx-ring:hover { background: var(--hover); }
+#ctx-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); pointer-events: none; }
+#ctx-ring circle { fill: none; stroke-width: 2.6; transition: stroke-width .15s; }
+#ctx-ring .track { stroke: color-mix(in srgb, var(--text) 16%, transparent); }
+#ctx-ring .fill { stroke: var(--text); stroke-linecap: round; transition: stroke-dasharray .35s ease, stroke .2s; }
+#ctx-ring:hover .fill { stroke-width: 3.4; }
+#ctx-ring.warn .fill { stroke: var(--warn); }
+#ctx-ring.bad .fill { stroke: var(--err); }
+#ctx-ring .pct { position: relative; font-size: 9px; font-weight: 500; line-height: 1; color: var(--muted); font-variant-numeric: tabular-nums; pointer-events: none; }
+#ctx-tip { position: fixed; z-index: 60; max-width: 300px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); color: var(--muted); font-size: 12px; line-height: 1.6; pointer-events: none; }
+#ctx-tip b { display: block; margin-bottom: 2px; color: var(--text); font-size: 12.5px; font-weight: 500; }
 
 /* 子 agent：对话流里的卡片 + 右侧面板（参考 Codex 客户端的子任务侧栏） */
 .agent-card { display: flex; align-items: center; gap: 10px; width: 100%; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); text-align: left; }
@@ -557,7 +571,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
         <form id="composer">
           <div id="slash" hidden></div>
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务"></textarea>
-          <div class="crow"><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><button id="send" aria-label="发送"></button></div>
+          <div class="crow"><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><div id="ctx-ring" role="img" aria-label="上下文用量" hidden><svg viewBox="0 0 30 30" aria-hidden="true"><circle class="track" cx="15" cy="15" r="11.5"/><circle class="fill" cx="15" cy="15" r="11.5"/></svg><span class="pct"></span></div><button id="send" aria-label="发送"></button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -588,6 +602,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     </section>
   </div>
 </div>
+<div id="ctx-tip" hidden></div>
 <script>
 const $ = (id) => document.getElementById(id);
 const LAB_TITLE = "Day 3 上下文实验（33轮对话 + 大工具输出）";
@@ -638,6 +653,7 @@ function incomingUsers(messages) {
 const clip = (t, n) => (t = String(t ?? "").replace(/\s+/g, " ")).length > n ? t.slice(0, n) + "…" : t;
 const sec = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms";
 const kfmt = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+const idleText = (ms) => ms < 60e3 ? Math.round(ms / 1e3) + " 秒" : ms < 3600e3 ? Math.round(ms / 60e3) + " 分钟" : ms < 48 * 3600e3 ? (ms / 3600e3).toFixed(1) + " 小时" : Math.round(ms / 86400e3) + " 天";
 function fold(title, value, open) {
   const box = el("details"); box.open = !!open;
   box.append(el("summary", "", title), el("pre", "", pretty(value)));
@@ -721,7 +737,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -736,7 +752,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + endLabel(r) + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; r.source = e.source || ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.dsSearch = !!e.ds_search; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; r.source = e.source || ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.termination = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -766,7 +782,7 @@ function apply(r, e) {
     const opensTurn = !turn || r.turnPending || r.caseStart || (users.length > 0 && lastMain?.turn === turn.n && lastMain.choice && !lastMain.tools.length);
     const userMessage = opensTurn ? (r.pending ? { role: "user", content: r.pending } : users.at(-1)) : null;
     if (opensTurn) {
-      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel, checkpoint: r.checkpoint };
+      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel, checkpoint: r.checkpoint, idle: r.lastReply ? time - r.lastReply : 0 };
       r.turns.push(turn);
     }
     const step = isCompact ? 0 : ++turn.steps;
@@ -799,6 +815,10 @@ function apply(r, e) {
     const m = (c.choice && c.choice.message) || {};
     c.invalidSummary = c.compact && (m.tool_calls || []).length > 0;
     if (c.aux) return;
+    // D30：续聊那一轮的第一次请求：距上一轮闲置了多久、缓存还剩多少。隔得越久，缓存越可能已经过期，整段上下文要按全价重新处理。
+    if (c.choice) r.lastReply = time;
+    const t = r.turns[c.turn - 1];
+    if (t && t.n > 1 && c.step === 1 && !t.firstUsage && body.usage) t.firstUsage = body.usage;
     c.tools = (c.compact ? [] : (m.tool_calls || [])).map((t, i) => ({ id: t.id, name: t.function.name, args: t.function.arguments, start: time, call: c, index: i }));
     for (const t of c.tools) r.openTools.set(t.id, t);
   } else if (e.kind === "stdout" || e.kind === "stderr") {
@@ -1030,8 +1050,18 @@ function items(r) {
 function schedule() {
   if (ui.queued) return;
   ui.queued = true;
-  requestAnimationFrame(() => { ui.queued = false; render(); });
+  requestAnimationFrame(() => {
+    ui.queued = false;
+    // 流式输出时每段增量都会重建对话区；鼠标按下期间先不重建，否则按下与松开落在不同元素上，点击（展开思考等）会丢。
+    if (ui.pressing) ui.held = true;
+    else render();
+  });
 }
+$("thread").addEventListener("pointerdown", () => { ui.pressing = true; });
+for (const type of ["pointerup", "pointercancel"]) addEventListener(type, () => {
+  ui.pressing = false;
+  if (ui.held) { ui.held = false; setTimeout(schedule); } // 等 click 事件先处理完
+});
 function render() {
   syncComposer();
   renderShell();
@@ -2380,6 +2410,9 @@ function renderChat() {
 function drawChat() {
   const box = $("thread"), scroller = $("chat-scroll");
   const stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120, top = scroller.scrollTop;
+  // 展开的思考框自带滚动条：重建前记下位置，原来在底部的继续跟随流式输出。
+  const reasons = new Map([...box.querySelectorAll("details.step[open] > .body > .reason")].map((x) =>
+    [x.closest("details").dataset.key, x.scrollHeight - x.scrollTop - x.clientHeight < 24 ? Infinity : x.scrollTop]));
   box.replaceChildren();
   const r = ui.run;
   if (!r) { renderSubPanel(); return box.append(welcome()); }
@@ -2395,13 +2428,23 @@ function drawChat() {
     const turn = r.turns[(f.turn ?? f.call?.turn) - 1];
     if (f.kind === "user") {
       const u = el("div", turn?.rewound ? "u rewound" : "u"); u.append(el("div", "", f.text)); box.append(u); group = null;
+      const tools = el("div", "utools");
+      // D30：续聊的代价：闲置时长与第一次请求的缓存命中。
+      const first = turn?.firstUsage;
+      if (first && first.prompt_tokens && turn.idle) {
+        const cached = (first.prompt_tokens_details && first.prompt_tokens_details.cached_tokens) || 0;
+        const info = el("span", "meta", `闲置 ${idleText(turn.idle)} · 首次请求缓存命中 ${Math.round(100 * cached / first.prompt_tokens)}%（${kfmt(first.prompt_tokens - cached)} token 未命中）`);
+        info.title = "这一轮第一次请求的输入有多少命中了提示词缓存；没命中的部分按全价重新处理";
+        tools.append(info);
+      }
       // D29：有工作区的对话，每一轮都可以撤销（连同之后各轮）；正在运行、回放中、导入的对话不行。
       if (turn?.checkpoint && !turn.rewound && r.workspace && r.exit && !r.source && !ui.replay && !ui.loading) {
-        const tools = el("div", "utools"), b = el("button", "link", "撤销到这一轮之前");
+        const b = el("button", "link", "撤销到这一轮之前");
         b.title = "把这一轮及之后用 edit_file / write_file 改过的文件放回去，对话退回上一轮";
         b.onclick = () => rewindTurn(r, turn);
-        tools.append(b); box.append(tools);
+        tools.append(b);
       }
+      if (tools.childNodes.length) box.append(tools);
       return;
     }
     const fresh = () => { group = el("div", turn?.rewound ? "a rewound" : "a"); box.append(group); return group; };
@@ -2432,6 +2475,10 @@ function drawChat() {
     link.onclick = () => { observeAt("end"); };
     card.append(link);
     box.append(card);
+  }
+  for (const [key, pos] of reasons) {
+    const x = box.querySelector(`details.step[open][data-key="${key}"] > .body > .reason`);
+    if (x) x.scrollTop = pos === Infinity ? x.scrollHeight : pos;
   }
   scroller.scrollTop = stick ? scroller.scrollHeight : top;
   renderSubPanel();
@@ -2469,10 +2516,11 @@ const TOOL_INFO = {
   subagents: ["子 agent", "spawn_agent：独立上下文的子进程，继承这里的工具，不继承长期记忆"],
   bash: ["Bash 沙箱", "bash：bubblewrap 沙箱，默认断网，联网逐次审批"],
   browser: ["浏览器", "web_search / open_page：无头 Chrome，只读"],
+  ds_search: ["DeepSeek 搜索", "ds_search / ds_fetch：DeepSeek 服务端搜索与抓取网页，按次计费，用 DEEPSEEK_API_KEY"],
   coding: ["编码工具", "read_file / glob / grep / edit_file / write_file：只在对话选的工作区里读写"],
 };
 function runTools(r) {
-  return { rag: r.rag || (r.calls.at(-1)?.req.tools || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, bash: r.bash, browser: r.browser, coding: !!r.workspace };
+  return { rag: r.rag || (r.calls.at(-1)?.req.tools || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, bash: r.bash, browser: r.browser, ds_search: r.dsSearch, coding: !!r.workspace };
 }
 function toolOn(key) {
   if (ui.run) return !!runTools(ui.run)[key];
@@ -2483,6 +2531,48 @@ function toolOn(key) {
 async function loadSettings() {
   try { const res = await fetch("/settings"); if (res.ok) ui.settings = await res.json(); } catch {}
   syncComposer();
+}
+// D30：输入框右侧的上下文用量环（参考 Codex 客户端）。口径与轨迹页“上下文压力”一致：
+// 最近一次主请求的服务端输入 tokens（system、工具定义与历史消息都在里面）占可用输入容量的比例。
+// 压缩请求的输入同样是满上下文，不能拿它当用量：刚压缩完，环反而会显得更满。
+const ctxRingLen = 2 * Math.PI * 11.5;
+const ctxK = (n) => n >= 1000 ? (n / 1000).toFixed(n % 1000 ? 1 : 0) + "k" : String(Math.round(n));
+function updateCtxRing(r) {
+  const ring = $("ctx-ring"), pct = ring.querySelector(".pct"), fill = ring.querySelector(".fill");
+  const last = r && r.calls.filter((c) => !c.compact && c.usage && c.usage.prompt_tokens).at(-1);
+  if (!last) { ring.hidden = true; ring._lines = null; return; }
+  const used = last.usage.prompt_tokens, cap = Math.max(1, r.inputCapacity || ui.ctxWindow);
+  const ratio = Math.max(0, Math.min(1, used / cap));
+  const details = last.usage.prompt_tokens_details;
+  const cached = (details && details.cached_tokens) || 0, hasCached = !!details && details.cached_tokens != null;
+  ring.hidden = false;
+  ring.className = ratio >= .9 ? "bad" : ratio >= .7 ? "warn" : "";
+  fill.style.strokeDasharray = `${ratio * ctxRingLen} ${ctxRingLen}`;
+  pct.textContent = Math.round(ratio * 100);
+  // 悬浮详情：不用原生 title（SVG 子元素上不总弹出），存下来由下面的浮层显示。
+  const percent = Math.round(ratio * 100);
+  ring._lines = [
+    "上下文窗口：",
+    `${percent}% 已用（剩余 ${100 - percent}%）`,
+    `已用 ${ctxK(used)} tokens，共 ${ctxK(cap)}`,
+    `缓存命中率：${hasCached ? Math.round(100 * cached / used) + "%" : "—"}`,
+  ];
+  ring.setAttribute("aria-label", ring._lines.join("，"));
+}
+// 环的鼠标事件：自己画浮层，位置跟着环走；鼠标在 SVG 或数字上也算（它们 pointer-events: none）。
+{
+  const ring = $("ctx-ring"), tip = $("ctx-tip");
+  ring.addEventListener("mouseenter", () => {
+    if (ring.hidden || !ring._lines) return;
+    tip.replaceChildren(el("b", "", ring._lines[0]), ...ring._lines.slice(1).map((line) => el("div", "", line)));
+    tip.hidden = false;
+    const box = ring.getBoundingClientRect(), h = tip.offsetHeight;
+    // 输入框在页面底部：上方放不下时放到环下面，避免浮层被夹到屏幕顶部。
+    const below = box.top - h - 8 < 8;
+    tip.style.left = Math.max(8, Math.min(innerWidth - tip.offsetWidth - 8, box.left + box.width / 2 - tip.offsetWidth / 2)) + "px";
+    tip.style.top = (below ? Math.min(innerHeight - h - 8, box.bottom + 8) : box.top - h - 8) + "px";
+  });
+  ring.addEventListener("mouseleave", () => { tip.hidden = true; });
 }
 function syncComposer() {
   const r = ui.run, busy = r && (ui.loading || !r.exit), broken = r && ((r.exit && r.exit !== "exit 0" && !r.checkpoint) || r.rewoundAll);
@@ -2531,6 +2621,7 @@ function syncComposer() {
   // 只在需要人注意时提示；常规操作说明不放在输入框下面。
   $("hint").textContent = !r ? "" : imported ? `从 ${imported} 导入的记录，只能查看；系统提示词、工具定义与耗时以记录里有的为准` : lab ? "对比实验使用独立问题；自行提问请新建对话" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次强制结束" : "") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : "";
+  updateCtxRing(r);
 }
 // 列表显示最后一次活动的时间：服务端给 Unix 毫秒时间戳，这里按看的人所在的时区格式化。
 function relTime(r) {

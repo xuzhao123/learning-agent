@@ -15,6 +15,7 @@ import (
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/skills"
 	"learning-agent/internal/tools"
+	"learning-agent/internal/websearch"
 	"learning-agent/internal/workspace"
 )
 
@@ -96,6 +97,10 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 		return workspace.Run(ctx, call.Function.Name, call.Function.Arguments)
 	case "web_search", "open_page":
 		return browser.Run(ctx, call.ID, call.Function.Name, call.Function.Arguments)
+	case "ds_search", "ds_fetch":
+		return websearch.Run(ctx, call.Function.Name, call.Function.Arguments)
+	case "read_output":
+		return readOutput(call.Function.Arguments)
 	case "spawn_agent":
 		if SubagentArgs == nil {
 			return nil, llm.Permanent(errors.New("请使用 -subagents 开启子 agent"))

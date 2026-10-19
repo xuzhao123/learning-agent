@@ -50,7 +50,7 @@ Transcript 保存本次进程收到的原文，View 是真正发送给模型的�
 ## D10 | 工具输出写入限制
 来源：internal/agent/context_manager.go；main.go
 
-本项目 tool-output-tokens 默认 2000，按字节粗估。长工具结果首次进入 View 时截断，Transcript 保留原文。检索片段也属于工具结果，因此 k 越大越可能挤占窗口或被截断。
+本项目 tool-output-tokens 默认 2000，按字节粗估。长工具结果首次进入 View 时存成文件、只放预览（D30，模型用 read_output 读回；没有检查点的实验仍截断），Transcript 保留原文。检索片段也属于工具结果，因此 k 越大越可能挤占窗口或被截断。
 
 ## D11 | 最近消息组保留规则
 来源：internal/agent/context_manager.go；main.go

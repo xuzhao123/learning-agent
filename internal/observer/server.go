@@ -62,6 +62,7 @@ type event struct {
 	MCP        []mcpServer     `json:"mcp,omitempty"`
 	Subagents  bool            `json:"subagents,omitempty"`      // 本对话允许 spawn_agent，续聊沿用
 	Browser    bool            `json:"browser,omitempty"`        // 本对话启用浏览器工具，续聊沿用
+	DSSearch   bool            `json:"ds_search,omitempty"`      // 本对话启用 DeepSeek 搜索工具，续聊沿用
 	Provider   string          `json:"provider,omitempty"`       // 本对话的模型供应商（-provider），续聊沿用
 	Bash       bool            `json:"bash,omitempty"`           // 本对话启用 bash 沙箱，续聊沿用
 	RAG        bool            `json:"rag,omitempty"`            // 设置快照：本对话启用知识库检索，续聊沿用
@@ -330,7 +331,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	}
 	// 设置快照：这一刻打开的工具，写进 start 事件，续聊沿用。
 	snap := event{Kind: "start", RAG: settings.on("rag"), Memory: settings.on("memory"), MemoryTTL: settings.Values["memory_ttl"], Subagents: settings.on("subagents"),
-		Browser: settings.on("browser"), Provider: input.Provider, Bash: settings.on("bash"), Workspace: workspace, WorkDir: workDir,
+		Browser: settings.on("browser"), DSSearch: settings.on("ds_search"), Provider: input.Provider, Bash: settings.on("bash"), Workspace: workspace, WorkDir: workDir,
 		Permission: settings.Values["permission_mode"], Rules: ruleLines(settings.Values["permission_rules"])}
 	if input.Permission != "" {
 		if valid("permission_mode", input.Permission, settingsFile{}) != nil {
@@ -618,6 +619,9 @@ func snapshotArgs(e event, netAllow []string) []string {
 	}
 	if e.Browser {
 		args = append(args, "-browser")
+	}
+	if e.DSSearch {
+		args = append(args, "-ds-search")
 	}
 	if e.Provider != "" {
 		args = append(args, "-provider", e.Provider)

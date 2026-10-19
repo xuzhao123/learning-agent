@@ -27,6 +27,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 	"learning-agent/internal/permission"
+	"learning-agent/internal/websearch"
 	"learning-agent/internal/workspace"
 )
 
@@ -39,7 +40,7 @@ var (
 
 // 结果未知时可以直接再执行一次的工具：只读，或带幂等键（spawn_agent 按子任务ID续跑或取回存档）。
 // 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
-var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "request_network_access": true, "read_file": true, "glob": true, "grep": true} // bash、edit_file、write_file 不在里面：有副作用
+var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "ds_search": true, "ds_fetch": true, "request_network_access": true, "read_file": true, "glob": true, "grep": true, "read_output": true} // bash、edit_file、write_file 不在里面：有副作用
 
 // RootAttributes 是 main 创建根 span 时就知道的属性；其余在 Run 里补。
 func RootAttributes() []attribute.KeyValue {
@@ -796,6 +797,9 @@ func SystemPrompt() string {
 	}
 	if browser.Enabled {
 		prompt += browser.Rules
+	}
+	if websearch.Enabled {
+		prompt += websearch.Rules
 	}
 	if sandbox.Enabled {
 		prompt += sandbox.Rules()

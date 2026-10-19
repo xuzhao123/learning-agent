@@ -43,7 +43,7 @@ func markPrivate(source string) {
 
 // 外发类工具：调用参数会离开本机（请求 URL 与搜索词发给网站；MCP 参数发给 server 进程或远程服务）。
 func outbound(name string) bool {
-	return name == "web_search" || name == "open_page" || strings.HasPrefix(name, "mcp_")
+	return name == "web_search" || name == "open_page" || name == "ds_search" || name == "ds_fetch" || strings.HasPrefix(name, "mcp_")
 }
 
 // risk 返回这次调用需要确认的原因；空串表示不需要确认。
