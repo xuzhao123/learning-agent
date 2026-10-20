@@ -57,7 +57,8 @@ func conversationID() string {
 
 // 主线：请求模型 → 读取 tool_calls → 执行工具 → 保存结果 → 下一轮。
 // D9：每个边界都写检查点（见 checkpoint.go）；Resume 不为空时从检查点接着跑，不重复已完成的轮次。
-func Run(ctx context.Context, config llm.Config, question string, parallel, maxSteps, retries int, options ContextOptions, history *HistoryInput) (err error) {
+// images 是本轮用户消息附带的图；notes 是预处理失败的图留下的文字占位，作为提醒紧跟在用户消息后面。
+func Run(ctx context.Context, config llm.Config, question string, images []llm.Image, notes []string, parallel, maxSteps, retries int, options ContextOptions, history *HistoryInput) (err error) {
 	// 记忆的背景生成与重排也用这个客户端：同一个请求上限、同一份用量统计。
 	client := &llm.Client{Config: config, Limit: maxSteps, Output: options.Output}
 	resume := Resume
@@ -249,8 +250,22 @@ func Run(ctx context.Context, config llm.Config, question string, parallel, maxS
 		return stopRun("hook_blocked", "UserPromptSubmit hook 拦下了这个问题："+submitted.Reason, summary)
 	}
 	if resume == nil {
-		conversation.Append(llm.Message{Role: "user", Content: question})
-		protocol.ItemCompleted(CheckpointID, protocol.Item{ID: "user", Type: "userMessage", Data: map[string]string{"text": question}})
+		conversation.Append(llm.Message{Role: "user", Content: question, Images: images})
+		// 处理不了的图另起一条提醒（D24）：用户消息只留原话，记忆引用与来源判断都靠它。
+		if len(notes) > 0 {
+			conversation.Append(llm.Reminder(strings.Join(notes, "\n")))
+		}
+		// B0：界面只读协议。图片带引用与尺寸，页面据此画缩略图；正文仍是用户原话，不含占位说明。
+		data := map[string]any{"text": question}
+		if len(images) > 0 {
+			pictures := make([]map[string]any, 0, len(images))
+			for _, img := range images {
+				pictures = append(pictures, map[string]any{"ref": img.Ref, "label": img.Label, "name": img.Path,
+					"width": img.Width, "height": img.Height, "source_width": img.SrcWidth, "source_height": img.SrcHeight})
+			}
+			data["images"] = pictures
+		}
+		protocol.ItemCompleted(CheckpointID, protocol.Item{ID: "user", Type: "userMessage", Data: data})
 		if submitted.Context != "" {
 			conversation.Append(llm.Reminder("[hook UserPromptSubmit] " + submitted.Context))
 		}

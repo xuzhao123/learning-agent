@@ -66,7 +66,7 @@ func RunRAG(ctx context.Context, config llm.Config, options agent.ContextOptions
 			// B0：每题是一个独立上下文；界面据此分组，不再解析上面这行日志。
 			protocol.Notify("lab/case", map[string]string{"id": q.ID, "mode": mode, "question": q.Question})
 			// 单题超预算或网络失败也是评测结果：记录后继续，不丢掉其余题目。
-			if err := agent.Run(ctx, config, q.Question, 4, maxSteps, 2, options, nil); err != nil {
+			if err := agent.Run(ctx, config, q.Question, nil, nil, 4, maxSteps, 2, options, nil); err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}

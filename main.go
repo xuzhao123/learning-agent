@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -103,6 +104,8 @@ func main() {
 
 func run() error {
 	question := flag.String("question", "", "要交给 agent 的问题")
+	var imagePaths stringList
+	flag.Var(&imagePaths, "image", "图片输入：随问题附带的图片路径（PNG、JPEG、GIF、WebP，可重复）；发给模型前会缩放并写进附件目录")
 	historyStdin := flag.Bool("history-stdin", false, "从stdin读取上次模型上下文JSON，配合-question续聊")
 	appServer := flag.Bool("app-server", false, "B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；问题与续聊上下文由 turn/start 给出")
 	flag.StringVar(&agent.Continues, "continues", "", "续聊时上一轮的检查点ID：本轮用新ID，记下续接关系，子任务可按 task_id 引用之前各轮派出的子任务")
@@ -202,6 +205,7 @@ func run() error {
 	}
 	// B0：-app-server 时 stdout 归协议所有，在任何打印之前分流。
 	var history *agent.HistoryInput
+	var turnImages []imageRef // turn/start 带进来的附件引用，与 -image 一样在本轮用户消息里
 	starts := make(chan protocol.Message, 1)
 	interrupted := make(chan struct{})
 	var interruptOnce sync.Once
@@ -242,12 +246,13 @@ func run() error {
 				Question  string              `json:"question"`
 				History   *agent.HistoryInput `json:"history"`
 				Continues string              `json:"continues"`
+				Images    []imageRef          `json:"images"`
 			}
 			if err := json.Unmarshal(m.Params, &params); err != nil || strings.TrimSpace(params.Question) == "" {
 				protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32602, Message: "turn/start 需要非空的 question"})
 				return errors.New("turn/start 参数无效")
 			}
-			*question, history, agent.Continues = params.Question, params.History, params.Continues
+			*question, history, agent.Continues, turnImages = params.Question, params.History, params.Continues, params.Images
 			protocol.Client.Reply(*m.ID, nil, nil)
 		}
 	}
@@ -709,7 +714,54 @@ func run() error {
 		}
 	}
 	turnStarted(agent.CheckpointID)
-	return agent.Run(ctx, config, *question, *parallel, *maxSteps, *retries, options, history)
+	// 图片输入：本轮的附图。续跑沿用检查点里的消息，不再从文件重读；处理不了的图换成文字占位，不让这一轮失败。
+	// 续聊时编号接着历史里已有的图往后数。
+	var images []llm.Image
+	var notes []string
+	if agent.Resume == nil {
+		start := 0
+		if history != nil {
+			start = llm.LastImageNumber(history.Messages)
+		}
+		images, notes = attachImages(imagePaths, turnImages, start)
+	}
+	return agent.Run(ctx, config, *question, images, notes, *parallel, *maxSteps, *retries, options, history)
+}
+
+// attachImages 把本轮的图预处理成可发给模型的样子：命令行给的是文件路径，turn/start 给的是附件引用。
+// 编号从 start+1 起按顺序分配（[Image #1]……）；处理不了的不报错，换成一行文字说明随问题一起交给模型。
+func attachImages(paths []string, refs []imageRef, start int) ([]llm.Image, []string) {
+	var images []llm.Image
+	var notes []string
+	prepare := func(name string, data []byte, err error) {
+		if err == nil {
+			var img llm.Image
+			if img, err = llm.PrepareImage(data, name); err == nil {
+				img.Label = fmt.Sprintf("[Image #%d]", start+len(images)+1)
+				images = append(images, img)
+				return
+			}
+		}
+		notes = append(notes, llm.ImageNote(name, err))
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			err = errors.New("无法读取文件")
+		}
+		prepare(filepath.Base(path), data, err)
+	}
+	for _, ref := range refs {
+		data, err := llm.LoadAttachment(ref.Ref)
+		prepare(ref.Name, data, err)
+	}
+	return images, notes
+}
+
+// turn/start 里的一张图：ref 是附件引用（attachment://…），name 是给模型看的文件名。
+type imageRef struct {
+	Ref  string `json:"ref"`
+	Name string `json:"name"`
 }
 
 // 可重复的命令行参数，如 -mcp-server a -mcp-server b。

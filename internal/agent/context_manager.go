@@ -428,6 +428,8 @@ func (c *Context) summarize(ctx context.Context, client *llm.Client, prefix []ll
 			return "", retries, errors.New("摘要输入已无可用历史，未替换视图")
 		}
 		request := append(append([]llm.Message(nil), working...), instruction)
+		// 摘要请求只发文字：图片换成开标签文字，编号、文件名和尺寸都还在，模型知道这里原来有一张图。
+		request = llm.ImagesToText(request)
 		// limit已按真实用量换算；仍是近似值，服务端明确超窗时按完整组删除再试。
 		if llm.ContextTokens(request, c.withTools) <= limit {
 			reply, err := client.Call(ctx, request, c.withTools, "compact")

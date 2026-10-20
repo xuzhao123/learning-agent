@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,19 +32,56 @@ type Config struct{ Provider, APIURL, Upstream, Model, APIKey, Effort string }
 type Provider struct {
 	Name, APIURL, Model, URLVar, ModelVar string
 	KeyVars                               []string
-	Models                                []string
+	Models                                []Model
+}
+
+// Model 是清单里的一个模型。Vision 记录它能不能看图：2026-10-20 用同一张 640×360 PNG、
+// 走 image_url 内容块逐个实测（结果见 docs/image-input-design.md 2.2），清单调整时一起改。
+// 悄悄丢图的模型（返回 200 但回答看不到图）也只能这样标出来。
+type Model struct {
+	Name   string `json:"name"`
+	Vision bool   `json:"vision"`
+}
+
+// FindModel 在这家供应商的清单里找模型。
+func (p Provider) FindModel(name string) (Model, bool) {
+	for _, m := range p.Models {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return Model{}, false
 }
 
 var Providers = []Provider{
 	{Name: "ark", APIURL: "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
 		Model: "doubao-seed-2.1-pro", URLVar: "LLM_API_URL", ModelVar: "LLM_MODEL", KeyVars: []string{"ARK_API_KEY", "LLM_API_KEY"},
 		// 方舟 Coding Plan 文档列出的 Model Name，2026-10-20 逐个真实调用过（含一次工具调用）；套餐调整时改这里。
-		Models: []string{"doubao-seed-2.1-pro", "doubao-seed-2.1-lite", "doubao-seed-evolving", "doubao-seed-2.0-mini",
-			"kimi-k3", "kimi-k2.8-preview", "kimi-k2.7-code", "glm-5.3", "glm-5.3-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
-			"minimax-m3", "ark-code-latest"}},
+		// glm-5.3 会报 InvalidParameter: Model only support text input；deepseek-v4-pro、deepseek-v4-flash
+		// 返回 200 但回答“看不到图”；ark-code-latest 跟控制台选择走，可能路由到不能看图的模型，一律标为不能看图。
+		Models: []Model{{Name: "doubao-seed-2.1-pro", Vision: true}, {Name: "doubao-seed-2.1-lite", Vision: true},
+			{Name: "doubao-seed-evolving", Vision: true}, {Name: "doubao-seed-2.0-mini", Vision: true},
+			{Name: "kimi-k3", Vision: true}, {Name: "kimi-k2.8-preview", Vision: true}, {Name: "kimi-k2.7-code", Vision: true},
+			{Name: "glm-5.3"}, {Name: "glm-5.3-flash", Vision: true},
+			{Name: "deepseek-v4-pro"}, {Name: "deepseek-v4-flash"}, {Name: "deepseek-v4.1-flash", Vision: true},
+			{Name: "minimax-m3", Vision: true}, {Name: "ark-code-latest"}}},
 	{Name: "deepseek", APIURL: "https://api.deepseek.com/chat/completions",
 		Model: "deepseek-flash", URLVar: "DEEPSEEK_API_URL", ModelVar: "DEEPSEEK_MODEL", KeyVars: []string{"DEEPSEEK_API_KEY"},
-		Models: []string{"deepseek-flash"}},
+		Models: []Model{{Name: "deepseek-flash", Vision: true}}},
+}
+
+// Vision 表示这次请求的模型能不能看图。
+func (c Config) Vision() bool {
+	p, ok := FindProvider(c.Provider)
+	if !ok {
+		return true
+	}
+	m, ok := p.FindModel(c.Model)
+	if !ok {
+		// 清单外的模型（如 .env 里写的老模型名）：不知道就不擅自删图。
+		return true
+	}
+	return m.Vision
 }
 
 func FindProvider(name string) (Provider, bool) {
@@ -125,6 +163,7 @@ type Message struct {
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	Images           []Image    `json:"-"` // 与 content 数组互转，见 MarshalJSON
 }
 
 type ToolCall struct {
@@ -134,6 +173,102 @@ type ToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+}
+
+// 有图时 content 写成数组，顺序固定：每张图依次是开标签、image_url、闭标签，最后是 Content 文字。
+// 图排在文字前面，符合 Claude 的建议和粘贴图片的习惯；没有图片时照旧是字符串，旧存档和旧检查点不受影响。
+func (m Message) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Role             string     `json:"role"`
+		Content          any        `json:"content"`
+		EncryptedContent string     `json:"encrypted_content,omitempty"`
+		ReasoningContent string     `json:"reasoning_content,omitempty"`
+		ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+		ToolCallID       string     `json:"tool_call_id,omitempty"`
+	}
+	out := wire{Role: m.Role, Content: m.Content, EncryptedContent: m.EncryptedContent, ReasoningContent: m.ReasoningContent,
+		ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID}
+	if len(m.Images) > 0 {
+		parts := make([]contentPart, 0, 2*len(m.Images)+1)
+		for _, img := range m.Images {
+			parts = append(parts, contentPart{Type: "text", Text: img.OpenTag()},
+				contentPart{Type: "image_url", ImageURL: &imageURL{URL: img.Ref}},
+				contentPart{Type: "text", Text: imageCloseTag})
+		}
+		if m.Content != "" {
+			parts = append(parts, contentPart{Type: "text", Text: m.Content})
+		}
+		out.Content = parts
+	}
+	return json.Marshal(out)
+}
+
+// 反序列化同时接受字符串和数组：续聊从存档读回请求、续跑读检查点走的都是这条路径。
+// 数组里认出开、闭标签，把图片还原进 Images，其余文字拼回 Content。
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role             string          `json:"role"`
+		Content          json.RawMessage `json:"content"`
+		EncryptedContent string          `json:"encrypted_content,omitempty"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*m = Message{Role: raw.Role, EncryptedContent: raw.EncryptedContent, ReasoningContent: raw.ReasoningContent,
+		ToolCalls: raw.ToolCalls, ToolCallID: raw.ToolCallID}
+	// content 缺省或为 null（只有 tool_calls 的回复）当作空字符串。
+	content := bytes.TrimSpace(raw.Content)
+	if len(content) == 0 || string(content) == "null" {
+		return nil
+	}
+	if content[0] != '[' {
+		return json.Unmarshal(content, &m.Content)
+	}
+	var parts []contentPart
+	if err := json.Unmarshal(content, &parts); err != nil {
+		return err
+	}
+	m.Content, m.Images = parseContent(parts)
+	return nil
+}
+
+// parseContent 按顺序还原一段内容数组：开标签、图片、闭标签配上对，其余文字拼回 Content。
+func parseContent(parts []contentPart) (string, []Image) {
+	var texts []string // 别处来的数组可能有多段文字，段之间用换行隔开，免得词粘在一起
+	var images []Image
+	var pending *Image
+	for _, part := range parts {
+		switch part.Type {
+		case "image_url":
+			if pending == nil {
+				pending = &Image{}
+			}
+			if part.ImageURL != nil {
+				pending.Ref = part.ImageURL.URL
+			}
+		case "text":
+			if img, ok := parseImageTag(part.Text); ok {
+				pending = &img
+				continue
+			}
+			if strings.TrimSpace(part.Text) == imageCloseTag {
+				if pending != nil {
+					images = append(images, *pending)
+					pending = nil
+				}
+				continue
+			}
+			texts = append(texts, part.Text)
+		}
+	}
+	// 缺了闭标签也把这一张图留下，图片不会因为格式不完整被悄悄丢掉。
+	if pending != nil {
+		images = append(images, *pending)
+	}
+	return strings.Join(texts, "\n"), images
 }
 
 // Status 区分五种结局：ok 成功；error 确定失败（没有产生结果）；not_run 还没开始就被取消，可以放心重做；
@@ -178,6 +313,8 @@ func FromUser(m Message) bool {
 
 // 统一使用字节粗估。全量估算用于启动/压缩后，日常使用真实usage加增量估算。
 // 这不是精确tokenizer；服务端仍可能拒绝超窗请求，调用层另有一次压缩后重试。
+// 图片按每张固定 ImageTokens 计，不看 base64 长度：一张 1 MB 的图按字节估会被算成 30 多万 token。
+// 不能看图的模型发请求前会去掉图片，这里仍按张计入，是有意偏保守：宁可早一点压缩，也不超窗。
 func TextTokens(s string) int { return (len(s) + 3) / 4 }
 
 func MessageTokens(messages []Message) int {
@@ -185,7 +322,11 @@ func MessageTokens(messages []Message) int {
 		return 0
 	}
 	data, _ := json.Marshal(messages)
-	return TextTokens(string(data)) + 8*len(messages)
+	n := TextTokens(string(data)) + 8*len(messages)
+	for _, m := range messages {
+		n += ImageTokens * len(m.Images)
+	}
+	return n
 }
 
 func ContextTokens(messages []Message, withTools bool) int {

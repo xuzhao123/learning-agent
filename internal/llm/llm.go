@@ -64,7 +64,7 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 	if err != nil || (endpoint.Scheme != "https" && !local) || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" {
 		return Reply{}, errors.New("模型地址需要是完整的HTTPS URL，或本机http://127.0.0.1观测代理")
 	}
-	body := map[string]any{"model": config.Model, "messages": history, "stream": true, "reasoning_effort": config.Effort,
+	body := map[string]any{"model": config.Model, "messages": prepareHistory(history, config.Vision()), "stream": true, "reasoning_effort": config.Effort,
 		// 流式默认不返回用量；要了它，[DONE] 前会多一个只有 usage 的 chunk，检查点与 D15 的成本才有数据。
 		"stream_options": map[string]bool{"include_usage": true}}
 	// 0表示使用供应商默认值，不在客户端把推理与回答一起截在4096。

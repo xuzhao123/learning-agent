@@ -314,7 +314,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	// 具体模型只能是这家供应商清单里的一个：清单同样来自 llm.Providers，页面不做第二份。
 	if input.Model != "" {
 		p, ok := llm.FindProvider(input.Provider)
-		if !ok || !slices.Contains(p.Models, input.Model) {
+		if _, found := p.FindModel(input.Model); !ok || !found {
 			http.Error(w, "模型不在 "+input.Provider+" 的可选清单里", http.StatusBadRequest)
 			return
 		}
@@ -446,7 +446,12 @@ func (s *server) listModels(w http.ResponseWriter, req *http.Request) {
 		if config, _ := llm.LoadConfig(p.Name); config.Model != "" { // 没有密钥时仍会解析出模型
 			def = config.Model
 		}
-		out = append(out, providerModels{Name: p.Name, Default: def, Models: p.Models})
+		// 能力（能不能看图）等界面需要时再随清单返回；这里保持原来的名字列表。
+		names := make([]string, 0, len(p.Models))
+		for _, model := range p.Models {
+			names = append(names, model.Name)
+		}
+		out = append(out, providerModels{Name: p.Name, Default: def, Models: names})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
