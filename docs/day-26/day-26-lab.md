@@ -33,6 +33,7 @@
 | UserPromptSubmit | [secret-guard.sh](../../hooks/secret-guard.sh) | 问题里像有 API 密钥或私钥时退出码 2 拦下 |
 | PreToolUse（edit_file、write_file） | [protect-generated.sh](../../hooks/protect-generated.sh) | 目标文件开头有 `// Code generated … DO NOT EDIT.` 时返回 `permissionDecision: deny` |
 | PostToolUse（edit_file、write_file） | [gofmt.sh](../../hooks/gofmt.sh) | 改过的 `.go` 文件 `gofmt -d` 有差异时 `decision: block`，把差异交给模型 |
+| PostToolUse（edit_file、write_file） | [js-check.sh](../../hooks/js-check.sh) | 改过的 `.js`，或 `.html` 里的内联脚本有语法错误时 `decision: block`，把报错位置交给模型；页面 embed 进 Go 程序，`go build` 查不出脚本错误。宿主机没有 node 时跳过（10-19 补） |
 | Stop | [go-check.sh](../../hooks/go-check.sh) | 工作区有未提交的 `.go` 改动时跑 `go build` 与 `go vet`，不过就退出码 2 |
 
 ```bash

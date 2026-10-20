@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
@@ -41,6 +43,31 @@ func markPrivate(source string) {
 	}
 }
 
+// 本对话里用户点过“本对话内都允许”的外发范围。续跑取检查点，续聊取上一轮；子 agent 和回放分叉不继承，照样要问。
+// 同一批工具并行等确认，所以要加锁。
+var (
+	grantMu sync.Mutex
+	granted []string
+)
+
+// grantScope 是外发类调用可以整段对话放行的范围：搜索按工具（搜索词都发给同一个服务），读网页按工具和主机，
+// MCP 工具按工具。空串表示给不出范围（网址解析不了），只能单次允许。
+func grantScope(call llm.ToolCall) string {
+	name := call.Function.Name
+	if name != "open_page" && name != "ds_fetch" {
+		return name
+	}
+	var args struct {
+		URL string `json:"url"`
+	}
+	json.Unmarshal([]byte(call.Function.Arguments), &args)
+	u, err := url.Parse(strings.TrimSpace(args.URL))
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return name + " · " + strings.ToLower(u.Hostname())
+}
+
 // 外发类工具：调用参数会离开本机（请求 URL 与搜索词发给网站；MCP 参数发给 server 进程或远程服务）。
 func outbound(name string) bool {
 	return name == "web_search" || name == "open_page" || name == "ds_search" || name == "ds_fetch" || strings.HasPrefix(name, "mcp_")
@@ -62,7 +89,25 @@ func risk(call llm.ToolCall) (kind, reason string) {
 
 // approve 向界面上的人请求确认，返回 allow、deny、unavailable、timeout 或 audit_error。
 // D21：请求与答复都写审计。请求写不进审计就不发出、不执行：没有记录的高风险动作事后无法追责。
+// 外发类调用的范围本对话已经被允许过，就不再问人，但同样先写审计（写不进去就不执行）。
 func approve(ctx context.Context, call llm.ToolCall, kind, reason string) string {
+	scope := ""
+	if kind == "outbound" {
+		scope = grantScope(call)
+	}
+	grantMu.Lock()
+	known := scope != "" && slices.Contains(granted, scope)
+	grantMu.Unlock()
+	if known {
+		record := audit.Record{Actor: "program", Event: "approval_decision", CallID: call.ID, Tool: call.Function.Name, Risk: kind, Decision: "allow_session", Detail: "本对话已允许：" + scope}
+		record.Args(call.Function.Arguments)
+		if err := audit.Write(ctx, record); err != nil {
+			fmt.Printf("Audit error [%s]: %v\n", call.ID, err)
+			return "audit_error"
+		}
+		fmt.Printf("Approval skipped [%s]: tool=%s scope=%s（本对话已允许）\n", call.ID, call.Function.Name, scope)
+		return "allow"
+	}
 	fmt.Printf("Approval request [%s]: tool=%s risk=%s reason=%s\n", call.ID, call.Function.Name, kind, reason)
 	record := audit.Record{Actor: "program", Event: "approval_request", CallID: call.ID, Tool: call.Function.Name, Risk: kind, Detail: reason}
 	record.Args(call.Function.Arguments)
@@ -75,8 +120,11 @@ func approve(ctx context.Context, call llm.ToolCall, kind, reason string) string
 	var answer struct {
 		Decision string `json:"decision"`
 	}
-	err := protocol.Call(waitCtx, "tool/requestApproval", map[string]string{"call_id": call.ID, "tool": call.Function.Name,
-		"arguments": call.Function.Arguments, "risk": kind, "reason": reason}, &answer)
+	params := map[string]string{"call_id": call.ID, "tool": call.Function.Name, "arguments": call.Function.Arguments, "risk": kind, "reason": reason}
+	if scope != "" {
+		params["scope"] = scope // 界面据此多给一个“本对话内都允许”
+	}
+	err := protocol.Call(waitCtx, "tool/requestApproval", params, &answer)
 	decision := answer.Decision
 	switch {
 	case errors.Is(err, protocol.ErrNoClient):
@@ -85,12 +133,23 @@ func approve(ctx context.Context, call llm.ToolCall, kind, reason string) string
 		decision = "timeout"
 	case err != nil:
 		decision = "unavailable"
+	case decision == "allow_session" && scope == "":
+		decision = "allow" // 没给范围的请求只能单次允许
 	}
 	fmt.Printf("Approval decision [%s]: %s\n", call.ID, decision)
-	// allow / deny 来自界面上的人（观测台另记一条它收到的点击）；unavailable / timeout 是程序按规则处理的。
+	// allow / allow_session / deny 来自界面上的人（观测台另记一条它收到的点击）；unavailable / timeout 是程序按规则处理的。
 	record.Event, record.Decision, record.Actor, record.Detail = "approval_decision", decision, "program", ""
-	if decision == "allow" || decision == "deny" {
+	if decision == "allow" || decision == "allow_session" || decision == "deny" {
 		record.Actor, record.Detail = "user", "经界面答复"
+	}
+	if decision == "allow_session" {
+		record.Detail += "；本对话内都允许：" + scope
+		grantMu.Lock()
+		if !slices.Contains(granted, scope) {
+			granted = append(granted, scope)
+		}
+		grantMu.Unlock()
+		decision = "allow"
 	}
 	audit.Log(ctx, record)
 	return decision

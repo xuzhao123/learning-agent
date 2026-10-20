@@ -111,6 +111,7 @@ func run() error {
 	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
 	flag.BoolVar(&tools.LabEnabled, "lab-tools", false, "启用 Day 2 故障实验工具")
 	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）或 deepseek；地址、模型与密钥见 README")
+	model := flag.String("model", "", "这家供应商下的具体模型，优先于 LLM_MODEL / DEEPSEEK_MODEL 与默认值；作为启动参数写进检查点，续跑、回放与子 agent 沿用")
 	effort := flag.String("reasoning-effort", "high", "所有请求统一的推理强度：minimal、low、medium或high")
 	window := flag.Int("context-window", 12288, "上下文总窗口（学习实验值），输入容量扣除输出预算预留与推理余量")
 	output := flag.Int("max-output-tokens", 0, "可选输出上限（含推理）；0不向API传限制，输入预算仍预留4096")
@@ -151,6 +152,7 @@ func run() error {
 	resume := flag.String("resume", "", "Day 9：从这个ID的检查点续跑；配置取自检查点，须单独使用")
 	flag.BoolVar(&browser.Enabled, "browser", false, "Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料（CHROME_PATH 可指定浏览器）")
 	flag.BoolVar(&websearch.Enabled, "ds-search", false, "增加 ds_search 与 ds_fetch，用 DeepSeek 的搜索与抓取 API 查资料（读取 DEEPSEEK_API_KEY）")
+	disallowedTools := flag.String("disallowed-tools", "", "从工具清单里去掉单个工具（与 Claude Code 的 --disallowed-tools 同名，只认工具名；按调用拦用 -deny），逗号分隔：内置的 calculator、get_current_datetime、search_notes，浏览器的 web_search、open_page")
 	flag.BoolVar(&sandbox.Enabled, "bash", false, "Day 12：增加 bash 与 request_network_access，在 bubblewrap 沙箱里执行命令（仅 Linux）")
 	flag.BoolVar(&sandbox.ProjectRO, "bash-project-ro", false, "配合 -bash：把项目目录只读挂到 /project（.env、.data、.git 除外）")
 	var netAllow stringList
@@ -452,7 +454,21 @@ func run() error {
 		}
 	}
 	// 本次运行发给模型的工具：先放内置工具，再按开关追加。复制一份，不改动 tools.Definitions。
-	llm.Tools = append([]map[string]any(nil), tools.Definitions...)
+	// -disallowed-tools 去掉其中单个工具（观测台设置里内置工具和 web_search、open_page 各有开关）；拼错的名字直接报错，免得悄悄不生效。
+	off := map[string]bool{}
+	for _, name := range strings.Split(*disallowedTools, ",") {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		if !slices.ContainsFunc(slices.Concat(tools.Definitions, browser.Definitions), func(d map[string]any) bool { return d["name"] == name }) {
+			return fmt.Errorf("disallowed-tools 只能去掉 calculator、get_current_datetime、search_notes、web_search、open_page：%s", name)
+		}
+		off[name] = true
+	}
+	kept := func(definitions []map[string]any) []map[string]any {
+		return slices.DeleteFunc(slices.Clone(definitions), func(d map[string]any) bool { return off[d["name"].(string)] })
+	}
+	llm.Tools = kept(tools.Definitions)
 	if tools.SecurityLabEnabled {
 		llm.Tools = []map[string]any{tools.SecurityDefinition}
 		if !*securityProtection {
@@ -470,7 +486,7 @@ func run() error {
 		llm.Tools = append(llm.Tools, memory.ToolDefinitions...)
 	}
 	if browser.Enabled {
-		llm.Tools = append(llm.Tools, browser.Definitions...)
+		llm.Tools = append(llm.Tools, kept(browser.Definitions)...)
 		defer browser.Close()
 	}
 	if websearch.Enabled {
@@ -548,6 +564,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *model != "" {
+		config.Model = *model
+	}
 	config.Effort = *effort
 	fmt.Printf("Model: provider=%s model=%s upstream=%s\n", config.Provider, config.Model, config.Upstream)
 	// B0：一轮开始。界面从这里拿任务ID（检查点、浏览器画面目录都按它存放）、输入容量和 trace_id，不再从日志里解析。
@@ -592,7 +611,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "ds-search": true, "provider": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "ds-search": true, "disallowed-tools": true, "provider": true, "model": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {

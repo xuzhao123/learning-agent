@@ -28,12 +28,19 @@ import (
 // 文件放 .data/settings.json（不提交）。
 
 // 工具开关：设置键 → 租户策略里的功能名。DeepSeek 搜索和浏览器一样是上网查资料，共用 browser 功能。编码工具要求租户明确开通 workspace（工作区是本机目录，不随“全部功能”默认放行）。
-var toolFeatures = map[string]string{"rag": "rag", "memory": "memory", "skills": "skills", "mcp": "mcp", "subagents": "subagents", "bash": "bash", "browser": "browser", "ds_search": "browser", "coding": "workspace"}
-var toolOrder = []string{"rag", "memory", "skills", "mcp", "subagents", "bash", "browser", "ds_search", "coding"}
+// 内置工具不归租户策略管，功能名留空。
+var toolFeatures = map[string]string{"calculator": "", "get_current_datetime": "", "search_notes": "", "rag": "rag", "memory": "memory", "skills": "skills", "mcp": "mcp", "subagents": "subagents", "bash": "bash", "web_search": "browser", "open_page": "browser", "ds_search": "browser", "coding": "workspace"}
+var toolOrder = []string{"calculator", "get_current_datetime", "search_notes", "rag", "memory", "skills", "mcp", "subagents", "bash", "web_search", "open_page", "ds_search", "coding"}
+
+// singleTools 的开关只管一个工具，键名就是工具名：关掉的写进快照的 disallowed_tools，agent 用 -disallowed-tools 去掉。
+var singleTools = []string{"calculator", "get_current_datetime", "search_notes", "web_search", "open_page"}
 
 // 检索和记忆默认关：检索的系统提示词是为知识库问答写的，会要求每个知识问题先查资料；记忆每次新对话都要多发几次模型请求做召回。
+// 笔记检索默认关：只查第 1 天的一篇笔记，通用问题模型也会先去查（D17）。必应搜索默认关：必应多半不给自动化浏览器结果，
+// 搜索交给 ds_search，浏览器只留 open_page 打开要渲染的页面。
 var builtin = map[string]string{
-	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "bash": "on", "browser": "on", "ds_search": "on", "coding": "on",
+	"calculator": "on", "get_current_datetime": "on", "search_notes": "off",
+	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "bash": "on", "web_search": "off", "open_page": "on", "ds_search": "on", "coding": "on",
 	"embedding": "ark", "memory_ttl": "", "provider": "ark", "workspace": "",
 	"max_steps": "0", "context_window": "262144", "tool_output": "4000",
 	"permission_mode": "edit", "permission_rules": "",
@@ -178,7 +185,7 @@ func (s *server) unavailable(key string, skills []string, servers []mcpServer) s
 		if _, err := exec.LookPath("bwrap"); err != nil {
 			return "没有找到 bubblewrap（bwrap），请先安装"
 		}
-	case "browser":
+	case "web_search", "open_page":
 		if os.Getenv("CHROME_PATH") != "" {
 			return ""
 		}
@@ -243,7 +250,7 @@ func (s *server) effectiveFor(u *user) (effective, settingsFile, error) {
 		}
 	}
 	for _, key := range toolOrder {
-		if !u.platform() && !s.auth.policy(u.Tenant).allowsTool(toolFeatures[key]) {
+		if feature := toolFeatures[key]; feature != "" && !u.platform() && !s.auth.policy(u.Tenant).allowsTool(feature) {
 			e.Blocked[key] = "租户 " + u.Tenant + " 没有开通"
 		} else if reason := s.unavailable(key, skills, servers); reason != "" {
 			e.Blocked[key] = reason

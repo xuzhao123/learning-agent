@@ -51,7 +51,7 @@ type Record struct {
 	Tool         string `json:"tool,omitempty"`
 	Target       string `json:"target,omitempty"` // 不敏感的对象标识：域名、记忆编号
 	Risk         string `json:"risk,omitempty"`
-	Decision     string `json:"decision,omitempty"` // allow、deny、unavailable、timeout
+	Decision     string `json:"decision,omitempty"` // allow、allow_session（本对话内同一范围都允许）、deny、unavailable、timeout
 	Status       string `json:"status,omitempty"`   // 执行结局：ok、error、unknown、denied…
 	ArgsHash     string `json:"args_sha256,omitempty"`
 	ArgsBytes    int    `json:"args_bytes,omitempty"`

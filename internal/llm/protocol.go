@@ -21,15 +21,29 @@ type Config struct{ Provider, APIURL, Upstream, Model, APIKey, Effort string }
 
 // 模型路由表：每家供应商的默认地址、模型与读取的变量名。都是 OpenAI 兼容的 chat/completions，
 // 请求体、tool_calls 与 usage 格式一致，所以只需要换地址、模型和密钥。
-// 方舟沿用最早的变量名 LLM_API_URL / LLM_MODEL，旧的 .env 不用改。
+// 豆包默认走方舟 Coding Plan 订阅的专用入口 /api/coding/v3：按量付费的老入口 /api/v3 是另一套计费，
+// 两个地址不能混用（用错地址会用不了套餐额度）。套餐入口只认套餐里的 Model Name（如 doubao-seed-2.1-pro）
+// 或 ark-code-latest（跟控制台的模型选择走），带日期版本号的老模型名属于 /api/v3。
+// 方舟沿用最早的变量名 LLM_API_URL / LLM_MODEL：变量名不变，值是套餐地址与套餐模型名。
+//
+// Models 是同一家供应商下可选的模型清单（观测台输入框的第二级下拉用它）；Model 是其中的默认值。
+// 清单只描述“这家供应商有哪些模型”；一次运行用哪个，由 agent 的 -model 参数或 ModelVar 决定。
 type Provider struct {
 	Name, APIURL, Model, URLVar, ModelVar string
 	KeyVars                               []string
+	Models                                []string
 }
 
 var Providers = []Provider{
-	{"ark", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", "doubao-seed-2-1-pro-260628", "LLM_API_URL", "LLM_MODEL", []string{"ARK_API_KEY", "LLM_API_KEY"}},
-	{"deepseek", "https://api.deepseek.com/chat/completions", "deepseek-flash", "DEEPSEEK_API_URL", "DEEPSEEK_MODEL", []string{"DEEPSEEK_API_KEY"}},
+	{Name: "ark", APIURL: "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
+		Model: "doubao-seed-2.1-pro", URLVar: "LLM_API_URL", ModelVar: "LLM_MODEL", KeyVars: []string{"ARK_API_KEY", "LLM_API_KEY"},
+		// 方舟 Coding Plan 文档列出的 Model Name，2026-10-20 逐个真实调用过（含一次工具调用）；套餐调整时改这里。
+		Models: []string{"doubao-seed-2.1-pro", "doubao-seed-2.1-lite", "doubao-seed-evolving", "doubao-seed-2.0-mini",
+			"kimi-k3", "kimi-k2.8-preview", "kimi-k2.7-code", "glm-5.3", "glm-5.3-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
+			"minimax-m3", "ark-code-latest"}},
+	{Name: "deepseek", APIURL: "https://api.deepseek.com/chat/completions",
+		Model: "deepseek-flash", URLVar: "DEEPSEEK_API_URL", ModelVar: "DEEPSEEK_MODEL", KeyVars: []string{"DEEPSEEK_API_KEY"},
+		Models: []string{"deepseek-flash"}},
 }
 
 func FindProvider(name string) (Provider, bool) {
@@ -42,8 +56,9 @@ func FindProvider(name string) (Provider, bool) {
 }
 
 // 环境变量优先，其次是本地 .env，最后是路由表里的默认值。
-// 观测台启动 agent 时在进程环境里设 LLM_API_URL（本机代理）和续聊的 LLM_MODEL：它们对任何供应商都生效；
-// .env 里的 LLM_API_URL / LLM_MODEL 只属于方舟，选 DeepSeek 时不会被误用。
+// 观测台启动 agent 时在进程环境里设 LLM_API_URL（本机代理）：它对任何供应商都生效；
+// 具体模型由观测台以 -model 参数传入（写进检查点参数，续跑与回放沿用），不走环境变量。
+// 其余变量各属一家：LLM_MODEL 只属于方舟，选 DeepSeek 时不会被误用。
 func LoadConfig(provider string) (Config, error) {
 	p, ok := FindProvider(provider)
 	if !ok {
@@ -96,9 +111,6 @@ func LoadConfig(provider string) (Config, error) {
 				config.Upstream = p.APIURL
 			}
 		}
-	}
-	if value := strings.TrimSpace(os.Getenv("LLM_MODEL")); value != "" {
-		config.Model = value
 	}
 	if config.APIKey == "" {
 		return config, fmt.Errorf("请在 .env 或环境变量配置 %s", p.KeyVars[0])

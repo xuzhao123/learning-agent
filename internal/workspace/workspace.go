@@ -27,7 +27,7 @@ import (
 const (
 	defaultLines = 200     // read_file 默认读多少行
 	maxLines     = 2000    // read_file 一次最多读多少行
-	maxLineChars = 300     // 单行超过就截断
+	maxLineChars = 2000    // 单行超过就截断（和 Claude Code 的 Read 一样）；HTML 一行常有几百字符，截断了 edit_file 就没法原样复制
 	maxFileBytes = 2 << 20 // 超过 2MB 的文件不整份读，请用 grep 定位
 	maxGlob      = 200     // glob 最多返回多少个路径
 	maxMatches   = 100     // grep 最多返回多少处

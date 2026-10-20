@@ -28,6 +28,7 @@
 | agent → 界面 | `subagent/started`、`subagent/completed`、`subagent/log`、`subagent/message` | 通知 | 子任务ID、结局；子 agent 的日志行；子 agent 自己的通知（原样包一层） |
 | agent → 界面 | `lab/case`、`lab/phase` | 通知 | Day 3/4 实验的分组与阶段 |
 | agent → 界面 | `network/requestApproval` | 请求 | `domain`、`reason`、`call_id`（子 agent 发起时另有 `task_id`）；回复 `{"decision":"allow" \| "deny" \| "unavailable"}` |
+| agent → 界面 | `tool/requestApproval`（D20） | 请求 | `call_id`、`tool`、`arguments`、`risk`、`reason`；外发类另有 `scope`（可以整段对话放行的范围）；回复 `allow`、`deny`、`unavailable`，带 `scope` 的还可以回 `allow_session`（10-19 补） |
 
 ## 3. 读代码
 

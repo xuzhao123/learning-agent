@@ -6,23 +6,26 @@
 
 ```sh
 ./bin/learning-agent -provider deepseek -question '……'   # 默认 -provider ark（豆包）
-go run . observe                                          # 新对话在输入框左下角选“豆包 / DeepSeek”
+./bin/learning-agent -model kimi-k3 -question '……'        # 方舟套餐里的其他模型
+go run . observe                                          # 新对话在输入框左下角选“豆包 / DeepSeek”，豆包旁边再选具体模型
 ```
 
-| 供应商 | 默认地址 | 默认模型 | 密钥 | 覆盖地址 / 模型 |
+| 供应商 | 默认地址 | 默认模型（可选清单） | 密钥 | 覆盖地址 / 模型 |
 | --- | --- | --- | --- | --- |
-| `ark` | `https://ark.cn-beijing.volces.com/api/v3/chat/completions` | `doubao-seed-2-1-pro-260628` | `ARK_API_KEY`（兼容 `LLM_API_KEY`） | `LLM_API_URL`、`LLM_MODEL` |
-| `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-flash` | `DEEPSEEK_API_KEY` | `DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` |
+| `ark` | `https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions`（Coding Plan 订阅入口） | `doubao-seed-2.1-pro`（另有 `doubao-seed-2.1-lite`、`kimi-k3`、`glm-5.3`、`deepseek-v4-pro`、`minimax-m3`、`ark-code-latest` 等，共 14 个） | `ARK_API_KEY`（兼容 `LLM_API_KEY`） | `LLM_API_URL`、`LLM_MODEL` |
+| `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-flash`（只有这一个） | `DEEPSEEK_API_KEY` | `DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` |
 
 密钥写在 `.env`（权限 0600、不提交）或环境变量里。
 
 | 设计点 | 本项目的选择 |
 | --- | --- |
-| 路由策略 | 手动选择：一个进程一个供应商，`-provider` 决定 |
+| 路由策略 | 手动选择：一个进程一个供应商、一个模型，`-provider` 与 `-model` 决定 |
 | 路由表 | `llm.Providers`：名字、默认地址与模型、读取哪些变量。两家都是 OpenAI 兼容接口，请求体不用改 |
-| 方舟的旧变量 | 方舟沿用 `LLM_API_URL` / `LLM_MODEL`，旧的 `.env` 不用改；选 DeepSeek 时不读 `.env` 里的这两个值 |
+| 方舟的旧变量 | 方舟沿用 `LLM_API_URL` / `LLM_MODEL`，变量名不用改；值是套餐入口地址与套餐模型名 `doubao-seed-2.1-pro`，旧 `.env` 里写的老地址 `.../api/v3` 与带日期版本号的老模型名要换掉或删掉；选 DeepSeek 时不读 `.env` 里的这两个值 |
+| 方舟两个入口 | `.../api/coding/v3` 走 Coding Plan 订阅额度，文档列的是套餐 Model Name 与 `ark-code-latest`；`.../api/v3` 按量付费，用带日期版本号的模型名。文档说明用 `.../api/v3` 不消耗套餐额度，所以地址不能混用；套餐入口实测也接受带日期的旧名字（3.4 节），是否计入套餐以控制台用量为准 |
 | 观测台代理 | 观测台仍通过进程环境变量 `LLM_API_URL` 把 agent 指向本机代理；agent 在请求头 `X-Agent-Upstream` 里声明真实上游，代理只接受 https，按它转发 |
-| 一段对话一个模型 | 观测台的下拉框只在新对话时可选，续聊沿用；子 agent 继承 `-provider`；检查点保存启动参数，`-resume` 也沿用 |
+| 一段对话一个模型 | 观测台的两级下拉（供应商 + 具体模型）只在新对话时可选；`-provider`、`-model` 都是启动参数，写进检查点，续聊、`-resume`、归因回放与子 agent 都沿用 |
+| 具体模型 | 清单写在 `Provider.Models`，默认值仍是 `Provider.Model`（`LLM_MODEL` / `DEEPSEEK_MODEL` 可改默认值）；`GET /models` 把清单交给页面，页面不抄第二份；选定后以 `-model` 传给 agent，`/runs` 拒绝清单外的名字 |
 | 向量模型 | 只有方舟提供 embedding，`-rag`、`-memory` 的向量始终走方舟，与聊天模型选哪家无关 |
 | 推理强度 | 原样传给供应商。DeepSeek 的模型列表写着支持 low/high/max，实测传 minimal、medium 也返回 200 |
 
@@ -32,8 +35,12 @@ go run . observe                                          # 新对话在输入�
 
 ```go
 var Providers = []Provider{
-	{"ark", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", "doubao-seed-2-1-pro-260628", "LLM_API_URL", "LLM_MODEL", []string{"ARK_API_KEY", "LLM_API_KEY"}},
-	{"deepseek", "https://api.deepseek.com/chat/completions", "deepseek-flash", "DEEPSEEK_API_URL", "DEEPSEEK_MODEL", []string{"DEEPSEEK_API_KEY"}},
+	{Name: "ark", APIURL: "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
+		Model: "doubao-seed-2.1-pro", URLVar: "LLM_API_URL", ModelVar: "LLM_MODEL", KeyVars: []string{"ARK_API_KEY", "LLM_API_KEY"},
+		Models: []string{"doubao-seed-2.1-pro", "doubao-seed-2.1-lite", …, "ark-code-latest"}},
+	{Name: "deepseek", APIURL: "https://api.deepseek.com/chat/completions",
+		Model: "deepseek-flash", URLVar: "DEEPSEEK_API_URL", ModelVar: "DEEPSEEK_MODEL", KeyVars: []string{"DEEPSEEK_API_KEY"},
+		Models: []string{"deepseek-flash"}},
 }
 ```
 
@@ -54,6 +61,30 @@ target, err := url.Parse(req.Header.Get("X-Agent-Upstream"))
 以前观测台自己从 `.env` 读一个固定的上游地址。改成由 agent 声明后，路由表只在 `llm` 包里有一份，观测台仍然不需要知道 agent 的配置，和“只看协议”的原则一致。这个头和 `X-Agent-Purpose`、`X-Agent-Task` 一样只给代理看，不转发给上游。
 
 浏览器里的网页能不能伪造这个头，让代理替它把请求转发到任意地址？不能：自定义请求头会触发 CORS 预检，代理不响应预检，浏览器就不会发出这个请求。能设置这个头的只有本机进程，而本机进程本来就能直接访问外网。
+
+### 2.3 具体模型怎样传下去
+
+供应商之下再选一级模型，用的是 agent 的启动参数 `-model`，不是环境变量。原因在检查点：中断续跑（`-resume`）只用检查点里存的启动参数恢复配置，环境变量不在里面。最初的实现用 `LLM_MODEL` 环境变量传模型，结果续跑和归因回放会悄悄换回默认模型，回放结论就不成立了。
+
+```go
+// server.go /runs：清单也来自 llm，页面不做第二份
+p, ok := llm.FindProvider(input.Provider)
+if !ok || !slices.Contains(p.Models, input.Model) {
+	http.Error(w, "模型不在 "+input.Provider+" 的可选清单里", http.StatusBadRequest)
+	return
+}
+// server.go snapshotArgs：模型和工具开关一样，从设置快照还原成启动参数
+if e.Model != "" {
+	args = append(args, "-model", e.Model)
+}
+```
+
+几处对应关系：
+
+- `GET /models` 把 `Provider.Models` 交给页面，`default` 按 `.env` 与环境变量解析成不选具体模型时 agent 实际会用的那个；输入框的第二级下拉用它渲染，清单只有一条时隐藏。
+- start/continue 事件记下 `model`（空表示用默认值），agent 在 `turn/started` 里报它真正解析出的模型。打开已有对话时只显示这个名字，它可以不在清单里（如旧对话的带日期版本号的名字）；没记录到就不显示，不拿现在的默认值冒充。
+- 续聊不重新选：观测台从上一轮的请求里取出实际用的模型（`history.Model`），写进 continue 事件并以 `-model` 启动，换模型要新建对话。子 agent 通过参数继承表拿到 `-model`。
+- 链路追踪的 chat span 记 `gen_ai.request.model`，也记响应里的 `gen_ai.response.model`；`ark-code-latest` 的响应是 `auto`，所以看不出实际模型。
 
 ## 3. 动手
 
@@ -97,10 +128,19 @@ Usage: purpose=main prompt_tokens=658 completion_tokens=71 cached_tokens=512
 - 新对话第一次请求后点停止，再发“继续完成”：从检查点续聊，同样走 DeepSeek，exit 0。
 - 页面：回答下方显示模型名（`请求 #7 · deepseek-flash · 2.3k tokens`）；续聊时下拉框锁定为这段对话的供应商；390 宽度无横向滚动，无 JS 报错。
 
+### 3.4 方舟 Coding Plan 与具体模型（2026-10-20）
+
+- 清单里 14 个模型各跑一次 `-model <名字> -question '用计算工具算 17*23…'`：都返回 200，都调用了 calculator 并答出 391。其中 `kimi-k2.7-code` 只出现在方舟的一份文档里，实测可用，也收进了清单。
+- `-model doubao-seed-2-1-pro-260628`（按量付费入口的旧名字）发到套餐入口同样成功，所以旧对话在新地址上还能续聊；是否计入套餐额度，要看控制台用量。
+- `-model ark-code-latest`：trace 里的 `gen_ai.response.model` 是 `auto`。
+- `-model glm-5.3 -lab-tools` 在 `slow_job` 执行中按 Ctrl+C：检查点 `args` 里有 `-model glm-5.3`，`-resume` 后启动行仍是 `model=glm-5.3`。
+- `-model kimi-k3 -subagents`：子 agent 的启动行也是 `model=kimi-k3`。
+- 观测台（新代码另起一个、临时平台账号，用完删除）：`POST /runs` 带 `model:"gpt-9"` 返回 400；带 `kimi-k3` 时首问与续聊的启动行、检查点参数都是 `kimi-k3`。无头 Chrome 打开真实页面：新对话默认 DeepSeek 时第二级隐藏，切到豆包后出现“默认（doubao-seed-2.1-pro）”和 14 个模型；在页面上选 `glm-5.3` 点发送，start 事件与 agent 都是 `glm-5.3`；旧对话显示 `doubao-seed-2-1-pro-260628`，DeepSeek 对话不显示第二级。
+
 ## 4. 已知边界
 
 - 只有手动选择；没有按用途（如摘要、记忆辅助调用用小模型）、按难度、级联或故障转移。
 - 推理强度原样透传，没有按供应商映射取值。
 - 一段对话不能中途换模型；`-resume` 也不能改供应商（配置取自检查点）。
 - 错误只按 HTTP 状态码报告；余额不足（方舟 403）与限流没有分开处理。
-- 上下文窗口仍是学习用的 12288，没有按模型的真实窗口调整。
+- 上下文窗口取命令行的 `-context-window`（观测台取设置），没有按模型的真实窗口调整；同一个套餐里换模型时，窗口不跟着变。

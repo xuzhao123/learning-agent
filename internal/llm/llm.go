@@ -37,6 +37,7 @@ type Reply struct {
 	Message    Message
 	Usage      *Usage
 	FirstToken time.Duration // B1：从发出请求到收到第一段正文或推理的时间（首字延迟）；没有收到为0
+	Model      string        // 响应里的 model：请求 ark-code-latest 这类跟随控制台的名字时，实际是哪个模型回答的
 }
 
 var ErrContextLength = errors.New("模型服务报告上下文过长")
@@ -149,7 +150,7 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 			onDelta(content, reasoning)
 		}
 	}
-	reply.Usage = stream.Usage
+	reply.Usage, reply.Model = stream.Usage, stream.Model
 	if err := scanner.Err(); err != nil {
 		if ctx.Err() != nil {
 			return reply, ctx.Err()
@@ -265,6 +266,10 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 	}
 	if u := reply.Usage; u != nil {
 		done["usage"] = u
+	}
+	if reply.Model != "" {
+		done["response_model"] = reply.Model
+		span.SetAttributes(semconv.GenAIResponseModel(reply.Model))
 	}
 	if err != nil {
 		done["error"] = err.Error()

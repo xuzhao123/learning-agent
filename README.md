@@ -40,7 +40,7 @@ go build -o bin/learning-agent .
 
 | 模式 | 配置项 | 默认值 |
 | --- | --- | --- |
-| 方舟聊天模型 | `ARK_API_KEY`（兼容 `LLM_API_KEY`）、`LLM_API_URL`、`LLM_MODEL` | `-provider ark`；`https://ark.cn-beijing.volces.com/api/v3/chat/completions`；`doubao-seed-2-1-pro-260628` |
+| 方舟聊天模型 | `ARK_API_KEY`（兼容 `LLM_API_KEY`）、`LLM_API_URL`、`LLM_MODEL` | `-provider ark`；`https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions`；`doubao-seed-2.1-pro` |
 | DeepSeek 聊天模型 | `DEEPSEEK_API_KEY`、`DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` | `-provider deepseek`；`https://api.deepseek.com/chat/completions`；`deepseek-flash` |
 | 线上向量模型 | 与方舟共用 `ARK_API_KEY` | `-embedding ark` |
 | 本地向量模型 | 不需要 embedding API 密钥；首次使用会下载模型 | `-embedding local`；聊天请求仍使用选定的线上模型 |
@@ -50,7 +50,11 @@ go build -o bin/learning-agent .
 | 观测台登录 | 账号在 `.data/users.json`，用 `go run . observe -add-user` 添加；平台账号与租户账号的区别见 [Day 20 实践](docs/day-20/day-20-lab.md#6-多租户与登录补充) | 没有账号时观测台拒绝启动 |
 | 调用链追踪 | 无需配置，span 写入 `.data/traces/`；`OTEL_EXPORTER_OTLP_ENDPOINT` 另发给 Jaeger 等 OTLP 平台；`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` 采集提示词与工具内容 | 默认只记元数据；接入步骤见 [Day 13 实践](docs/day-13/day-13-lab.md#4-接入外部平台) |
 
-默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器、DeepSeek 搜索和 Bash 按需开启。
+豆包的地址有两套，不能混用：默认的 `.../api/coding/v3` 是方舟 Coding Plan 订阅入口，模型名用套餐里的 Model Name（如 `doubao-seed-2.1-pro`、`doubao-seed-2.1-lite`、`kimi-k3`、`glm-5.3`）或 `ark-code-latest`（跟随控制台“开通管理”的模型选择，切换后 3–5 分钟生效）；`.../api/v3` 是按量付费入口，模型名带日期版本号（如 `doubao-seed-2-1-pro-260628`）。方舟文档说明 `.../api/v3` 不消耗套餐额度、照按量计费，所以地址不能混用；模型名按文档用 Model Name——套餐入口实测也接受带日期版本号的旧名字，但文档没有列出，是否计入套餐以控制台用量为准。`ark-code-latest` 的响应里 `model` 是 `auto`（实测），看不出实际是哪个模型回答的，评测与归因要固定模型时选具体名字。`.env` 里的 `LLM_API_URL`、`LLM_MODEL` 会覆盖默认值，以前填过老地址老模型的要一起改掉或删掉这两行；启动输出里的 `Model: provider=ark model=... upstream=...` 可以核对实际用的地址与模型。套餐额度按 5 小时、周、月分档，用完返回 429（`hour / week / month allocated quota exceeded`），不是地址配错。
+
+方舟套餐里的模型可以换：命令行用 `-model kimi-k3`（`.env` 或环境变量里的 `LLM_MODEL` 改的是不加 `-model` 时的默认值）；观测台在新对话里先选“豆包”，旁边的第二级下拉再选具体模型，只有一个模型的供应商不显示这一级。清单在路由表 `llm.Provider.Models`，经 `GET /models` 给页面，14 个名字 2026-10-20 逐个真实调用过（含一次工具调用）。观测台以 `-model` 传给 agent，它和其他启动参数一起写进检查点，所以一条对话固定一个模型：续聊、中断续跑、归因回放和子 agent 都用同一个。上下文窗口仍取设置里的值，不随模型变；换窗口更小的模型时把设置调小。
+
+默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器、DeepSeek 搜索和 Bash 按需开启。`-disallowed-tools` 去掉其中单个工具（逗号分隔，也可以去掉浏览器的 web_search 或 open_page；名字与 Claude Code 的 `--disallowed-tools` 一致，但只认工具名，按调用拦截用 `-deny` 规则）；观测台在设置里逐个开关，默认关 search_notes 和 web_search，搜索用 ds_search，打开网页用 open_page。
 
 推理强度默认 `high`。API 输出上限默认省略，显式设置 `-max-output-tokens` 才发送；本地上下文规划仍保留输出空间，省略 API 参数不代表无限输出。向量检索直接在 agent 进程内执行。
 
@@ -99,7 +103,7 @@ go build -o bin/learning-agent .
 
 补充阅读：
 
-- [学习计划](plan.md)：课程安排与长期目标（Week 4–6 为编码 harness）；[Harness 参考架构](harness-architecture.html)：综合 Codex 与 Claude Code 的 harness 结构与对照，下方附本项目现状架构，浏览器直接打开；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链；[第三周复盘](docs/week-03-review.md)：评测、权限、确认与审计怎样加在同一条路上。
+- [学习计划](plan.md)：课程安排与长期目标（Week 4–6 为编码 harness）；[Harness 参考架构](harness-architecture.html)：综合 Codex 与 Claude Code 的 harness 结构与对照，下方附本项目现状架构，浏览器直接打开；[进阶计划](plan-advanced.md)：从单机 agent 到生产级服务的改造清单；[架构评估](docs/architecture-review.md)：D30 后对照原有思路与 2026 年 10 月的 Codex、Claude Code，列出偏离、差距与计划外的优化；[第一周复盘](docs/week-01-review.md)：执行循环各模块的关系；[第二周复盘](docs/week-02-review.md)：一次工具调用怎样穿过运行时、检查点、队列、沙箱与调用链；[第三周复盘](docs/week-03-review.md)：评测、权限、确认与审计怎样加在同一条路上。
 - [深度问题](docs/deep-questions.md)：按主题复习设计取舍；[阅读材料](docs/reading-list.md)：原始资料与各课参考入口。
 - [Agent 工程面试题库](wiki/16-interview-preparation.md)：134 题，含参考回答、追问、系统设计、Go 编码与 GitHub 资料选择。
 - [Day 3 设计](docs/day-03/context-system-design.md)：本项目的上下文方案；[Codex 调研](docs/day-03/codex-context-research.md)：带版本范围的外部实现研究。
@@ -134,6 +138,7 @@ go build -o bin/learning-agent .
 | --- | --- | --- |
 | `-question` | 交互输入 | 本轮任务 |
 | `-provider` | ark | 选择方舟或 DeepSeek |
+| `-model` | 空 | 这家下面的具体模型（如 `kimi-k3`）；空时用 `LLM_MODEL` / `DEEPSEEK_MODEL` 或路由表默认值；观测台是输入框旁的第二个下拉 |
 | `-max-steps` | 10 | 模型请求预算，含摘要与辅助调用；0 表示不限 |
 | `-parallel` | 4 | 独立工具并发上限 |
 | `-rag` / `-memory` | false | 按需启用知识检索或长期记忆 |
@@ -191,7 +196,8 @@ go build -o bin/learning-agent .
 | `-tenant` | 空 | 多租户：本任务所属的租户，数据都在 `.data/tenants/<租户>/` 下；观测台和带 `tenant` 的队列任务自动加上；可与 `-resume` 一起用 |
 | `-private-input` | false | D20：任务输入已含私有数据，外发类工具执行前要确认；父 agent 派出子任务时自动加上，一般不手动使用 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
-| `-provider` | ark | 模型路由：`ark`（豆包，方舟）或 `deepseek`；子 agent 继承，续跑沿用 |
+| `-provider` | ark | 模型路由：`ark`（豆包，方舟 Coding Plan）或 `deepseek`；子 agent 继承，续跑沿用 |
+| `-model` | 空 | 这家供应商下的具体模型，优先于 `LLM_MODEL` / `DEEPSEEK_MODEL`；写进检查点的启动参数，子 agent 继承，续跑与回放沿用 |
 | `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux）；工作目录按对话保留，续聊各轮共用，观测台可上传、下载 |
 | `-workspace` | 空 | D23：增加 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写；子 agent 继承。D25 起配合 `-bash` 时 bash 的 `/workspace` 就是这个仓库（`.git` 只读，`.env`、`.data` 看不到），本对话目录改挂 `/scratch` |
 | `-permission-mode` | edit | D25：plan（只读计划）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，规则与高风险确认照常） |

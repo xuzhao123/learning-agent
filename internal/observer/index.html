@@ -190,7 +190,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .sugs button:hover { color: var(--text); background: var(--hover); }
 
 /* 输入框 */
-#composer-wrap { flex: none; padding: 0 24px 18px; }
+#composer-wrap { flex: none; padding: 0 24px 18px; position: relative; }
+#jump { position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -10px); z-index: 2; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font-size: 12px; box-shadow: 0 2px 10px color-mix(in srgb, var(--text) 12%, transparent); cursor: pointer; }
+#jump:hover { background: var(--hover); }
+#jump.fresh::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--accent); }
 #composer { position: relative; max-width: 768px; margin: 0 auto; border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); transition: border-color .15s; }
 #composer:focus-within { border-color: color-mix(in srgb, var(--text) 22%, var(--line)); }
 #slash { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); max-height: 260px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow); z-index: 5; }
@@ -568,10 +571,11 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
      <div id="chat-col">
       <div id="chat-scroll"><div id="thread"></div></div><div id="viz-park" hidden></div>
       <div id="composer-wrap">
+        <button id="jump" type="button" hidden></button>
         <form id="composer">
           <div id="slash" hidden></div>
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务"></textarea>
-          <div class="crow"><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><div id="ctx-ring" role="img" aria-label="上下文用量" hidden><svg viewBox="0 0 30 30" aria-hidden="true"><circle class="track" cx="15" cy="15" r="11.5"/><circle class="fill" cx="15" cy="15" r="11.5"/></svg><span class="pct"></span></div><button id="send" aria-label="发送"></button></div>
+          <div class="crow"><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="model" class="pick" aria-label="具体模型" title="具体模型：对话开始后固定" hidden></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><div id="ctx-ring" role="img" aria-label="上下文用量" hidden><svg viewBox="0 0 30 30" aria-hidden="true"><circle class="track" cx="15" cy="15" r="11.5"/><circle class="fill" cx="15" cy="15" r="11.5"/></svg><span class="pct"></span></div><button id="send" aria-label="发送"></button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -613,10 +617,10 @@ const MEM_TYPE = { load: "读取", recall: "调入", write: "新增", refresh: "
 const MEM_STATUS = { contextual: "已补背景", no_source: "旧记忆无来源·原文检索", pending: "背景待处理·原文检索", too_long: "背景超出向量输入上限·原文检索", ok: "已生成", failed: "生成失败·原文检索", budget: "预算不足·原文检索" };
 const AUX_LABEL = { memory_contextualize: "记忆背景生成", memory_rerank: "记忆重排" };
 const ui = {
-  page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, follow: true, open: new Set(),
+  page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, follow: true, chatFollow: true, open: new Set(),
   collapsed: new Set(), expanded: false, search: "", zoom: null, checked: new Set(), compare: [], compareSel: null,
   replay: null, ctxWindow: Number(load("ctxWindow")) || 128000, queued: false, sending: false, loading: false,
-  inspectorTab: "overview", filesOpen: false, files: {},
+  inspectorTab: "overview", filesOpen: false, files: {}, models: null,
 };
 
 // ---------- 小工具 ----------
@@ -737,7 +741,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, provider: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, disallowedTools: [], provider: "", model: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -752,7 +756,7 @@ function apply(r, e) {
   // pending：问题已提交、agent 还没发出第一次请求时，对话流先显示这条消息。
   // 上一轮中途停下：记在新一轮之前，对话流里显示一条中断标记（先记，再重置停止状态）。
   if (e.kind === "continue" && r.exit && r.exit !== "exit 0") (r.interrupted ??= {})[r.turns.length + 1] = r.stopRequested ? "上一轮已按停止按钮中断" : "上一轮未正常结束（" + endLabel(r) + "）";
-  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.dsSearch = !!e.ds_search; r.provider = e.provider || "ark"; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; r.source = e.source || ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
+  if (e.kind === "start" || e.kind === "continue") { r.memory = !!e.memory; r.memoryTTL = e.memory_ttl || ""; r.memTurn++; r.memPhase = "start"; r.skills = e.skills || []; r.mcp = e.mcp || []; r.subagents = !!e.subagents; r.browser = !!e.browser; r.dsSearch = !!e.ds_search; r.disallowedTools = e.disallowed_tools || []; r.provider = e.provider || "ark"; r.model = e.model || ""; r.bash = !!e.bash; r.rag = !!e.rag; r.workspace = e.workspace || ""; r.maxSteps = e.max_steps || 0; r.permission = e.permission || ""; r.stopRequested = false; r.checkpoint = ""; r.protocol = !!e.protocol; r.source = e.source || ""; if (e.trace) r.traces.push({ turn: r.memTurn, id: e.trace }); }
   if (e.kind === "start") { r.query = e.text; r.embedding = e.embedding; r.embeddingExplicit = !!e.embedding; r.pending = [LAB_TITLE, RAG_LAB_TITLE].includes(e.text) ? "" : e.text; r.turnPending = true; r.pendingTime = time; }
   else if (e.kind === "continue") {
     r.exit = ""; r.termination = ""; r.tEnd = null; r.pending = e.text; r.turnPending = true; r.pendingTime = time;
@@ -851,7 +855,7 @@ function apply(r, e) {
 // B0：agent 经协议发来的结构化通知。页面需要的信息（任务ID、输入容量、记忆与能力事件、浏览器地址、子 agent 的起止和输出、
 // 实验分组）都从这里来，不再解析终端文本。方法名见 internal/protocol 与 docs/bonus-protocol。
 function applyNotify(r, method, p, time) {
-  if (method === "turn/started") { if (p.turn_id) r.checkpoint = p.turn_id; if (p.input_capacity) r.inputCapacity = p.input_capacity; if (p.sandbox) r.sandbox = p.sandbox; }
+  if (method === "turn/started") { if (p.turn_id) r.checkpoint = p.turn_id; if (p.input_capacity) r.inputCapacity = p.input_capacity; if (p.sandbox) r.sandbox = p.sandbox; if (p.model) r.model = p.model; }
   else if (method === "memory/event") {
     // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
     if (!["search", "forget", "hit"].includes(p.kind) && !/^phase=(search|cli) /.test(p.text || "")) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: p.kind, text: p.text, fields: memFields(p.text || "") });
@@ -1683,12 +1687,17 @@ function show(id, updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
   if (ui.tab === "compare") ui.tab = "trace";
-  Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set(), subOpen: null, webOpen: null, webClosed: false });
+  Object.assign(ui, { run: newRun(id), events: [], follow: true, zoom: null, selected: null, expanded: false, loading: true, search: "", open: new Set(), subOpen: null, webOpen: null, webClosed: false, chatFollow: true, unseen: false });
   if (updateURL) syncRunURL(id);
   $("search").value = "";
   ui.collapsed.clear();
   const es = ui.source = new EventSource(`/runs/${encodeURIComponent(id)}/events`);
-  es.onmessage = (m) => { if (ui.source !== es) return; const e = JSON.parse(m.data); ui.events.push(e); apply(ui.run, e); schedule(); };
+  es.onmessage = (m) => {
+    if (ui.source !== es) return;
+    const e = JSON.parse(m.data);
+    ui.events.push(e); apply(ui.run, e);
+    if (!(e.kind === "delta" && !e.sub && patchLive(ui.run))) schedule();
+  };
   es.addEventListener("end", () => {
     es.close();
     if (ui.source !== es) return;
@@ -1709,7 +1718,7 @@ function stopReplay() {
 function startReplay() {
   if (!ui.run || !ui.run.exit || ui.tab === "compare") return;
   const events = ui.events.slice(), speed = Number($("speed").value), foldIdle = $("fold").checked;
-  Object.assign(ui, { run: newRun(ui.run.id), follow: true, zoom: null, replay: { i: 0 } });
+  Object.assign(ui, { run: newRun(ui.run.id), follow: true, zoom: null, replay: { i: 0 }, chatFollow: true });
   const step = () => {
     if (!ui.replay) return;
     const e = events[ui.replay.i++];
@@ -1727,9 +1736,26 @@ function startReplay() {
 // ---------- 对话流：从同一批模型请求还原用户消息、思考、工具和回答 ----------
 // 只渲染少量 Markdown：先转义再替换，模型输出不能注入 HTML。
 // visual 为真时（对话里的模型回答），visualization skill 的 ```echarts 与 ```html type="renderer" 块换成 vizSlot，由 renderChat 放入沙箱 iframe。
+// 链接只认 http(s)：[文字](地址) 与裸地址，新标签页打开。匹配的是转义后的文本：地址只取 ASCII 的 URL 字符，
+// & 只认 &amp;（&quot;、&lt;、&gt; 是原文的引号与尖括号，到这里截断），紧跟的中文不算进去；允许一层括号（如维基百科的地址）。
+const MD_URL = String.raw`https?:\/\/(?:[A-Za-z0-9\-._~:\/?#@!$'*+,;=%]|&amp;|\((?:[A-Za-z0-9\-._~:\/?#@!$'*+,;=%]|&amp;)*\))+`;
+const MD_LINK = new RegExp(String.raw`\[([^\]\n]+)\]\((${MD_URL})\)|&lt;(${MD_URL})&gt;|(${MD_URL})`, "g"); // 第二种是 Markdown 的 <地址> 写法
+const mdAnchor = (href, text) => `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 function md(text, visual) {
   const lines = String(text || "").split("\n"), out = [];
-  const inline = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // 行内代码先换成占位符：里面的地址不变成链接，代码两边的 ** 仍能配成粗体。
+  const inline = (s) => {
+    const codes = [];
+    return esc(s).replace(/`([^`]+)`/g, (_, code) => `${codes.push(code) - 1}`)
+      .replace(MD_LINK, (_, label, href, angled, bare) => {
+        if (label) return mdAnchor(href, label);
+        if (angled) return mdAnchor(angled, angled);
+        const url = bare.replace(/[.,;:!?]+$/, ""); // 句末的英文标点留在链接外
+        return mdAnchor(url, url) + bare.slice(url.length);
+      })
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(\d+)/g, (_, n) => `<code>${codes[n]}</code>`);
+  };
   const block = /^(```|#{1,6}\s|\s*([-*]|\d+\.)\s|\|)/;
   for (let i = 0; i < lines.length;) {
     const line = lines[i];
@@ -1931,9 +1957,15 @@ function renderCall(box, r, c, last) {
   head.append(el("span", "", `${callPosition(c)} · 请求 #${c.n}`), raw.button); box.append(head, raw.panel);
   if (!c.end) {
     // B1：流式输出进行中：推理与正文边收边显示，完整响应到达后换成下面的正式渲染。
-    const live = c.live || {};
-    if (live.reasoning) box.append(step("r" + c.n, [ico("", "think"), el("span", "", `思考中 · ${live.reasoning.length} 字`)], [el("div", "reason", live.reasoning)]));
-    if (live.content) box.append(md(live.content, true));
+    const live = c.live || {}, slot = { box, call: c, reasoning: live.reasoning?.length || 0, content: live.content || "" };
+    if (live.reasoning) {
+      slot.count = el("span", "", `思考中 · ${slot.reasoning} 字`); slot.text = el("div", "reason", live.reasoning);
+      const fold = step("r" + c.n, [ico("", "think"), slot.count], [slot.text]);
+      fold.addEventListener("toggle", () => { if (fold.open) slot.text.scrollTop = slot.text.scrollHeight; }); // 展开时从最新的思考看起，之后跟随
+      box.append(fold);
+    }
+    if (live.content) box.append(slot.md = md(live.content, true));
+    if (r === ui.run) ui.live = slot;
     return box.append(el("div", "shimmer", live.content ? "生成中…" : "思考中…"));
   }
   if (!c.choice) {
@@ -2145,7 +2177,8 @@ function netCard(r, t) {
   card.append(acts);
   return card;
 }
-// D20：高风险操作确认。规则在 agent 的执行器里，命中后 agent 暂停等这里的答复；只对这一项调用有效，不留到下一轮。
+// D20：高风险操作确认。规则在 agent 的执行器里，命中后 agent 暂停等这里的答复；“允许”只对这一项调用有效。
+// 外发类另有“本对话内都允许”：范围由 agent 给出（搜索按工具，读网页按工具和主机），之后同一范围不再询问，续聊沿用，审计照记。
 const RISK_LABEL = { irreversible: "不可撤回", destructive: "破坏性操作", outbound: "可能外发私有数据", redo: "重做中断的操作", permission: "权限设置要求确认" };
 function approvalCard(root, callID) {
   const a = root.approvals[callID];
@@ -2154,19 +2187,22 @@ function approvalCard(root, callID) {
   const acts = el("div", "acts");
   if (a.state === "waiting") {
     const yes = el("button", "yes", "允许"), no = el("button", "", "拒绝");
-    yes.type = no.type = "button";
-    const decide = async (allow) => {
-      yes.disabled = no.disabled = true;
+    const always = a.scope ? el("button", "", `本对话内 ${a.scope} 都允许`) : null;
+    const buttons = [yes, always, no].filter(Boolean);
+    for (const b of buttons) b.type = "button";
+    const decide = async (allow, session) => {
+      for (const b of buttons) b.disabled = true;
       try {
-        const resp = await fetch(`/runs/${encodeURIComponent(root.id)}/approval`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ call_id: callID, allow }) });
+        const resp = await fetch(`/runs/${encodeURIComponent(root.id)}/approval`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ call_id: callID, allow, session }) });
         if (!resp.ok) throw new Error(await resp.text());
-        a.state = allow ? "allow" : "deny";
+        a.state = (await resp.json()).decision;
         renderChat();
-      } catch (err) { alert("操作失败：" + err.message); yes.disabled = no.disabled = false; }
+      } catch (err) { alert("操作失败：" + err.message); for (const b of buttons) b.disabled = false; }
     };
-    yes.onclick = () => decide(true); no.onclick = () => decide(false);
-    acts.append(yes, no, el("span", "meta", "agent 正在等待：只对这一次调用有效"));
-  } else acts.append(el("span", "meta", { allow: "已允许", deny: "已拒绝", expired: "未答复（agent 已结束或等待超时）" }[a.state] || a.state));
+    yes.onclick = () => decide(true, false); no.onclick = () => decide(false, false);
+    if (always) always.onclick = () => decide(true, true);
+    acts.append(...buttons, el("span", "meta", always ? "agent 正在等待：“允许”只对这一次调用有效" : "agent 正在等待：只对这一次调用有效"));
+  } else acts.append(el("span", "meta", { allow: "已允许", allow_session: `已允许，本对话内 ${a.scope || "同一范围"} 不再询问`, deny: "已拒绝", expired: "未答复（agent 已结束或等待超时）" }[a.state] || a.state));
   card.append(acts);
   return card;
 }
@@ -2394,7 +2430,11 @@ function renderCompact(c) {
 function welcome() {
   const box = el("div", "welcome"), sugs = el("div", "sugs");
   box.append(el("h1", "", "想让 agent 做什么？"), sugs);
-  const suggestions = toolOn("memory") ? ["记住：我偏好 Go 而不是 Python", "你还记得我偏好什么语言吗？", "记住流程：代码评审先跑构建，再看逻辑"] : toolOn("rag") ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : ["计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。", "先查学习笔记中的循环职责，再计算职责数量乘以25。"];
+  const suggestions = toolOn("memory") ? ["记住：我偏好 Go 而不是 Python", "你还记得我偏好什么语言吗？", "记住流程：代码评审先跑构建，再看逻辑"] : toolOn("rag") ? ["本项目工具失败后总共尝试几次，等待多久？", "我们项目 TS-999 错误码是什么？请给出资料依据。"] : [
+    toolOn("calculator") && toolOn("get_current_datetime") && "计算 (1234×5678) 开根号取整，并查询当前日期时间。两项独立，请同轮调用。",
+    toolOn("search_notes") && toolOn("calculator") && "先查学习笔记中的循环职责，再计算职责数量乘以25。",
+    toolOn("ds_search") && "搜索一下有什么方式可以学习 agent harness，注明来源。",
+  ].filter(Boolean);
   for (const q of suggestions) {
     const b = el("button", "", q);
     b.onclick = () => { $("query").value = q; syncComposer(); $("query").focus(); };
@@ -2409,7 +2449,8 @@ function renderChat() {
 }
 function drawChat() {
   const box = $("thread"), scroller = $("chat-scroll");
-  const stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120, top = scroller.scrollTop;
+  const top = scroller.scrollTop, height = scroller.scrollHeight;
+  ui.live = null;
   // 展开的思考框自带滚动条：重建前记下位置，原来在底部的继续跟随流式输出。
   const reasons = new Map([...box.querySelectorAll("details.step[open] > .body > .reason")].map((x) =>
     [x.closest("details").dataset.key, x.scrollHeight - x.scrollTop - x.clientHeight < 24 ? Infinity : x.scrollTop]));
@@ -2480,8 +2521,52 @@ function drawChat() {
     const x = box.querySelector(`details.step[open][data-key="${key}"] > .body > .reason`);
     if (x) x.scrollTop = pos === Infinity ? x.scrollHeight : pos;
   }
-  scroller.scrollTop = stick ? scroller.scrollHeight : top;
+  if (ui.chatFollow) toBottom(); else { scroller.scrollTop = top; if (scroller.scrollHeight > height) ui.unseen = true; }
+  syncJump();
   renderSubPanel();
+}
+// 跟随最新输出由用户的滚动决定：往上滚（滚轮、拖滚动条、键盘、触摸）就停止跟随，回到底部再恢复；
+// 不再按“离底部多近”猜，否则流式输出时滚一格就会被下一帧拉回底部。
+function toBottom() { const s = $("chat-scroll"); s.scrollTop = s.scrollHeight; ui.chatSetTop = s.scrollTop; }
+function unfollow() { if (ui.chatFollow) { ui.chatFollow = false; syncJump(); } }
+function syncJump() {
+  const s = $("chat-scroll"), b = $("jump"), far = s.scrollHeight - s.scrollTop - s.clientHeight > 80;
+  if (ui.chatFollow || !far) ui.unseen = false;
+  b.hidden = ui.page !== "chat" || !ui.run || ui.chatFollow || !far;
+  b.classList.toggle("fresh", !!ui.unseen);
+  b.textContent = ui.unseen ? "有新内容 · 回到最新" : "回到最新";
+}
+$("chat-scroll").addEventListener("wheel", (ev) => { if (ev.deltaY < 0) unfollow(); }, { passive: true });
+$("chat-scroll").addEventListener("scroll", () => {
+  const s = $("chat-scroll");
+  if (s.scrollHeight - s.scrollTop - s.clientHeight < 8) ui.chatFollow = true;
+  else if (s.scrollTop < (ui.chatSetTop ?? 0) - 2) ui.chatFollow = false;
+  ui.chatSetTop = s.scrollTop;
+  syncJump();
+});
+$("jump").onclick = () => {
+  const s = $("chat-scroll");
+  ui.chatFollow = true; ui.unseen = false; syncJump();
+  s.scrollTo({ top: s.scrollHeight, behavior: "smooth" });
+};
+// B1 的增量只改最后一次请求的思考与正文：就地追加，不重建整个对话，页面其余部分的点击、选中文字和滚动都不受打扰。
+// 结构有变化（第一次出现思考或正文、含可视化块）时返回 false，交给整体重建。
+function patchLive(r) {
+  const s = ui.live, c = r.calls.at(-1), live = c?.live || {};
+  if (ui.page !== "chat" || ui.run !== r || !s || s.call !== c || c.end || !s.box.isConnected) return false;
+  if (!s.text !== !live.reasoning || !s.md !== !live.content || /```(echarts|html)/.test(live.content || "")) return false;
+  const scroller = $("chat-scroll"), height = scroller.scrollHeight;
+  if (live.reasoning && live.reasoning.length > s.reasoning) {
+    const x = s.text, bottom = x.scrollHeight - x.scrollTop - x.clientHeight < 24;
+    x.append(live.reasoning.slice(s.reasoning)); // 追加文本节点：已选中的思考文字不会丢
+    s.reasoning = live.reasoning.length;
+    s.count.textContent = `思考中 · ${s.reasoning} 字`;
+    if (bottom) x.scrollTop = x.scrollHeight;
+  }
+  if (live.content && live.content !== s.content) { s.md.innerHTML = md(live.content).innerHTML; s.content = live.content; }
+  if (ui.chatFollow) toBottom(); else if (scroller.scrollHeight > height) ui.unseen = true;
+  syncJump();
+  return true;
 }
 
 // ---------- 外壳：顶栏、输入框与对话列表 ----------
@@ -2509,18 +2594,26 @@ function renderShell() {
 }
 // 工具在设置里常驻；新对话按设置显示，进行中的对话按它开始时的快照显示。
 const TOOL_INFO = {
-  rag: ["知识库检索", "search_docs：检索项目学习文档。打开后系统提示词要求知识问题先查资料，所以默认关"],
+  calculator: ["计算器", "calculator：四则运算、括号、sqrt 和 floor，只解析数学表达式"],
+  get_current_datetime: ["当前时间", "get_current_datetime：Asia/Shanghai 的日期、时间和星期"],
+  search_notes: ["笔记检索", "search_notes：在第 1 天的学习笔记里逐行找关键词。只查这一篇，通用问题模型也会先去查，所以默认关；评测的笔记题在命令行里照常带上"],
+  rag:["知识库检索", "search_docs：检索项目学习文档。打开后系统提示词要求知识问题先查资料，所以默认关"],
   memory: ["长期记忆", "remember / search / forget_memory：新对话开头先召回，要多发几次模型请求，所以默认关；按租户各自一份"],
   skills: ["Skills", "Skills 中心里启用的 skill：常驻名字和用途，用到时再加载正文"],
   mcp: ["MCP", "MCP 中心里启用的 server，工具注册为 mcp_<名字>"],
   subagents: ["子 agent", "spawn_agent：独立上下文的子进程，继承这里的工具，不继承长期记忆"],
   bash: ["Bash 沙箱", "bash：bubblewrap 沙箱，默认断网，联网逐次审批"],
-  browser: ["浏览器", "web_search / open_page：无头 Chrome，只读"],
-  ds_search: ["DeepSeek 搜索", "ds_search / ds_fetch：DeepSeek 服务端搜索与抓取网页，按次计费，用 DEEPSEEK_API_KEY"],
+  web_search: ["必应搜索", "web_search：无头 Chrome 打开必应搜索。必应多半不给自动化浏览器结果，搜索交给 DeepSeek，所以默认关"],
+  open_page: ["打开网页", "open_page：无头 Chrome 打开网页读正文，会执行页面脚本，适合要渲染后才有内容的页面；只读"],
+  ds_search:["DeepSeek 搜索", "ds_search / ds_fetch：DeepSeek 服务端搜索与抓取网页，按次计费，用 DEEPSEEK_API_KEY"],
   coding: ["编码工具", "read_file / glob / grep / edit_file / write_file：只在对话选的工作区里读写"],
 };
 function runTools(r) {
-  return { rag: r.rag || (r.calls.at(-1)?.req.tools || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, bash: r.bash, browser: r.browser, ds_search: r.dsSearch, coding: !!r.workspace };
+  // 单个工具按最近一次请求实际带的工具列表显示；还没发请求时按开始时的快照（disallowed_tools）。
+  const sent = r.calls.at(-1)?.req.tools;
+  const has = (name, group = true) => sent ? sent.some((t) => t.function?.name === name) : group && !r.source && !r.disallowedTools.includes(name);
+  return { calculator: has("calculator"), get_current_datetime: has("get_current_datetime"), search_notes: has("search_notes"), web_search: has("web_search", r.browser), open_page: has("open_page", r.browser),
+    rag: r.rag || (sent || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, bash: r.bash, ds_search: r.dsSearch, coding: !!r.workspace };
 }
 function toolOn(key) {
   if (ui.run) return !!runTools(ui.run)[key];
@@ -2532,11 +2625,19 @@ async function loadSettings() {
   try { const res = await fetch("/settings"); if (res.ok) ui.settings = await res.json(); } catch {}
   syncComposer();
 }
+// 第二级模型下拉的清单：路由表只在 llm 包里，页面从 /models 读它，前端不抄一份。
+async function loadModels() {
+  try {
+    const res = await fetch("/models");
+    if (res.ok) ui.models = new Map((await res.json()).map((p) => [p.name, p]));
+  } catch {}
+  syncComposer();
+}
 // D30：输入框右侧的上下文用量环（参考 Codex 客户端）。口径与轨迹页“上下文压力”一致：
 // 最近一次主请求的服务端输入 tokens（system、工具定义与历史消息都在里面）占可用输入容量的比例。
 // 压缩请求的输入同样是满上下文，不能拿它当用量：刚压缩完，环反而会显得更满。
 const ctxRingLen = 2 * Math.PI * 11.5;
-const ctxK = (n) => n >= 1000 ? (n / 1000).toFixed(n % 1000 ? 1 : 0) + "k" : String(Math.round(n));
+const ctxK = (n) => n >= 1000 ? +(n / 1000).toFixed(1) + "k" : String(Math.round(n)); // 去掉末尾的 .0：257024 → 257k，151234 → 151.2k
 function updateCtxRing(r) {
   const ring = $("ctx-ring"), pct = ring.querySelector(".pct"), fill = ring.querySelector(".fill");
   const last = r && r.calls.filter((c) => !c.compact && c.usage && c.usage.prompt_tokens).at(-1);
@@ -2582,6 +2683,22 @@ function syncComposer() {
   $("provider").disabled = !!r;
   if (r) $("provider").value = r.provider || "ark";
   else if (!ui.picked.provider && s) $("provider").value = s.values.provider;
+  const prov = $("provider").value, spec = ui.models?.get(prov);
+  const models = spec?.models || [];
+  // 已有对话只显示它实际用的模型（agent 在 turn/started 里报的），它可以不在清单里：旧对话的带日期版本号的模型名、.env 里自填的名字；
+  // 没记录到就不显示，不拿现在的默认值冒充。新对话列出清单，“默认”标的是 agent 实际会用的那个（/models 按 .env 解析）。
+  const opts = r ? (r.model ? [[r.model, r.model]] : []) : [["", "默认（" + (spec?.default || "供应商默认") + "）"], ...models.map((m) => [m, m])];
+  const pv = $("model"), msig = JSON.stringify(opts);
+  if (pv.dataset.sig !== msig) {
+    const keep = pv.value;
+    pv.replaceChildren(...opts.map(([value, text]) => new Option(text, value)));
+    pv.dataset.sig = msig;
+    pv.value = opts.some(([value]) => value === keep) ? keep : (opts[0]?.[0] ?? "");
+  }
+  pv.disabled = !!r;
+  pv.hidden = models.length < 2 || (!!r && !r.model);
+  if (!r && !ui.picked.model) pv.value = "";
+  pv.title = r ? "具体模型：对话开始后固定（换模型请新建对话）" : "具体模型：默认用这家供应商的默认值，清单来自路由表";
   const ws = $("workspace"), names = r ? (r.workspace ? [r.workspace] : []) : (s?.workspaces || []).map((w) => w.name);
   const signature = names.join("\n");
   if (ws.dataset.sig !== signature) {
@@ -2600,7 +2717,7 @@ function syncComposer() {
   if (!ui.picked.permission) $("perm").value = (r && r.permission) || s?.values.permission_mode || "edit";
   $("perm").disabled = !!busy || !!ui.replay;
   const on = Object.keys(TOOL_INFO).filter(toolOn);
-  $("tools-link").textContent = `${on.length} 组工具`;
+  $("tools-link").textContent = `${on.length} 项工具`;
   $("tools-link").title = on.map((k) => TOOL_INFO[k][0]).join("、") || "没有打开的工具";
   // 运行中发送键变成停止键（Codex 客户端的做法）：第一次优雅停止，第二次强制结束。
   const running = !!r && !r.exit && !ui.replay && (r.calls.length > 0 || r.logs.length > 0);
@@ -2612,7 +2729,8 @@ function syncComposer() {
   const imported = SOURCE_LABEL[r?.source];
   // 导入的对话只读：模型、工作区、权限与工具都是对方 agent 的，这里不给选择。
   for (const id of ["provider", "perm", "tools-link"]) $(id).hidden = !!imported;
-  if (imported) $("workspace").hidden = true;
+  // 模型与工作区上面已按清单和对话决定是否显示，这里只在导入的对话里再藏起来，不能把它们重新显示出来。
+  if (imported) $("model").hidden = $("workspace").hidden = true;
   $("query").disabled = !!imported;
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !!imported || !$("query").value.trim();
   $("query").placeholder = imported ? "导入的对话只能查看" : r ? "继续提问" : "给 agent 布置一个任务，/ 选命令";
@@ -2748,7 +2866,7 @@ async function attribute(runID) {
 function newChat(updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
-  Object.assign(ui, { page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false, picked: {}, toolsOpen: false });
+  Object.assign(ui, { chatFollow: true, unseen: false, page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false, picked: {}, toolsOpen: false });
   if (updateURL) syncRunURL(null);
   document.body.classList.remove("nav-open");
   $("stats").hidden = true;
@@ -2896,7 +3014,7 @@ $("mcp-hub").onclick = () => openMCP();
 // 设置页：工具常驻，按 内置默认 → 平台 → 个人 合并；租户策略和本机条件只会关掉工具。改动只影响之后的新对话。
 const SET_SOURCE = { builtin: "内置默认", platform: "平台", user: "你" };
 async function openSettings() {
-  const panel = await openHubPage("设置", "工具在新对话里默认都带上，模型自己决定用不用；每个对话只选模型和工作区。改动只影响之后的新对话，进行中的对话沿用开始时的快照。保存在 .data/settings.json。");
+  const panel = await openHubPage("设置", "打开的工具在新对话里都会带上，模型自己决定用不用；每个对话只选模型和工作区。改动只影响之后的新对话，进行中的对话沿用开始时的快照。保存在 .data/settings.json。");
   if (!panel) return;
   let data;
   try { data = await (await hubCall("GET", "/settings")).json(); }
@@ -3409,7 +3527,8 @@ $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query, permission: $("perm").value } : { query, provider: $("provider").value, workspace: $("workspace").disabled ? "" : $("workspace").value, permission: $("perm").value });
+  ui.chatFollow = true;
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query, permission: $("perm").value } : { query, provider: $("provider").value, model: $("model").hidden ? "" : $("model").value, workspace: $("workspace").disabled ? "" : $("workspace").value, permission: $("perm").value });
 };
 $("send").onclick = async (ev) => {
   if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交
@@ -3422,7 +3541,8 @@ $("send").onclick = async (ev) => {
     if (!res.ok && res.status !== 409) alert(await res.text());
   } catch (err) { alert("停止失败：" + err.message); }
 };
-$("provider").onchange = () => { ui.picked.provider = true; syncComposer(); };
+$("provider").onchange = () => { ui.picked.provider = true; ui.picked.model = false; syncComposer(); };
+$("model").onchange = () => { ui.picked.model = true; syncComposer(); };
 $("workspace").onchange = () => { ui.picked.workspace = true; syncComposer(); };
 $("perm").onchange = () => { ui.picked.permission = true; syncComposer(); };
 $("tools-link").onclick = () => { if (ui.run) { ui.toolsOpen = !ui.toolsOpen; syncComposer(); } else openSettings(); };
@@ -3489,6 +3609,7 @@ $("logout").onclick = async () => { await fetch("/logout", { method: "POST" }); 
 loadMe();
 restoreRunURL();
 loadEnabled();
+loadModels();
 loadSettings();
 </script>
 </body>

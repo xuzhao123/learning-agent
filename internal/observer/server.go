@@ -60,18 +60,20 @@ type event struct {
 	MemoryTTL  string          `json:"memory_ttl,omitempty"`
 	Skills     []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
 	MCP        []mcpServer     `json:"mcp,omitempty"`
-	Subagents  bool            `json:"subagents,omitempty"`      // 本对话允许 spawn_agent，续聊沿用
-	Browser    bool            `json:"browser,omitempty"`        // 本对话启用浏览器工具，续聊沿用
-	DSSearch   bool            `json:"ds_search,omitempty"`      // 本对话启用 DeepSeek 搜索工具，续聊沿用
-	Provider   string          `json:"provider,omitempty"`       // 本对话的模型供应商（-provider），续聊沿用
-	Bash       bool            `json:"bash,omitempty"`           // 本对话启用 bash 沙箱，续聊沿用
-	RAG        bool            `json:"rag,omitempty"`            // 设置快照：本对话启用知识库检索，续聊沿用
-	Workspace  string          `json:"workspace,omitempty"`      // 设置快照：本对话的工作区名字与开始时解析出的目录，续聊沿用
-	WorkDir    string          `json:"workspace_dir,omitempty"`  //
-	MaxSteps   int             `json:"max_steps,omitempty"`      // 设置快照：模型请求预算（-1 不限）、上下文窗口与工具输出上限；旧存档没有，按 agent 默认值
-	Window     int             `json:"context_window,omitempty"` //
-	ToolOutput int             `json:"tool_output,omitempty"`    //
-	Permission string          `json:"permission,omitempty"`     // D25：本轮的权限模式（续聊可以换）与权限规则快照
+	Subagents  bool            `json:"subagents,omitempty"`        // 本对话允许 spawn_agent，续聊沿用
+	Browser    bool            `json:"browser,omitempty"`          // 本对话启用浏览器工具，续聊沿用
+	DSSearch   bool            `json:"ds_search,omitempty"`        // 本对话启用 DeepSeek 搜索工具，续聊沿用
+	Disallowed []string        `json:"disallowed_tools,omitempty"` // 设置快照：关掉的单个工具（内置工具、web_search、open_page），续聊沿用；旧存档没有，表示都开
+	Provider   string          `json:"provider,omitempty"`         // 本对话的模型供应商（-provider），续聊沿用
+	Model      string          `json:"model,omitempty"`            // 本对话的具体模型（agent 的 -model）；空表示用这家供应商的默认值
+	Bash       bool            `json:"bash,omitempty"`             // 本对话启用 bash 沙箱，续聊沿用
+	RAG        bool            `json:"rag,omitempty"`              // 设置快照：本对话启用知识库检索，续聊沿用
+	Workspace  string          `json:"workspace,omitempty"`        // 设置快照：本对话的工作区名字与开始时解析出的目录，续聊沿用
+	WorkDir    string          `json:"workspace_dir,omitempty"`    //
+	MaxSteps   int             `json:"max_steps,omitempty"`        // 设置快照：模型请求预算（-1 不限）、上下文窗口与工具输出上限；旧存档没有，按 agent 默认值
+	Window     int             `json:"context_window,omitempty"`   //
+	ToolOutput int             `json:"tool_output,omitempty"`      //
+	Permission string          `json:"permission,omitempty"`       // D25：本轮的权限模式（续聊可以换）与权限规则快照
 	Rules      []string        `json:"permission_rules,omitempty"`
 	Hooks      string          `json:"hooks,omitempty"`          // D26：平台设置里的 hooks 配置原文快照，续聊沿用
 	NetAllow   []string        `json:"net_allow,omitempty"`      // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
@@ -97,6 +99,7 @@ type run struct {
 
 	mu       sync.Mutex
 	calls    int
+	seq      int // 最后一个事件的序号：只增不减。delta 只在内存里也占序号，所以重启后要从存档里最大的序号接着编
 	events   []event
 	changed  chan struct{}
 	file     *os.File
@@ -111,8 +114,8 @@ type run struct {
 }
 
 type toolWait struct {
-	rpc                         int64
-	Task, Tool, Risk, Arguments string
+	rpc                                int64
+	Task, Tool, Risk, Arguments, Scope string // Scope：外发类可以“本对话内都允许”的范围，由 agent 给出
 }
 
 type server struct {
@@ -176,6 +179,7 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /login", s.loginPage)
 	mux.HandleFunc("POST /logout", s.logoutUser)
 	mux.HandleFunc("GET /me", s.me)
+	mux.HandleFunc("GET /models", s.listModels)
 	mux.HandleFunc("GET /runs", s.listRuns)
 	mux.HandleFunc("POST /runs", s.startRun)
 	mux.HandleFunc("POST /runs/import", s.importRun)
@@ -268,6 +272,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		SecurityProtection bool    `json:"security_protection"`
 		Embedding          string  `json:"embedding"`
 		Provider           string  `json:"provider"`
+		Model              string  `json:"model"`      // 第二级下拉选的具体模型；空：用这家供应商的默认值
 		Workspace          *string `json:"workspace"`  // nil：用设置里的默认工作区；""：本对话不用工作区
 		Permission         string  `json:"permission"` // 空：用设置里的默认权限模式
 	}
@@ -306,6 +311,14 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "provider 只能是小写字母", http.StatusBadRequest)
 		return
 	}
+	// 具体模型只能是这家供应商清单里的一个：清单同样来自 llm.Providers，页面不做第二份。
+	if input.Model != "" {
+		p, ok := llm.FindProvider(input.Provider)
+		if !ok || !slices.Contains(p.Models, input.Model) {
+			http.Error(w, "模型不在 "+input.Provider+" 的可选清单里", http.StatusBadRequest)
+			return
+		}
+	}
 	// 工作区只能从这个账号可选的列表里挑；网页给的是名字，目录由服务端按登记解析。
 	workspace := settings.Values["workspace"]
 	if input.Workspace != nil {
@@ -331,8 +344,13 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	}
 	// 设置快照：这一刻打开的工具，写进 start 事件，续聊沿用。
 	snap := event{Kind: "start", RAG: settings.on("rag"), Memory: settings.on("memory"), MemoryTTL: settings.Values["memory_ttl"], Subagents: settings.on("subagents"),
-		Browser: settings.on("browser"), DSSearch: settings.on("ds_search"), Provider: input.Provider, Bash: settings.on("bash"), Workspace: workspace, WorkDir: workDir,
+		Browser: settings.on("web_search") || settings.on("open_page"), DSSearch: settings.on("ds_search"), Provider: input.Provider, Model: input.Model, Bash: settings.on("bash"), Workspace: workspace, WorkDir: workDir,
 		Permission: settings.Values["permission_mode"], Rules: ruleLines(settings.Values["permission_rules"])}
+	for _, name := range singleTools {
+		if !settings.on(name) {
+			snap.Disallowed = append(snap.Disallowed, name)
+		}
+	}
 	if input.Permission != "" {
 		if valid("permission_mode", input.Permission, settingsFile{}) != nil {
 			http.Error(w, "permission 取 plan、ask、edit 或 full", http.StatusBadRequest)
@@ -385,7 +403,10 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	}
 	if lab {
 		args = append(args, "-provider", input.Provider)
-		snap = event{Kind: "start", Provider: input.Provider, Embedding: input.Embedding}
+		if input.Model != "" {
+			args = append(args, "-model", input.Model)
+		}
+		snap = event{Kind: "start", Provider: input.Provider, Model: input.Model, Embedding: input.Embedding}
 	}
 	// 对话 ID：随机 UUID（v4），不含时间，与观测台在哪个时区启动无关。
 	// 早期存档的 ID 是“20261006-213820.763”这样的本地时间，照常读回，不改名，旧链接仍能打开。
@@ -406,8 +427,29 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if !input.ContextLab && !input.RAGLab {
 		turn = map[string]any{"question": input.Query}
 	}
-	s.launch(ctx, r, args, turn, "", u.Name)
+	s.launch(ctx, r, args, turn, u.Name)
 	json.NewEncoder(w).Encode(r.summary())
+}
+
+// GET /models：输入框第二级下拉的候选项。路由表只存在 llm 包里，这里按它读出来给页面，不做第二份。
+// default 是不选具体模型时 agent 实际会用的那个：.env 或环境变量里的 LLM_MODEL / DEEPSEEK_MODEL 覆盖路由表默认值，
+// agent 子进程继承观测台的环境、在同一目录读 .env，所以按同样的规则解析。
+func (s *server) listModels(w http.ResponseWriter, req *http.Request) {
+	type providerModels struct {
+		Name    string   `json:"name"`
+		Default string   `json:"default"`
+		Models  []string `json:"models"`
+	}
+	out := []providerModels{}
+	for _, p := range llm.Providers {
+		def := p.Model
+		if config, _ := llm.LoadConfig(p.Name); config.Model != "" { // 没有密钥时仍会解析出模型
+			def = config.Model
+		}
+		out = append(out, providerModels{Name: p.Name, Default: def, Models: p.Models})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
 }
 
 // 对话存档按租户放：.data/tenants/<租户>/runs/<对话ID>.jsonl；平台是 .data/runs。
@@ -505,6 +547,10 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		snap.Permission = input.Permission
 	}
 	snap.RAG = snap.RAG || history.RAG // B0 之前的存档没有 rag 字段，按上一次请求里有没有 search_docs 判断
+	// 模型跟着检查点走：续聊用上一轮实际用的模型（agent 的 history.Model），换模型要新建对话。
+	if history.Model != "" {
+		snap.Model = history.Model
+	}
 	snap.Trace, snap.Protocol, snap.Status, snap.Seq, snap.Time = "", true, 0, 0, time.Time{}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
@@ -520,7 +566,7 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	// 问题、续聊上下文与续接关系放进 turn/start。每一轮都用新的检查点ID，旧检查点保持原样（“一个ID一个问题”），
 	// 续接关系让模型可以按 task_id 续跑之前各轮的子任务。
 	turn := map[string]any{"question": strings.TrimSpace(input.Query), "history": history, "continues": history.Continues}
-	s.launch(ctx, r, args, turn, history.Model, current(req).Name)
+	s.launch(ctx, r, args, turn, current(req).Name)
 	json.NewEncoder(w).Encode(r.summary())
 }
 
@@ -545,7 +591,7 @@ func (r *run) beginTurn(query string) (context.Context, trace.Span) {
 //
 // 多租户：租户对话的 agent 带 -tenant 启动，读写都落在租户目录下；发起人的用户名经 AGENT_USER 进审计。
 // 每次启动生成一个代理令牌：模型代理只接受带着本对话当前令牌的请求，别的进程不能往这条对话里塞记录。
-func (s *server) launch(ctx context.Context, r *run, args []string, turn map[string]any, model, userName string) {
+func (s *server) launch(ctx context.Context, r *run, args []string, turn map[string]any, userName string) {
 	span := trace.SpanFromContext(ctx)
 	if r.Tenant != "" {
 		args = append([]string{"-tenant", r.Tenant}, args...)
@@ -554,9 +600,6 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 	cmd := s.agentCommand(context.Background(), append([]string{"-app-server"}, args...)...)
 	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID, "AGENT_USER="+userName, "AGENT_PROXY_TOKEN="+token)
 	cmd.Env = append(cmd.Env, telemetry.Env(ctx)...)
-	if model != "" {
-		cmd.Env = append(cmd.Env, "LLM_MODEL="+model)
-	}
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
@@ -623,8 +666,15 @@ func snapshotArgs(e event, netAllow []string) []string {
 	if e.DSSearch {
 		args = append(args, "-ds-search")
 	}
+	if len(e.Disallowed) > 0 {
+		args = append(args, "-disallowed-tools", strings.Join(e.Disallowed, ","))
+	}
 	if e.Provider != "" {
 		args = append(args, "-provider", e.Provider)
+	}
+	// 具体模型作为启动参数传：它跟其他参数一起写进检查点，中断续跑、归因回放和子 agent 都用同一个模型。
+	if e.Model != "" {
+		args = append(args, "-model", e.Model)
 	}
 	if e.Bash {
 		args = append(args, "-bash")
@@ -1049,7 +1099,7 @@ func (s *server) loadSpace(space string) {
 				continue
 			}
 			r.events = append(r.events, e)
-			r.calls = max(r.calls, e.Call)
+			r.calls, r.seq = max(r.calls, e.Call), max(r.seq, e.Seq)
 			if e.Kind == "start" {
 				r.Query, r.Eval, r.Source = e.Text, e.Eval, e.Source
 			}
@@ -1244,7 +1294,8 @@ func raw(data []byte) json.RawMessage {
 func (r *run) add(e event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e.Seq, e.Time = len(r.events)+1, time.Now().UTC() // 统一存 UTC：换时区启动观测台、或别人打开页面，时间都不会错
+	r.seq++
+	e.Seq, e.Time = r.seq, time.Now().UTC() // 统一存 UTC：换时区启动观测台、或别人打开页面，时间都不会错
 	r.events = append(r.events, e)
 	if line, err := json.Marshal(e); err == nil && e.Kind != "delta" {
 		r.file.Write(append(line, '\n'))
@@ -1347,7 +1398,8 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 }
 
 // D20：高风险操作确认。agent 发来 tool/requestApproval 后暂停；用户在页面上点“允许 / 拒绝”，这里当场回复。
-// 只对正在等待的调用有效，不留到下一轮：下一轮的操作要重新确认。决定记进对话记录，页面重开后仍能看到。
+// 只对正在等待的调用有效：下一项操作要重新确认。外发类的请求带范围时，用户可以选“本对话内都允许”（allow_session），
+// 由 agent 记下范围，之后同一范围不再询问。决定记进对话记录，页面重开后仍能看到。
 func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 	// 确认请求只能由同一租户的账号回答：别的租户连这条对话都找不到。
 	r := s.runOf(w, req)
@@ -1355,8 +1407,9 @@ func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var input struct {
-		CallID string `json:"call_id"`
-		Allow  bool   `json:"allow"`
+		CallID  string `json:"call_id"`
+		Allow   bool   `json:"allow"`
+		Session bool   `json:"session"` // 本对话内同一范围都允许；只对带范围的外发类请求有效
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil || input.CallID == "" || len(input.CallID) > 256 {
 		http.Error(w, "需要 call_id", http.StatusBadRequest)
@@ -1371,13 +1424,23 @@ func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "这项操作已不在等待确认（可能已超时或 agent 已结束）", http.StatusConflict)
 		return
 	}
-	decision := "deny"
+	decision, detail := "deny", "观测台页面"
 	if input.Allow {
 		decision = "allow"
 	}
+	if input.Allow && input.Session {
+		if wait.Risk != "outbound" || wait.Scope == "" {
+			r.mu.Lock()
+			r.toolWaits[input.CallID] = wait
+			r.mu.Unlock()
+			http.Error(w, "这项操作只能单次允许", http.StatusBadRequest)
+			return
+		}
+		decision, detail = "allow_session", "观测台页面；本对话内都允许："+wait.Scope
+	}
 	// D21：观测台记下“人点了什么”，与 agent 那边的 approval_decision 互相对照；参数哈希应与 agent 的请求记录一致。
 	// 先写审计再回复：审计写不进去，就不把“允许”交给 agent。
-	record := audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_decision", Task: wait.Task, Conversation: r.ID, CallID: input.CallID, Tool: wait.Tool, Risk: wait.Risk, Decision: decision, Detail: "观测台页面"}
+	record := audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_decision", Task: wait.Task, Conversation: r.ID, CallID: input.CallID, Tool: wait.Tool, Risk: wait.Risk, Decision: decision, Detail: detail}
 	record.Args(wait.Arguments)
 	if err := audit.Write(req.Context(), record); err != nil {
 		r.mu.Lock()
@@ -1636,6 +1699,7 @@ func (r *run) handle(m protocol.Message) {
 				Tool      string `json:"tool"`
 				Risk      string `json:"risk"`
 				Arguments string `json:"arguments"`
+				Scope     string `json:"scope"`
 			}
 			json.Unmarshal(m.Params, &params)
 			r.mu.Lock()
@@ -1643,7 +1707,7 @@ func (r *run) handle(m protocol.Message) {
 				params.Task = r.rootTask
 			}
 			if r.toolWaits != nil {
-				r.toolWaits[params.CallID] = toolWait{*m.ID, params.Task, params.Tool, params.Risk, params.Arguments}
+				r.toolWaits[params.CallID] = toolWait{*m.ID, params.Task, params.Tool, params.Risk, params.Arguments, params.Scope}
 			}
 			r.mu.Unlock()
 			r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})

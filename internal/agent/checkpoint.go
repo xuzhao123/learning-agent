@@ -47,6 +47,7 @@ type Checkpoint struct {
 	Summary   []string  `json:"summary"`
 	Progress  progress  `json:"progress"`          // 循环检测：最近的动作与见过的结果，跨续跑累计
 	Private   []string  `json:"private,omitempty"` // D20：本任务已读入的私有数据来源；非空时外发类工具要用户确认
+	Granted   []string  `json:"granted,omitempty"` // D20：用户选了“本对话内都允许”的外发范围（如 ds_search、open_page · github.com）
 	// D23：“读过才能改”的账本（相对路径 → 读取时的内容哈希）。续聊是新进程，靠它接上上一轮读过哪些文件；
 	// 只恢复“读过”这个事实和当时的哈希，编辑前仍比对当前内容，两轮之间被改过照样拒绝。回放分叉不继承它，见 ForkSnapshot。
 	Seen      map[string]string `json:"seen,omitempty"`

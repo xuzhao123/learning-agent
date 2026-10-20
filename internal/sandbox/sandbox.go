@@ -57,10 +57,43 @@ var goEnv = sync.OnceValue(func() [2]string {
 	return [2]string{lines[0], lines[1]}
 })
 
+// 前端工具：宿主机上有 Node、Chrome 时只读挂进沙箱，改页面的任务能检查脚本语法、用无头 Chrome 加载页面看脚本跑完的 DOM。
+// 装在 /usr 下的本来就看得到；装在别处的（nvm 的 Node、/opt/google/chrome）分别挂到 /opt/node、/opt/chrome。
+type frontTools struct {
+	Node               bool   // 沙箱里有 node
+	Chrome             string // 沙箱里启动 Chrome 的命令；空表示没有
+	NodeDir, ChromeDir string // 要挂进沙箱的宿主机目录；在 /usr 下的不用挂
+}
+
+var front = sync.OnceValue(func() (t frontTools) {
+	if path, err := exec.LookPath("node"); err == nil {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			t.Node = true
+			if !strings.HasPrefix(real, "/usr/") {
+				t.NodeDir = filepath.Dir(filepath.Dir(real)) // <前缀>/bin/node → <前缀>
+			}
+		}
+	}
+	chrome := os.Getenv("CHROME_PATH") // 和浏览器工具找 Chrome 的顺序一致
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		if chrome == "" {
+			chrome, _ = exec.LookPath(name)
+		}
+	}
+	if real, err := filepath.EvalSymlinks(chrome); chrome != "" && err == nil {
+		t.Chrome = chrome
+		if !strings.HasPrefix(real, "/usr/") {
+			t.ChromeDir, t.Chrome = filepath.Dir(real), filepath.Base(real)
+		}
+	}
+	return t
+})
+
 // 资源上限：一次命令最多用这么多；时长由执行器的单次工具时限（-tool-timeout）控制。
+// 进程数按线程算：无头 Chrome 加载一个页面就要 100 个左右（64 时建不了线程直接崩），256 仍能挡住 fork 炸弹。
 const (
 	memoryMax   = "512M"
-	tasksMax    = "64"
+	tasksMax    = "256"
 	cpuQuota    = "100%"
 	tmpSize     = "67108864" // /tmp 是内存盘，最多 64MB
 	outputLimit = 128 << 10  // 输出保留开头和结尾各 128KB：过长的结果由上下文存成文件（D30），这里只防内存被撑爆
@@ -92,6 +125,15 @@ func Rules() string {
 	}
 	if ProjectRO {
 		rule += "项目目录只读挂在 /project。"
+	}
+	if t := front(); t.Node || t.Chrome != "" {
+		rule += "改了网页或脚本，交付前在沙箱里实际检查一次："
+		if t.Node {
+			rule += "`node --check 文件.js` 查语法；"
+		}
+		if t.Chrome != "" {
+			rule += "`" + t.Chrome + " --headless --no-sandbox --disable-gpu --user-data-dir=/tmp/chrome --dump-dom file:///路径.html` 输出脚本运行之后的 DOM（加 --enable-logging=stderr 能看到脚本报错），可以写一个小测试页加载改动的代码、模拟点击或悬浮后打印结果（Chrome 启动时访问 Google 的域名被拒是正常的，不影响结果，不用为此申请联网）；"
+		}
 	}
 	if len(Allow) == 0 {
 		rule += "沙箱不能联网。"
@@ -308,7 +350,7 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 		args = append(args, "--symlink", "usr/lib64", "/lib64")
 	}
 	// /etc 只挂运行程序必需的几项；passwd、group、hosts 用生成的最小版本，不暴露本机用户列表。
-	for _, path := range []string{"/etc/ld.so.cache", "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates", "/etc/localtime"} {
+	for _, path := range []string{"/etc/ld.so.cache", "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates", "/etc/localtime", "/etc/fonts"} {
 		if _, err := os.Stat(path); err == nil {
 			args = append(args, "--ro-bind", path, path)
 		}
@@ -317,7 +359,13 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 	for _, name := range []string{"passwd", "group", "hosts"} {
 		args = append(args, "--ro-bind", filepath.Join(etc, name), "/etc/"+name)
 	}
-	home := "/workspace"
+	home, path := "/workspace", "/usr/local/bin:/usr/bin:/bin"
+	if t := front(); t.NodeDir != "" {
+		args, path = append(args, "--ro-bind", t.NodeDir, "/opt/node"), "/opt/node/bin:"+path
+	}
+	if t := front(); t.ChromeDir != "" {
+		args, path = append(args, "--ro-bind", t.ChromeDir, "/opt/chrome"), "/opt/chrome:"+path
+	}
 	var extraEnv []string
 	if Project != "" {
 		mode := "--ro-bind"
@@ -341,7 +389,8 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 		home = "/scratch"
 		if g := goEnv(); g[0] != "" && GoCache != "" && os.MkdirAll(filepath.Join(GoCache, "tmp"), 0o700) == nil {
 			args = append(args, "--ro-bind", g[0], "/opt/go", "--ro-bind", g[1], "/opt/gomod", "--bind", GoCache, "/opt/gocache")
-			extraEnv = []string{"PATH=/opt/go/bin:/usr/local/bin:/usr/bin:/bin", "GOROOT=/opt/go", "GOMODCACHE=/opt/gomod", "GOCACHE=/opt/gocache",
+			path = "/opt/go/bin:" + path
+			extraEnv = []string{"GOROOT=/opt/go", "GOMODCACHE=/opt/gomod", "GOCACHE=/opt/gocache",
 				"GOTMPDIR=/opt/gocache/tmp", "GOPROXY=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off", "GOFLAGS=-mod=readonly"}
 		}
 	} else {
@@ -368,7 +417,7 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 		// 让 sandbox-init 当 1 号进程，/proc/1/cmdline 就不会暴露 bwrap 的命令行和宿主机上的路径。
 		"--remount-ro", "/", "--as-pid-1",
 		// 环境变量全部清空：ARK_API_KEY 之类的密钥不会带进沙箱。
-		"--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", home, "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp",
+		"--clearenv", "--setenv", "PATH", path, "--setenv", "HOME", home, "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp",
 		"--setenv", "HTTP_PROXY", proxy, "--setenv", "HTTPS_PROXY", proxy, "--setenv", "http_proxy", proxy, "--setenv", "https_proxy", proxy, "--setenv", "NO_PROXY", "localhost,127.0.0.1",
 	)
 	for _, pair := range append(extraEnv, env...) {

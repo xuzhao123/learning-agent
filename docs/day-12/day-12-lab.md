@@ -15,7 +15,7 @@ go run . observe                                                   # 新对话�
 
 ```text
 bash(command)
-  systemd-run --user --scope --unit la-sandbox-…   cgroup：内存 512M、无 swap、CPU 1 核、最多 64 个进程
+  systemd-run --user --scope --unit la-sandbox-…   cgroup：内存 512M、无 swap、CPU 1 核、最多 256 个进程（按线程算）
                                                  （认这个参数时再加 --expand-environment=no，见 2.1）
     └ bwrap                                       namespace 全部隔离；/usr 只读；/workspace 可写；根目录只读
         └ seccomp（--seccomp 3）                   拒绝 ptrace、mount、unshare、bpf、io_uring 等
@@ -28,7 +28,7 @@ bash(command)
 | 隔离工具 | bubblewrap + seccomp，与 Codex、Claude Code 在 Linux 上的路线相同；不需要 Docker |
 | 文件系统 | `/usr` 只读，`/etc` 只挂动态库缓存、证书、时区等，passwd/group/hosts 用生成的最小版本；`/workspace` = `.data/sandbox/<对话第一轮的检查点ID>`，同一对话的各轮续聊、续跑共用，子 agent 与回放分叉各有目录（见 3.7）；`/tmp` 是 64MB 内存盘；最后把根目录改成只读 |
 | 看不到的 | 家目录、项目目录（默认）、`.env`、宿主机进程、宿主机的环境变量 |
-| 资源 | cgroup：内存 512M、不用 swap、CPU 100%、进程数 64；时长跟随 `-tool-timeout`；超时用 `systemctl --user kill` 按 cgroup 杀掉 |
+| 资源 | cgroup：内存 512M、不用 swap、CPU 100%、进程数 256（原为 64；进程数按线程算，无头 Chrome 加载一个页面就要 100 个左右，10-19 放宽）；时长跟随 `-tool-timeout`；超时用 `systemctl --user kill` 按 cgroup 杀掉 |
 | 系统调用 | 纯 Go 拼出的经典 BPF：先查架构，再对黑名单返回 EPERM（没有 C 编译器，不用 libseccomp） |
 | 网络 | 沙箱只有回环接口；宿主机代理（unix socket）检查白名单、只开 80/443、拒绝解析到内网的地址，并直接连接检查过的 IP |
 | 白名单 | `-net-allow` 或观测台上点“允许”；模型只能调用 `request_network_access` 发起请求 |
