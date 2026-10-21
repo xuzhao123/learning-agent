@@ -202,6 +202,20 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .slash-name { font: 500 13px var(--mono); }
 #query { display: block; width: 100%; max-height: 220px; padding: 14px 18px 4px; border: 0; outline: 0; resize: none; background: none; line-height: 1.55; }
 #query::placeholder { color: var(--faint); }
+/* 附图：输入框上方的缩略图与用户气泡里的图。缩略图直接指向本租户的附件地址。 */
+#attach-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px 0; }
+#attach-strip .pic { position: relative; }
+#attach-strip img { display: block; width: 56px; height: 56px; object-fit: cover; border: 1px solid var(--line); border-radius: 10px; }
+#attach-strip .del { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); font-size: 12px; line-height: 18px; cursor: pointer; }
+#attach-strip .err { flex: 1 1 100%; color: var(--err); font-size: 12px; }
+#composer-wrap.drag #composer { border-color: var(--accent); }
+#attach { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+#attach svg { width: 16px; height: 16px; }
+#attach:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+#attach:disabled { color: var(--faint); cursor: default; }
+.pics { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.pics img { display: block; max-width: 200px; max-height: 140px; border: 1px solid var(--line); border-radius: 10px; }
+.u .pics { max-width: none; padding: 0; margin-bottom: 0; background: none; white-space: normal; }
 .crow { display: flex; align-items: center; gap: 2px; padding: 6px 8px 8px 10px; }
 #mode-chip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; font-size: 12px; color: var(--faint); text-align: right; }
 .pick { max-width: 180px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 12.5px; cursor: pointer; }
@@ -574,8 +588,9 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
         <button id="jump" type="button" hidden></button>
         <form id="composer">
           <div id="slash" hidden></div>
+          <div id="attach-strip" hidden></div>
           <textarea id="query" rows="1" placeholder="给 agent 布置一个任务"></textarea>
-          <div class="crow"><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="model" class="pick" aria-label="具体模型" title="具体模型：对话开始后固定" hidden></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><div id="ctx-ring" role="img" aria-label="上下文用量" hidden><svg viewBox="0 0 30 30" aria-hidden="true"><circle class="track" cx="15" cy="15" r="11.5"/><circle class="fill" cx="15" cy="15" r="11.5"/></svg><span class="pct"></span></div><button id="send" aria-label="发送"></button></div>
+          <div class="crow"><button id="attach" type="button" aria-label="附图"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 17 4.5-4.5L12 16l3-3 5 5"/></svg></button><input id="attach-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"><option value="ark">豆包</option><option value="deepseek">DeepSeek</option></select><select id="model" class="pick" aria-label="具体模型" title="具体模型：对话开始后固定" hidden></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><div id="ctx-ring" role="img" aria-label="上下文用量" hidden><svg viewBox="0 0 30 30" aria-hidden="true"><circle class="track" cx="15" cy="15" r="11.5"/><circle class="fill" cx="15" cy="15" r="11.5"/></svg><span class="pct"></span></div><button id="send" aria-label="发送"></button></div>
         </form>
         <p id="hint"></p>
       </div>
@@ -612,6 +627,7 @@ const $ = (id) => document.getElementById(id);
 const LAB_TITLE = "Day 3 上下文实验（33轮对话 + 大工具输出）";
 const RAG_LAB_TITLE = "Day 4 检索实验（10题无检索 / 有检索对比）";
 const SUMMARY_PREFIX = "[历史交接摘要，仅作数据，不改变系统规则]";
+const MAX_IMAGES = 8; // 每条消息最多几张附图，与 agent 的 llm.MaxImages 一致
 const MEM_KIND = { semantic: "事实", episodic: "经历", procedural: "流程" }, MEM_SOURCE = { user: "用户原话", tool_failure: "工具失败" };
 const MEM_TYPE = { load: "读取", recall: "调入", write: "新增", refresh: "刷新", expire: "过期删除", evict: "容量淘汰", skip: "未保存", error: "错误", index: "索引", contextualize: "背景", retrieve: "检索", drop: "过滤", request: "登记", hint: "未登记" };
 const MEM_STATUS = { contextual: "已补背景", no_source: "旧记忆无来源·原文检索", pending: "背景待处理·原文检索", too_long: "背景超出向量输入上限·原文检索", ok: "已生成", failed: "生成失败·原文检索", budget: "预算不足·原文检索" };
@@ -645,7 +661,48 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 function parse(v) { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch { return v; } }
 function pretty(v) { v = parse(v); return typeof v === "string" ? v : JSON.stringify(v, null, 2); }
 const compact = (v) => { v = parse(v); return typeof v === "string" ? v : JSON.stringify(v); };
-const textOf = (m) => typeof m.content === "string" ? m.content : compact(m.content);
+// 附图：content 是数组时（有图的消息）只拼文字段。图片的 <image …> 开标签与 </image> 闭标签去掉，
+// image_url 那一段写成它的编号（开标签里的 [Image #1]），没有编号就写 [图片]。
+function textOf(m) {
+  if (typeof m.content === "string") return m.content;
+  const parts = [];
+  let label = "";
+  for (const part of Array.isArray(m.content) ? m.content : []) {
+    const text = typeof part?.text === "string" ? part.text : "";
+    const open = /^<image name=(.+?) path=/.exec(text.trim());
+    if (open) { label = open[1]; continue; }
+    if (text.trim() === "</image>") { label = ""; continue; }
+    if (part?.type === "image_url") { parts.push(label || "[图片]"); continue; }
+    if (text) parts.push(text);
+  }
+  return parts.length ? parts.join("\n") : compact(m.content);
+}
+// 带图的 tool 消息（view_image）：content 是数组，开标签、图片、闭标签之后才是观测 JSON。
+// 页面只取观测那段文字，和别的工具结果一样处理；图片按观测结果里的 ref 显示。
+const toolText = (content) => Array.isArray(content)
+  ? content.filter((p) => p?.type === "text" && !/^<image name=/.test(p.text.trim()) && p.text.trim() !== "</image>").map((p) => p.text).join("\n")
+  : content;
+// 附件引用 attachment://<sha>.<ext> 对应页面的 /attachments/<sha>.<ext>。
+const refURL = (ref) => "/attachments/" + String(ref || "").replace(/^attachment:\/\//, "");
+// 附图缩略图（用户气泡、view_image 的工具卡片）：点开在新标签页看原图；title 写编号、文件名或路径与尺寸。
+function userPictures(images) {
+  const box = el("div", "pics");
+  for (const img of images) {
+    const link = el("a");
+    link.href = refURL(img.ref);
+    link.target = "_blank";
+    link.rel = "noopener";
+    const pic = el("img");
+    pic.src = link.href;
+    pic.alt = img.label || img.name || img.path || "[图片]";
+    const scaled = img.source_width && (img.source_width !== img.width || img.source_height !== img.height);
+    const size = img.width ? `${img.width}×${img.height}` + (scaled ? `（原图 ${img.source_width}×${img.source_height}）` : "") : "";
+    pic.title = [img.label, img.name || img.path, size].filter(Boolean).join(" · ");
+    link.append(pic);
+    box.append(link);
+  }
+  return box;
+}
 const callPosition = (c) => `Turn ${c.turn} · ${c.aux ? AUX_LABEL[c.purpose] || c.purpose : c.compact ? "上下文压缩" : "Step " + c.step}`;
 // 摘要前的连续user是保留原话；只有摘要后的末尾user才可能是新问题。
 function incomingUsers(messages) {
@@ -741,7 +798,7 @@ function legend(entries) {
 }
 
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, disallowedTools: [], provider: "", model: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false }; }
+function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, disallowedTools: [], provider: "", model: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false, userImages: [] }; }
 function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -786,7 +843,7 @@ function apply(r, e) {
     const opensTurn = !turn || r.turnPending || r.caseStart || (users.length > 0 && lastMain?.turn === turn.n && lastMain.choice && !lastMain.tools.length);
     const userMessage = opensTurn ? (r.pending ? { role: "user", content: r.pending } : users.at(-1)) : null;
     if (opensTurn) {
-      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel, checkpoint: r.checkpoint, idle: r.lastReply ? time - r.lastReply : 0 };
+      turn = { n: r.turns.length + 1, steps: 0, question: userMessage ? textOf(userMessage) : "", start: r.pendingTime || time, caseLabel: r.caseLabel, checkpoint: r.checkpoint, idle: r.lastReply ? time - r.lastReply : 0, images: r.userImages[r.turns.length] || [] };
       r.turns.push(turn);
     }
     const step = isCompact ? 0 : ++turn.steps;
@@ -798,10 +855,10 @@ function apply(r, e) {
     // 压缩后的消息数可能变短；按调用ID在所有历史请求中关联结果，不能依赖旧数组长度。
     // 前缀相同的部分上次已经处理过，只看新增的消息。
     for (const m of rebuilt || isCompact ? messages : messages.slice(shared)) if (m.role === "tool") {
-      const observation = parse(m.content);
+      const content = toolText(m.content), observation = parse(content);
       if (!r.embeddingExplicit && observation?.tool === "search_docs" && ["ark", "local"].includes(observation.result?.backend)) r.embedding = observation.result.backend;
       const t = r.openTools.get(m.tool_call_id);
-      if (t) { t.result = m.content; t.done = time; t.isError = !!m.is_error; r.openTools.delete(m.tool_call_id); }
+      if (t) { t.result = content; t.done = time; t.isError = !!m.is_error; r.openTools.delete(m.tool_call_id); }
     }
     if (!isCompact) r.lastMainMessages = messages;
     if (!r.query) { const u = messages.find((m) => m.role === "user"); if (u) r.query = u.content; }
@@ -856,6 +913,9 @@ function apply(r, e) {
 // 实验分组）都从这里来，不再解析终端文本。方法名见 internal/protocol 与 docs/bonus-protocol。
 function applyNotify(r, method, p, time) {
   if (method === "turn/started") { if (p.turn_id) r.checkpoint = p.turn_id; if (p.input_capacity) r.inputCapacity = p.input_capacity; if (p.sandbox) r.sandbox = p.sandbox; if (p.model) r.model = p.model; }
+  // 附图：用户消息带了哪几张图由 agent 在协议里报（引用、编号、尺寸），页面据此画缩略图。
+  // 这条通知在本次交互的第一次请求之前发出，所以此刻的轮次数就是这条消息所属轮的序号。
+  else if (method === "item/completed" && p.item?.type === "userMessage") r.userImages[r.turns.length] = p.item.data?.images || [];
   else if (method === "memory/event") {
     // 长期记忆只在开头调入、结尾写入；工具里的 search/forget 已作为工具步骤显示。
     if (!["search", "forget", "hit"].includes(p.kind) && !/^phase=(search|cli) /.test(p.text || "")) r.mem.push({ turn: r.memTurn, phase: r.memPhase, type: p.kind, text: p.text, fields: memFields(p.text || "") });
@@ -1007,6 +1067,11 @@ function retrievalPanel(result) {
 
 function toolResult(t) {
   const value = parse(t.result), result = value?.result;
+  if (t.name === "view_image" && result?.ref) {
+    const box = el("div");
+    box.append(userPictures([result]), el("pre", "", pretty(t.result)));
+    return box;
+  }
   return t.name === "search_docs" && Array.isArray(result?.hits) ? retrievalPanel(result) : el("pre", t.state === "error" ? "err" : "", pretty(t.result));
 }
 
@@ -2468,7 +2533,9 @@ function drawChat() {
     if (f.kind === "user" && r.rewindNotes[f.turn]) box.append(el("div", "banner", r.rewindNotes[f.turn]));
     const turn = r.turns[(f.turn ?? f.call?.turn) - 1];
     if (f.kind === "user") {
-      const u = el("div", turn?.rewound ? "u rewound" : "u"); u.append(el("div", "", f.text)); box.append(u); group = null;
+      const u = el("div", turn?.rewound ? "u rewound" : "u"), bubble = el("div", "", f.text);
+      if (turn?.images?.length) bubble.append(userPictures(turn.images));
+      u.append(bubble); box.append(u); group = null;
       const tools = el("div", "utools");
       // D30：续聊的代价：闲置时长与第一次请求的缓存命中。
       const first = turn?.firstUsage;
@@ -2633,6 +2700,15 @@ async function loadModels() {
   } catch {}
   syncComposer();
 }
+// 当前（或这条对话的）模型能不能看图：清单来自 /models，与 agent 用的是同一份路由表。
+// model 为空表示用这家供应商的默认值；清单外的模型名（旧对话、.env 自填的）不知道就不拦。
+function modelVision(provider, model) {
+  const spec = ui.models?.get(provider || "");
+  if (!spec) return { name: model || "", vision: true };
+  const name = model || spec.default;
+  const found = (spec.models || []).find((m) => m.name === name);
+  return { name, vision: found ? !!found.vision : true };
+}
 // D30：输入框右侧的上下文用量环（参考 Codex 客户端）。口径与轨迹页“上下文压力”一致：
 // 最近一次主请求的服务端输入 tokens（system、工具定义与历史消息都在里面）占可用输入容量的比例。
 // 压缩请求的输入同样是满上下文，不能拿它当用量：刚压缩完，环反而会显得更满。
@@ -2684,7 +2760,7 @@ function syncComposer() {
   if (r) $("provider").value = r.provider || "ark";
   else if (!ui.picked.provider && s) $("provider").value = s.values.provider;
   const prov = $("provider").value, spec = ui.models?.get(prov);
-  const models = spec?.models || [];
+  const models = (spec?.models || []).map((m) => m.name);
   // 已有对话只显示它实际用的模型（agent 在 turn/started 里报的），它可以不在清单里：旧对话的带日期版本号的模型名、.env 里自填的名字；
   // 没记录到就不显示，不拿现在的默认值冒充。新对话列出清单，“默认”标的是 agent 实际会用的那个（/models 按 .env 解析）。
   const opts = r ? (r.model ? [[r.model, r.model]] : []) : [["", "默认（" + (spec?.default || "供应商默认") + "）"], ...models.map((m) => [m, m])];
@@ -2727,6 +2803,12 @@ function syncComposer() {
   $("send").title = running ? (r.stopRequested ? "强制结束（SIGKILL）" : "停止（SIGINT：先回填结果、保存检查点）") : "发送";
   $("send").setAttribute("aria-label", running ? (r.stopRequested ? "强制结束" : "停止") : "发送");
   const imported = SOURCE_LABEL[r?.source];
+  // 附图：一条对话的模型固定，能不能看图也固定。不能看图的模型、实验、导入的对话与回放都不给附图；
+  // 已经附了图又切到不能看图的模型时，发送前拦下，不自动删图。
+  const vis = modelVision(prov, r ? r.model || "" : pv.value);
+  $("attach").disabled = !vis.vision || lab || !!imported || !!ui.replay;
+  $("attach").title = vis.vision ? `附图：PNG、JPEG、GIF、WebP，每条消息最多 ${MAX_IMAGES} 张；也可以粘贴或拖放`
+    : `当前模型 ${vis.name} 不能看图，换一个能看图的模型再附图`;
   // 导入的对话只读：模型、工作区、权限与工具都是对方 agent 的，这里不给选择。
   for (const id of ["provider", "perm", "tools-link"]) $(id).hidden = !!imported;
   // 模型与工作区上面已按清单和对话决定是否显示，这里只在导入的对话里再藏起来，不能把它们重新显示出来。
@@ -2783,8 +2865,14 @@ async function start(url, body) {
   ui.sending = true; syncComposer();
   try {
     const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!res.ok) return alert(await res.text());
+    if (!res.ok) {
+      // 失败（比如服务端说这个模型不能看图）时保留已附的图：换一下模型就能再发。
+      const text = await res.text();
+      if (attached.length) { ui.attachError = text; renderAttached(); }
+      return alert(text);
+    }
     $("query").value = "";
+    attached = []; ui.attachError = ""; renderAttached();
     ui.page = "chat";
     show((await res.json()).id);
   } catch (err) {
@@ -3523,12 +3611,79 @@ function cardView(panel, id, c, info) {
   card.append(note, rp);
   return card;
 }
+// ---------- 附图 ----------
+// 图先 POST /attachments 换成附件引用，发送时只带引用；缩略图显示 /attachments/<名字> 的原图，缩放由 agent 做。
+let attached = [];
+function renderAttached() {
+  const strip = $("attach-strip"), pics = attached.map((img) => {
+    const wrap = el("div", "pic"), thumb = el("img");
+    thumb.src = refURL(img.ref);
+    thumb.alt = img.name;
+    thumb.title = img.name;
+    const del = el("button", "del", "×");
+    del.type = "button";
+    del.title = "不附这张图";
+    del.onclick = () => { attached = attached.filter((x) => x !== img); renderAttached(); };
+    wrap.append(thumb, del);
+    return wrap;
+  });
+  if (ui.attachError) pics.push(el("div", "err", ui.attachError));
+  strip.replaceChildren(...pics);
+  strip.hidden = !pics.length;
+  syncComposer();
+}
+// 上传失败的图不进列表，服务端说的话（只支持 PNG…、超过 20 MB…）原样显示在输入框里。
+async function addImages(files) {
+  ui.attachError = "";
+  for (const file of files) {
+    if (attached.length >= MAX_IMAGES) { ui.attachError = `每条消息最多 ${MAX_IMAGES} 张图`; break; }
+    try {
+      const res = await fetch("/attachments?name=" + encodeURIComponent(file.name || "image"), { method: "POST", body: file });
+      if (!res.ok) { ui.attachError = await res.text(); continue; }
+      attached.push(await res.json());
+    } catch (err) { ui.attachError = "上传失败：" + err.message; }
+  }
+  renderAttached();
+}
+$("attach").onclick = () => { if (!$("attach").disabled) $("attach-file").click(); };
+$("attach-file").onchange = () => {
+  const files = [...$("attach-file").files];
+  $("attach-file").value = "";
+  if (files.length) addImages(files);
+};
+// 粘贴：剪贴板里的图片文件（截图最常见）；没有图片时照常粘贴文字。
+$("query").addEventListener("paste", (ev) => {
+  const files = [...(ev.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  ev.preventDefault();
+  addImages(files);
+});
+// 拖放：落在输入区就当附图，不让浏览器直接打开这个文件。
+const dropZone = $("composer-wrap");
+dropZone.addEventListener("dragover", (ev) => { if ([...(ev.dataTransfer?.types || [])].includes("Files")) { ev.preventDefault(); dropZone.classList.add("drag"); } });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag"));
+dropZone.addEventListener("drop", (ev) => {
+  const files = [...(ev.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  ev.preventDefault();
+  dropZone.classList.remove("drag");
+  addImages(files);
+});
 $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
   if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
+  // 附了图又换到不能看图的模型：说明原因、保留图，换回能看图的模型就能发。
+  const vis = ui.run ? modelVision(ui.run.provider || "ark", ui.run.model || "") : modelVision($("provider").value, $("model").value);
+  if (attached.length && !vis.vision) {
+    ui.attachError = `当前模型 ${vis.name} 不能看图，换一个能看图的模型再发送`;
+    renderAttached();
+    return;
+  }
   ui.chatFollow = true;
-  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", ui.run ? { query, permission: $("perm").value } : { query, provider: $("provider").value, model: $("model").hidden ? "" : $("model").value, workspace: $("workspace").disabled ? "" : $("workspace").value, permission: $("perm").value });
+  const images = attached.map(({ ref, name }) => ({ ref, name }));
+  const body = ui.run ? { query, permission: $("perm").value } : { query, provider: $("provider").value, model: $("model").hidden ? "" : $("model").value, workspace: $("workspace").disabled ? "" : $("workspace").value, permission: $("perm").value };
+  start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", images.length ? { ...body, images } : body);
 };
 $("send").onclick = async (ev) => {
   if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交

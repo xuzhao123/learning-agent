@@ -1,6 +1,6 @@
 # 图片输入设计：观测台附图与 view_image
 
-> 状态（2026-10-20）：第一步的 **agent 侧已实现**（4.1–4.4、4.6，以及 4.5 里的 `-image` 与 `turn/start`），实现与验证见第 9 节；观测台接口、代理存档换引用、页面、`view_image` 与 4.8 的私有标记还没做。主要参考 Codex（[openai/codex](https://github.com/openai/codex) 主干 `e776b27`，2026-10-20）的源码，Claude Code 只有文档可查。模型能力与限制来自当天对方舟 Coding Plan 与 DeepSeek 官方接口的真实调用。
+> 状态（2026-10-20）：两步都已实现，实现与验证见第 9 节；没做的是 `view_image` 读浏览器截图（见第 8 节），方舟 deepseek-v4.1-flash 对观测台与 `view_image` 的验证等套餐额度恢复后补跑。主要参考 Codex（[openai/codex](https://github.com/openai/codex) 主干 `e776b27`，2026-10-20）的源码，Claude Code 只有文档可查。模型能力与限制来自当天对方舟 Coding Plan 与 DeepSeek 官方接口的真实调用。
 >
 > 对应 harness 能力：H02 模型客户端（多模态输入、按模型能力适配）、H04 上下文预算（图片计数与压缩）、H06/H09 工具（`view_image`）、H12 不可信内容、H18 会话记录（附件怎么存）。见 [Harness 能力对照](../JOB_REQUIREMENTS.md#harness-能力对照)。
 
@@ -134,11 +134,11 @@ type Message struct {
 
 ### 4.7 `view_image`（第二步，照 Codex `view_image`）
 
-- 参数：`path`。路径规则沿用 `read_file`（工作区内；开 bash 时 `/workspace` 映射到本对话沙箱目录），另外允许读本任务的浏览器截图 `.data/browser/<任务ID>/`。
+- 参数：`path`。路径规则与文件工具、bash 看到的一致：有工作区时相对路径与工作区内的绝对路径读工作区；开 bash 时 `/workspace` 是工作区（没有工作区时是本对话沙箱目录），有工作区时沙箱目录在 `/scratch`。浏览器截图这次没做（见第 8 节）。
 - 只读工具，plan 模式可用；不能看图的模型不提供。
-- 结果的 `content` 数组：观测 JSON 文字（照常带来源标记 `data_only`）、开标签、图片、闭标签。实测方舟 5 个模型都接受这种形状；DeepSeek 官方接口还没测。
+- 结果是 tool 消息的 `content` 数组：开标签、图片、闭标签、观测 JSON 文字（照常带来源标记 `data_only`）。顺序与用户消息相同，复用同一套 `Message.Images` 互转。实测方舟 5 个模型与 DeepSeek 官方 deepseek-flash 都接受这种形状。
 - 结果日志 `.calls/` 和终端只记引用与尺寸，不记 base64（Codex 的 `log_output` 同样省略 data URL）。
-- 协议发一条 `imageView` 事件，界面在工具卡片上显示缩略图。
+- 没有另加 `imageView` 事件：toolCall 的完成事件与存档里的观测结果已经带着引用和尺寸，工具卡片据此显示缩略图。
 
 ### 4.8 安全
 
@@ -186,7 +186,7 @@ type Message struct {
 **第二步：`view_image`**：工具定义、路径规则、结果格式、界面卡片。
 
 **验证**（按 AGENTS：格式化、编译、真实运行，不写测试文件）：
-- 真实模型各跑一次：豆包、kimi、deepseek-v4.1-flash、glm-5.3-flash、DeepSeek 官方 deepseek-flash。
+- 真实模型各跑一次：deepseek-v4.1-flash、DeepSeek 官方 deepseek-flash。
 - 不能看图的模型（deepseek-v4-pro）：界面禁用、`/runs` 返回 400、命令行请求里图片被替换成说明文字。
 - 一张大图（如 4032×3024）：缩放到 2048 以内，开标签里有原尺寸。
 - 续聊：从存档读回后图片仍在，第二轮还能回答图片相关的问题；`-resume` 与归因回放同样。
@@ -196,16 +196,18 @@ type Message struct {
 
 ## 8. 待定
 
-- `ark-code-latest` 是否允许附图（建议不允许）。
-- 每条消息最多几张（建议 8；claude.ai 是 20）。
+- 已定：`ark-code-latest` 标为不能看图，不允许附图；每条消息最多 8 张（claude.ai 是 20）。
+- `view_image` 读本任务的浏览器截图（`.data/browser/<任务ID>/<调用ID>.jpg`）：模型要知道截图的名字，需要浏览器工具在结果里给出，这次没做。
 - 附件的保留与删除：现在和对话存档一样不自动删；撤销（D29）不删附件。
-- DeepSeek 官方接口的工具结果带图还没实测，第二步之前补测。
+- 中断续跑时，已完成调用的结果从结果日志读回，`view_image` 的图不会重新挂到 tool 消息上（只剩引用文字）；已经写进检查点的消息不受影响。
 - 导入 Codex 与 Claude Code 会话时，是否把内联图片落成附件（现在显示“[图片]”）。
 - 方舟 Coding Plan 文档写明套餐额度只在 AI 编程工具中生效、不能用于 API 调用，否则可能被判为滥用。验证模型能力时走 harness 本身，不用脚本直接请求套餐入口。
 
 ## 9. 实现进度
 
-**已实现（agent 侧）**：`internal/llm/image.go`（`Image`、`PrepareImage`、附件存储、发请求前展开与按能力去图、`ImagesToText`、`LastImageNumber`）；`Message` 的 JSON 互转与每张图 1280 token 的计数（`protocol.go`）；`Provider.Models` 改成带 `Vision` 的条目；摘要请求只发文字（`context_manager.go`）；`-image` 与 `turn/start` 的 `images`，用户消息事件带图片列表（`main.go`、`react.go`）。
+### 9.1 第一步：agent 侧
+
+**已实现**：`internal/llm/image.go`（`Image`、`PrepareImage`、附件存储、发请求前展开与按能力去图、`ImagesToText`、`LastImageNumber`）；`Message` 的 JSON 互转与每张图 1280 token 的计数（`protocol.go`）；`Provider.Models` 改成带 `Vision` 的条目；摘要请求只发文字（`context_manager.go`）；`-image` 与 `turn/start` 的 `images`，用户消息事件带图片列表（`main.go`、`react.go`）。
 
 **与设计不同或补充的地方**：
 - 处理不了的图，说明放在紧跟用户消息的 `<system-reminder>` 里，不拼进用户原话：记忆的 `remember_memory` 只能引用用户原话，来源判断也按原话匹配当前问题。
@@ -217,4 +219,19 @@ type Message struct {
 
 **真实验证**（沙箱外，命令行）：deepseek-v4.1-flash、kimi-k3、doubao-seed-2.1-pro 与 DeepSeek 官方 deepseek-flash 分别看对了 PNG、4032×3024 的 JPEG（缩到 1829×1371，标签里有原尺寸）、WebP、动图 GIF 的第一帧；超像素图与伪装成 png 的文本变成提醒，模型如实转述；deepseek-v4-pro 收到“图片已省略”；续聊时新图编号为 `[Image #3]`，上一轮的图仍随请求发出；带图任务中断后 `-resume`，检查点里的图还在；检查点里只有引用、没有 base64；附件目录 0700、文件 0600。
 
-**下一步**：第一步剩下的观测台部分（4.4 第 1、2 道防线，4.5 的接口，4.8，第 6 节的代理存档换引用，每条消息最多 8 张），再做页面与 `view_image`。
+### 9.2 第一步收尾与第二步：观测台、页面、`view_image`
+
+**已实现**：
+- 附件只有一份实现（`llm`）：`StoreAttachment(dir, data)` 由文件头定扩展名，`AttachmentPath` 严格校验引用（64 位十六进制加扩展名），`StoreDataURL` 把 data URL 存回附件，`ImageMIME` 给出类型；目录由调用方给，agent 用 `tenant.Here`，观测台按账号的租户。`MaxImages`（8）与 `MaxImageBytes`（20 MB）两边共用。
+- 观测台（`internal/observer/attachments.go`）：`POST /attachments` 先写审计 `user_attach` 再存；`GET /attachments/{name}` 只读当前租户目录，`nosniff`；`/runs` 与续聊收 `images`，实验不收、最多 8 张、引用要在本租户目录里、模型（续聊用这条对话的模型）不能看图返回 400；`/models` 带 `vision`；代理写存档前把 data URL 换回引用，转发的请求体不改。
+- agent：附了图的这一轮记私有来源 `image`；`view_image`（`internal/agent/view_image.go`）经 `os.Root` 读文件、走 `PrepareImage`，结果是 `llm.Image`，主循环编号后放进 tool 消息的 `Images`；只在有工作区或 bash、且模型能看图时提供；权限归 Read，只读不写审计，成功后记私有来源 `workspace`；压缩清理旧工具结果时连图一起清掉。
+- 页面：附图按钮、粘贴、拖放、缩略图与删除、不能看图时禁用并说明；用户气泡按协议里 userMessage 的图片列表显示缩略图；带图的 tool 消息只取观测 JSON，`view_image` 的卡片显示那张图。
+
+**过程**：同样在 `.data/selfuse/` 的临时 clone 里，方舟 deepseek-v4.1-flash 照预先写好的方案做观测台、私有来源与页面（104 次请求），做到沙箱里自查时方舟 Coding Plan 的 5 小时额度用完（HTTP 429 `AccountQuotaExceeded`），没写总结。review 后改了一处写法，`view_image` 与文档由 Claude 接着在 clone 里完成。
+
+**真实验证**（沙箱外，用 clone 编译的观测台，平台账号）：
+- DeepSeek 官方 deepseek-flash：页面接口附 PNG 新开对话答对“7 3 9、红色圆”；续聊附 WebP，编号 `[Image #2]`，上一轮的图从存档的引用还原后随请求发出，答对“4 8 2、绿色正方形”与两数之和 1221；第三轮让它调 `ds_search`，因私有来源 `image` 触发外发确认，拒绝后如实说明。`view_image` 用 `/workspace/…` 读工作区里 1280×1776 的 JPEG，答对职位名称与“3 到 5 年”；只开 bash 的对话里，相对路径与 `/workspace/…` 读的是本对话沙箱目录，4032×3024 的 JPEG 缩到 1829×1371，同一批两次调用编号为 `[Image #1]`、`[Image #2]`。
+- 方舟 deepseek-v4.1-flash：附 PNG 新开对话答对；续聊的请求形状正确，但遇上额度用完的 429，回答待补。
+- 校验：坏文件 400、超过 20 MB 413、跨站 403、未登录 401、非法名字与不存在 404；带不能看图的模型（deepseek-v4-pro、glm-5.3 的旧对话续聊）返回 400 且存档不追加；超过 8 张、实验带图、无效或别处的引用都是 400；临时租户账号读平台的图 404、用它的引用开对话 400，验证后账号与租户数据已删。
+- 存档、检查点与结果日志里都没有 base64，只有引用；附件目录 0700、文件 0600；deepseek-v4-pro 的请求里没有 `view_image`，deepseek-flash 有。
+- 压缩时清掉带图的旧工具结果只做了代码阅读，没有在真实长对话里触发。

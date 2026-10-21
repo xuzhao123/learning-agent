@@ -180,6 +180,8 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /logout", s.logoutUser)
 	mux.HandleFunc("GET /me", s.me)
 	mux.HandleFunc("GET /models", s.listModels)
+	mux.HandleFunc("POST /attachments", s.uploadAttachment)
+	mux.HandleFunc("GET /attachments/{name}", s.serveAttachment)
 	mux.HandleFunc("GET /runs", s.listRuns)
 	mux.HandleFunc("POST /runs", s.startRun)
 	mux.HandleFunc("POST /runs/import", s.importRun)
@@ -265,16 +267,17 @@ func (s *server) agentCommand(ctx context.Context, args ...string) *exec.Cmd {
 func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	// 普通对话只选模型和工作区，工具来自设置（见 settings.go）；实验仍按各自的固定参数单独运行。
 	var input struct {
-		Query              string  `json:"query"`
-		ContextLab         bool    `json:"context_lab"`
-		RAGLab             bool    `json:"rag_lab"`
-		SecurityLab        string  `json:"security_lab"`
-		SecurityProtection bool    `json:"security_protection"`
-		Embedding          string  `json:"embedding"`
-		Provider           string  `json:"provider"`
-		Model              string  `json:"model"`      // 第二级下拉选的具体模型；空：用这家供应商的默认值
-		Workspace          *string `json:"workspace"`  // nil：用设置里的默认工作区；""：本对话不用工作区
-		Permission         string  `json:"permission"` // 空：用设置里的默认权限模式
+		Query              string      `json:"query"`
+		ContextLab         bool        `json:"context_lab"`
+		RAGLab             bool        `json:"rag_lab"`
+		SecurityLab        string      `json:"security_lab"`
+		SecurityProtection bool        `json:"security_protection"`
+		Embedding          string      `json:"embedding"`
+		Provider           string      `json:"provider"`
+		Model              string      `json:"model"`      // 第二级下拉选的具体模型；空：用这家供应商的默认值
+		Workspace          *string     `json:"workspace"`  // nil：用设置里的默认工作区；""：本对话不用工作区
+		Permission         string      `json:"permission"` // 空：用设置里的默认权限模式
+		Images             []attachRef `json:"images"`     // 附图：先经 POST /attachments 存好，这里只带引用
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil {
 		http.Error(w, "请求必须是JSON", http.StatusBadRequest)
@@ -316,6 +319,21 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		p, ok := llm.FindProvider(input.Provider)
 		if _, found := p.FindModel(input.Model); !ok || !found {
 			http.Error(w, "模型不在 "+input.Provider+" 的可选清单里", http.StatusBadRequest)
+			return
+		}
+	}
+	// 附图：实验的工具范围与数据都是固定的，不带图；普通对话要模型能看图才收，
+	// 与 agent 发请求前的处理一致（不能看图的模型会把图换成说明文字，那等于白附）。
+	if len(input.Images) > 0 {
+		if lab {
+			http.Error(w, "实验不能带图", http.StatusBadRequest)
+			return
+		}
+		if !s.checkImages(w, u.Tenant, input.Images) {
+			return
+		}
+		if model, vision := visionModel(input.Provider, input.Model); !vision {
+			http.Error(w, "模型 "+model+" 不能看图，换一个能看图的模型再附图", http.StatusBadRequest)
 			return
 		}
 	}
@@ -426,6 +444,9 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	var turn map[string]any
 	if !input.ContextLab && !input.RAGLab {
 		turn = map[string]any{"question": input.Query}
+		if len(input.Images) > 0 {
+			turn["images"] = input.Images
+		}
 	}
 	s.launch(ctx, r, args, turn, u.Name)
 	json.NewEncoder(w).Encode(r.summary())
@@ -434,11 +455,12 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 // GET /models：输入框第二级下拉的候选项。路由表只存在 llm 包里，这里按它读出来给页面，不做第二份。
 // default 是不选具体模型时 agent 实际会用的那个：.env 或环境变量里的 LLM_MODEL / DEEPSEEK_MODEL 覆盖路由表默认值，
 // agent 子进程继承观测台的环境、在同一目录读 .env，所以按同样的规则解析。
+// 每个模型带上能不能看图：页面据此禁用附图按钮，服务端收图时同样按这条规则判断。
 func (s *server) listModels(w http.ResponseWriter, req *http.Request) {
 	type providerModels struct {
-		Name    string   `json:"name"`
-		Default string   `json:"default"`
-		Models  []string `json:"models"`
+		Name    string      `json:"name"`
+		Default string      `json:"default"`
+		Models  []llm.Model `json:"models"`
 	}
 	out := []providerModels{}
 	for _, p := range llm.Providers {
@@ -446,12 +468,7 @@ func (s *server) listModels(w http.ResponseWriter, req *http.Request) {
 		if config, _ := llm.LoadConfig(p.Name); config.Model != "" { // 没有密钥时仍会解析出模型
 			def = config.Model
 		}
-		// 能力（能不能看图）等界面需要时再随清单返回；这里保持原来的名字列表。
-		names := make([]string, 0, len(p.Models))
-		for _, model := range p.Models {
-			names = append(names, model.Name)
-		}
-		out = append(out, providerModels{Name: p.Name, Default: def, Models: names})
+		out = append(out, providerModels{Name: p.Name, Default: def, Models: p.Models})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
@@ -511,8 +528,9 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var input struct {
-		Query      string `json:"query"`
-		Permission string `json:"permission"` // D25：权限模式可以每轮换（和 Codex 的 /approvals、Claude Code 的 Shift+Tab 一样）；工具与规则沿用快照
+		Query      string      `json:"query"`
+		Permission string      `json:"permission"` // D25：权限模式可以每轮换（和 Codex 的 /approvals、Claude Code 的 Shift+Tab 一样）；工具与规则沿用快照
+		Images     []attachRef `json:"images"`     // 附图：同新对话，只带 POST /attachments 得到的引用
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil || strings.TrimSpace(input.Query) == "" {
 		http.Error(w, "请填写续聊问题", http.StatusBadRequest)
@@ -520,6 +538,9 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	}
 	if input.Permission != "" && valid("permission_mode", input.Permission, settingsFile{}) != nil {
 		http.Error(w, "permission 取 plan、ask、edit 或 full", http.StatusBadRequest)
+		return
+	}
+	if len(input.Images) > 0 && !s.checkImages(w, r.Tenant, input.Images) {
 		return
 	}
 	r.mu.Lock()
@@ -556,6 +577,15 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	if history.Model != "" {
 		snap.Model = history.Model
 	}
+	// 带图时按这条对话实际用的模型判断能不能看图（snap.Model 为空就是 snap.Provider 的默认值）。
+	if len(input.Images) > 0 {
+		if model, vision := visionModel(snap.Provider, snap.Model); !vision {
+			file.Close()
+			r.mu.Unlock()
+			http.Error(w, "模型 "+model+" 不能看图，换一个能看图的模型再附图", http.StatusBadRequest)
+			return
+		}
+	}
 	snap.Trace, snap.Protocol, snap.Status, snap.Seq, snap.Time = "", true, 0, 0, time.Time{}
 	r.file, r.Done = file, false
 	r.mu.Unlock()
@@ -571,6 +601,9 @@ func (s *server) continueRun(w http.ResponseWriter, req *http.Request) {
 	// 问题、续聊上下文与续接关系放进 turn/start。每一轮都用新的检查点ID，旧检查点保持原样（“一个ID一个问题”），
 	// 续接关系让模型可以按 task_id 续跑之前各轮的子任务。
 	turn := map[string]any{"question": strings.TrimSpace(input.Query), "history": history, "continues": history.Continues}
+	if len(input.Images) > 0 {
+		turn["images"] = input.Images
+	}
 	s.launch(ctx, r, args, turn, current(req).Name)
 	json.NewEncoder(w).Encode(r.summary())
 }
@@ -1202,7 +1235,7 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	if parts := strings.Split(req.Header.Get("traceparent"), "-"); len(parts) == 4 && spanPattern.MatchString(parts[2]) {
 		spanID = parts[2]
 	}
-	r.add(event{Kind: "request", Call: call, Body: raw(body), Purpose: purpose, Task: task, Sub: sub, Span: spanID})
+	r.add(event{Kind: "request", Call: call, Body: raw(s.archiveImages(r.Tenant, body)), Purpose: purpose, Task: task, Sub: sub, Span: spanID})
 
 	start := time.Now()
 	// 模型路由在 agent 里：它在 X-Agent-Upstream 里声明这次请求的真实地址（方舟或 DeepSeek），代理照此转发。

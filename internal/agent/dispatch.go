@@ -101,6 +101,8 @@ func runTool(ctx context.Context, call llm.ToolCall) (result any, err error) {
 		return websearch.Run(ctx, call.Function.Name, call.Function.Arguments)
 	case "read_output":
 		return readOutput(call.Function.Arguments)
+	case "view_image":
+		return viewImage(call.Function.Arguments)
 	case "spawn_agent":
 		if SubagentArgs == nil {
 			return nil, llm.Permanent(errors.New("请使用 -subagents 开启子 agent"))

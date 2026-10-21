@@ -246,10 +246,11 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 			if m := savedName.FindStringSubmatch(clean[i].Content); m != nil {
 				placeholder = fmt.Sprintf("[较早的工具结果已清理：%s，原%d字；完整内容可用 read_output 读取，name=%s]", names[clean[i].ToolCallID], chars, m[1])
 			}
-			if llm.TextTokens(placeholder) >= llm.TextTokens(clean[i].Content) {
-				continue // 本来就短的结果不替换，替换反而更长。
+			// 本来就短的结果不替换，替换反而更长；带图的结果（view_image）大头在图上，一起清掉。
+			if len(clean[i].Images) == 0 && llm.TextTokens(placeholder) >= llm.TextTokens(clean[i].Content) {
+				continue
 			}
-			clean[i].Content = placeholder
+			clean[i].Content, clean[i].Images = placeholder, nil
 			cleared++
 		}
 	}

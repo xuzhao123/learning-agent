@@ -700,6 +700,10 @@ func run() error {
 		agent.OutputDir = tenant.Here("outputs", first)
 		llm.Tools = append(llm.Tools, agent.ReadOutputDefinition)
 	}
+	// 图片输入：view_image 看工作区或 bash 沙箱里的图。不能看图的模型不提供；同样从第一次请求就定下来。
+	if (workspace.Dir != "" || sandbox.Enabled) && config.Vision() {
+		llm.Tools = append(llm.Tools, agent.ViewImageDefinition)
+	}
 	fmt.Printf("Checkpoint: id=%s file=%s（中断后用 -resume %s 续跑）\n", agent.CheckpointID, agent.CheckpointPath(agent.CheckpointID), agent.CheckpointID)
 	hooks.Session = first
 	// D26：/名字 开头的输入是斜杠命令，展开成模板里的提示词再交给 agent；续跑的问题已经是展开后的。
@@ -730,10 +734,15 @@ func run() error {
 
 // attachImages 把本轮的图预处理成可发给模型的样子：命令行给的是文件路径，turn/start 给的是附件引用。
 // 编号从 start+1 起按顺序分配（[Image #1]……）；处理不了的不报错，换成一行文字说明随问题一起交给模型。
+// 每条消息最多 llm.MaxImages 张（两个来源合计），多出来的不发，各留一条说明。
 func attachImages(paths []string, refs []imageRef, start int) ([]llm.Image, []string) {
 	var images []llm.Image
 	var notes []string
 	prepare := func(name string, data []byte, err error) {
+		if err == nil && len(images) >= llm.MaxImages {
+			notes = append(notes, fmt.Sprintf("图片 %s 未发送：每条消息最多 %d 张", name, llm.MaxImages))
+			return
+		}
 		if err == nil {
 			var img llm.Image
 			if img, err = llm.PrepareImage(data, name); err == nil {

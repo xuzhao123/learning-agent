@@ -40,7 +40,7 @@ var (
 
 // 结果未知时可以直接再执行一次的工具：只读，或带幂等键（spawn_agent 按子任务ID续跑或取回存档）。
 // 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
-var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "ds_search": true, "ds_fetch": true, "request_network_access": true, "read_file": true, "glob": true, "grep": true, "read_output": true} // bash、edit_file、write_file 不在里面：有副作用
+var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "ds_search": true, "ds_fetch": true, "request_network_access": true, "read_file": true, "glob": true, "grep": true, "read_output": true, "view_image": true} // bash、edit_file、write_file 不在里面：有副作用
 
 // RootAttributes 是 main 创建根 span 时就知道的属性；其余在 Run 里补。
 func RootAttributes() []attribute.KeyValue {
@@ -255,6 +255,10 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 		if len(notes) > 0 {
 			conversation.Append(llm.Reminder(strings.Join(notes, "\n")))
 		}
+		// 用户附的图是私有输入（设计 4.8）：之后的外发类工具要确认。子 agent 只拿文字任务，不继承图片本身。
+		if len(images) > 0 {
+			markPrivate("image")
+		}
 		// B0：界面只读协议。图片带引用与尺寸，页面据此画缩略图；正文仍是用户原话，不含占位说明。
 		data := map[string]any{"text": question}
 		if len(images) > 0 {
@@ -385,17 +389,24 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 				// 标记放在正文外，结果即使自称 system，也仍属于工具数据。
 				observation.Source, observation.Authority = "tool:"+observation.Tool, "data_only"
 			}
+			message := llm.Message{Role: "tool", ToolCallID: observation.ID}
+			// view_image 的结果是一张图：编号接着对话里已有的图往后数，图片随 tool 消息发给模型，观测 JSON 里只留引用和尺寸。
+			if img, ok := observation.Result.(llm.Image); ok {
+				img.Label = fmt.Sprintf("[Image #%d]", llm.LastImageNumber(conversation.Transcript)+1)
+				observation.Result, message.Images = img, []llm.Image{img}
+			}
 			data, err := json.Marshal(observation)
 			if err != nil {
 				return stopRun("encoding_error", err.Error(), summary)
 			}
+			message.Content = string(data)
 			if observation.Status == "error" && memory.Active != nil && ctx.Err() == nil {
 				memory.Active.NoteFailure(question, calls[i], observation)
 			}
 			// 每项调用都进 summary，包括没执行的：对有副作用的工具，“没做”和“不知道做没做”本身就是关键信息。
 			summary = append(summary, fmt.Sprintf("- 第%d轮 %s(%s)，%s", step, observation.Tool, calls[i].Function.Arguments, describe(observation)))
 			fmt.Printf("Observation [%s]: %s\n", observation.ID, data)
-			conversation.Append(llm.Message{Role: "tool", ToolCallID: observation.ID, Content: string(data)})
+			conversation.Append(message)
 			if observation.Status == "ok" {
 				trackPrivate(observation)
 			}
@@ -719,8 +730,8 @@ func trackPrivate(o llm.Observation) {
 		markPrivate("bash")
 	case "search_memory":
 		markPrivate("memory")
-	case "read_file", "grep":
-		markPrivate("workspace") // D23：工作区里的代码与配置是用户的私有数据
+	case "read_file", "grep", "view_image":
+		markPrivate("workspace") // D23：工作区里的代码与配置是用户的私有数据；view_image 读的也是工作区或沙箱里的文件
 	case "spawn_agent":
 		if result, ok := o.Result.(map[string]any); ok {
 			if sources, _ := result["private"].([]string); len(sources) > 0 {

@@ -32,7 +32,7 @@ import (
 //	redo          续跑时上一个进程中断了一项有副作用的调用、又没有它的完成记录，重做可能重复副作用
 var PrivateInput bool // -private-input：父 agent 在已含私有数据时派出的子任务，从一开始就算含有私有数据
 
-// 本任务已经读入的私有数据来源（bash、memory、subagent、parent）。主循环在两批工具之间更新，批内只读：
+// 本任务已经读入的私有数据来源（image、bash、memory、subagent、parent）。主循环在两批工具之间更新，批内只读：
 // 同一批里模型给出参数时还没看到这批的结果，所以按批开始时的状态判断即可。
 var privateSources []string
 

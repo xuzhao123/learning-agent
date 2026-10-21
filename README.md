@@ -137,7 +137,7 @@ go build -o bin/learning-agent .
 | 常用参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `-question` | 交互输入 | 本轮任务 |
-| `-image` | 空 | 随问题附带的图片（PNG、JPEG、GIF、WebP），可写多次；见 [图片输入设计](docs/image-input-design.md) |
+| `-image` | 空 | 随问题附带的图片（PNG、JPEG、GIF、WebP），可写多次，每条消息最多 8 张；观测台输入框可附图；见 [图片输入设计](docs/image-input-design.md) |
 | `-provider` | ark | 选择方舟或 DeepSeek |
 | `-model` | 空 | 这家下面的具体模型（如 `kimi-k3`）；空时用 `LLM_MODEL` / `DEEPSEEK_MODEL` 或路由表默认值；观测台是输入框旁的第二个下拉 |
 | `-max-steps` | 10 | 模型请求预算，含摘要与辅助调用；0 表示不限 |
@@ -151,7 +151,7 @@ go build -o bin/learning-agent .
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `-question` | 交互输入 | 交给模型的任务 |
-| `-image` | 空 | 图片输入：随问题附带的图片路径，可写多次。按文件头只收 PNG、JPEG、GIF、WebP；长边超过 2048 或 32×32 块超过 2500 时等比缩小；按内容寻址存进 `.data/[tenants/<租户>/]attachments/`，消息与检查点里只放 `attachment://` 引用；处理不了的图以提醒说明，不让这一轮失败；所选模型不能看图时发请求前换成说明文字 |
+| `-image` | 空 | 图片输入：随问题附带的图片路径，可写多次。按文件头只收 PNG、JPEG、GIF、WebP；长边超过 2048 或 32×32 块超过 2500 时等比缩小；按内容寻址存进 `.data/[tenants/<租户>/]attachments/`，消息与检查点里只放 `attachment://` 引用；处理不了的图以提醒说明，不让这一轮失败；每条消息最多 8 张；所选模型不能看图时发请求前换成说明文字。能看图的模型在有工作区或 bash 时另有 `view_image`，看工作区或沙箱里的图片 |
 | `-history-stdin` | false | 从stdin接收上次上下文JSON，配合-question续聊（命令行用；观测台改经 `turn/start` 传入） |
 | `-continues` | 空 | 续聊时上一轮的检查点ID：本轮用新ID并记下续接关系，子 agent 可按 task_id 引用之前各轮的子任务；观测台自动处理 |
 | `-app-server` | false | B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；观测台与父 agent 启动子进程时使用 |
