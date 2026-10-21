@@ -478,7 +478,7 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 			return llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "denied",
 				Error: "用户设置的权限不允许这项操作（" + why + "）。不要换个写法、换个工具或拆成几步绕过；在回答里说明需要什么权限，由用户决定是否调整。"}
 		}
-		// D20：高风险操作先等人确认，再占并发槽位；等人的时间不算进单次工具时限。
+		// D20：高风险操作先等人确认（full 模式由程序放行），再占并发槽位；等人的时间不算进单次工具时限。
 		kind, reason := risk(call)
 		if kind == "" && effect == "ask" {
 			kind, reason = "permission", why+"：这项操作需要你确认"
@@ -553,7 +553,7 @@ func rawArgs(call llm.ToolCall) any {
 // 续跑时补齐中断前那一批，按顺序查三处：
 //  1. 结果日志里有这项调用的记录：它在上个进程里已经做完，直接取回，不重做。
 //  2. 可重复的工具（只读或带幂等键）：重新执行。
-//  3. 其余的：D20 起问用户要不要重做；用户允许就执行，否则回填“结果未知”，不替用户决定。
+//  3. 其余的：D20 起问用户要不要重做；用户允许就执行，否则回填“结果未知”，不替用户决定（full 模式不问，直接回填）。
 func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries int) []llm.Observation {
 	results := make([]llm.Observation, len(calls))
 	var again []llm.ToolCall
@@ -574,13 +574,14 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 			again, index = append(again, call), append(index, i)
 			continue
 		}
-		if decision := approve(ctx, call, "redo", "上一个进程执行这项调用时中断，没有完成记录，可能已经生效；重做可能重复副作用"); decision == "allow" {
+		// full 模式不问人，也不替人重做：回填结果未知，模型检查过后要再做就自己调用（full 模式下不用确认）。
+		if permission.Mode != "full" && approve(ctx, call, "redo", "上一个进程执行这项调用时中断，没有完成记录，可能已经生效；重做可能重复副作用") == "allow" {
 			again, index = append(again, call), append(index, i)
 			continue
 		}
 		results[i] = llm.Observation{ID: call.ID, Tool: call.Function.Name, Status: "unknown", Error: interruptedUnknown}
 		writeJournal(results[i])
-		audit.Log(ctx, audit.Record{Actor: "program", Event: "replay_unknown", CallID: call.ID, Tool: call.Function.Name, Status: "unknown", Detail: "续跑：没有完成记录、未获准重做，回填结果未知"})
+		audit.Log(ctx, audit.Record{Actor: "program", Event: "replay_unknown", CallID: call.ID, Tool: call.Function.Name, Status: "unknown", Detail: "续跑：没有完成记录、没有重做，回填结果未知"})
 		fmt.Printf("Replay [%s]: %s not_repeatable → unknown\n", call.ID, call.Function.Name)
 		// 没有执行，但留一个 span：调用链上能看到这一项在续跑时被回填成“结果未知”。
 		_, span := toolSpan(ctx, call)
@@ -729,12 +730,14 @@ func describe(o llm.Observation) string {
 	return tried + "失败：" + o.Error
 }
 
-// D20：成功读到私有数据的工具。bash 能读沙箱工作目录（和只读挂载的项目），记忆是用户的私人信息，
-// 子 agent 的结论可能来自它自己的 bash 或记忆。网页、MCP 返回的是外部数据，不算私有。
+// D20：成功读到私有数据的工具。bash 能读到工作区、只读挂载的项目或本对话目录里的文件时才算（空沙箱里 echo 一下读不到任何东西），
+// 记忆是用户的私人信息，子 agent 的结论可能来自它自己的 bash 或记忆。网页、MCP 返回的是外部数据，不算私有。
 func trackPrivate(o llm.Observation) {
 	switch o.Tool {
 	case "bash":
-		markPrivate("bash")
+		if sandbox.SeesUserFiles() {
+			markPrivate("bash")
+		}
 	case "search_memory":
 		markPrivate("memory")
 	case "read_file", "grep", "view_image":

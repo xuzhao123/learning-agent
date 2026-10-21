@@ -14,13 +14,13 @@
         没有界面、超时、拒绝 → status=denied，不执行
   → 执行；每项结束立即写结果日志
   → 无进展：整轮结果都见过 → 第 2 轮附提示，第 3 轮熔断 no_progress
-  → bash / 记忆 / 子 agent 成功返回 → 标记本任务含私有数据
+  → bash（能读到用户文件时）/ 记忆 / 子 agent 成功返回 → 标记本任务含私有数据
 ```
 
 | 改动 | 代码 | 作用 |
 | --- | --- | --- |
 | 风险规则与确认 | [approval.go](../../internal/agent/approval.go) | `risk` 判断四类风险，`approve` 发 `tool/requestApproval` 并等待；没有界面按 unavailable 处理，结果 `denied` |
-| 私有数据标记 | [approval.go](../../internal/agent/approval.go)、[react.go](../../internal/agent/react.go) | bash 成功、记忆召回或 search_memory 成功、子 agent 含私有数据 → 记来源；之后浏览器与 MCP 工具要确认。存进检查点，续跑、续聊延续 |
+| 私有数据标记 | [approval.go](../../internal/agent/approval.go)、[react.go](../../internal/agent/react.go) | bash 成功且能读到用户文件（`sandbox.SeesUserFiles`：挂了工作区或项目，或本对话目录里已有文件；10-21 起，空沙箱里的 `echo ok` 不再算）、记忆召回或 search_memory 成功、子 agent 含私有数据 → 记来源；之后浏览器与 MCP 工具要确认（full 模式由程序放行，见 [Day 25 §6](../day-25/day-25-notes.md#6-和高风险确认的关系)）。存进检查点，续跑、续聊延续 |
 | 子 agent 继承 | [subagent.go](../../internal/agent/subagent.go)、[main.go](../../main.go) | 父任务含私有数据时，子 agent 带 `-private-input` 启动；子任务结果返回 `private`，父任务据此标记 |
 | MCP 注解 | [mcp.go](../../internal/mcp/mcp.go) | server 声明 `destructiveHint=true` 的工具要确认；注解只收紧不放宽。自带的 calculator server 如实声明只读 |
 | 结果日志 | [approval.go](../../internal/agent/approval.go) | 每项调用结束写 `.data/checkpoints/<任务ID>.calls/<调用ID哈希>.json`；续跑先查日志，有记录就取回，不重做 |

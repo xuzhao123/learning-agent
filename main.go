@@ -162,7 +162,7 @@ func run() error {
 	flag.Var(&netAllow, "net-allow", "配合 -bash：沙箱可经代理访问的域名（含子域名，可重复）；由用户批准后添加")
 	flag.BoolVar(&agent.PrivateInput, "private-input", false, "D20：任务输入已含私有数据（父 agent 派出子任务时自动加上）：外发类工具执行前要用户确认")
 	flag.StringVar(&tenant.Current, "tenant", "", "多租户：本任务所属的租户；检查点、记忆、沙箱、浏览器画面与审计都放在 .data/tenants/<租户>/ 下。不给时是平台空间 .data/")
-	flag.StringVar(&permission.Mode, "permission-mode", permission.Mode, "D25：权限模式 plan（只读）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，规则照常）")
+	flag.StringVar(&permission.Mode, "permission-mode", permission.Mode, "D25：权限模式 plan（只读）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，含高风险确认；deny、ask 规则照常）")
 	var allowRules, askRules, denyRules stringList
 	flag.Var(&allowRules, "allow", "D25：允许规则，如 Bash(go build *)、Edit(docs/**)（可重复）")
 	flag.Var(&askRules, "ask", "D25：询问规则，如 Edit(internal/agent/**)（可重复）")
@@ -544,19 +544,7 @@ func run() error {
 		if err := hooks.Load(*hooksConfig); err != nil {
 			return err
 		}
-		// hook 命令在工作区里运行（没有工作区时在 harness 目录），路径写成绝对的，hook 拿到的 cwd 才可靠。
-		hooks.Harness, _ = os.Getwd()
-		hooks.Dir = workspace.Dir
-		if hooks.Dir == "" {
-			hooks.Dir = hooks.Harness
-		}
-		configured := []string{}
-		for _, event := range hooks.Events {
-			if hooks.Has(event) {
-				configured = append(configured, event)
-			}
-		}
-		fmt.Printf("Hooks: events=%s dir=%s\n", strings.Join(configured, ","), hooks.Dir)
+		hooks.Harness, _ = os.Getwd() // 工作目录等本对话的沙箱目录定下来再设，见下文
 	}
 	if permission.Mode != "edit" || len(allowRules)+len(askRules)+len(denyRules) > 0 {
 		fmt.Printf("Permission: %s\n", permission.Describe())
@@ -696,6 +684,25 @@ func run() error {
 	sandbox.Dir = tenant.Here("sandbox", first)
 	if sandbox.Enabled {
 		sandboxID = first
+	}
+	if *hooksConfig != "" {
+		// hook 命令在工作区里运行；没有工作区时在本对话的沙箱目录（bash 里的 /workspace），不在 harness 目录：
+		// 否则检查仓库的 hook（Stop 时 go build）查的是 harness 自己的未提交改动，模型看不到也修不了。
+		// 路径写成绝对的，hook 拿到的 cwd 才可靠。
+		hooks.Dir = workspace.Dir
+		if hooks.Dir == "" {
+			hooks.Dir, _ = filepath.Abs(sandbox.Dir)
+			if err := os.MkdirAll(hooks.Dir, 0o755); err != nil {
+				return err
+			}
+		}
+		configured := []string{}
+		for _, event := range hooks.Events {
+			if hooks.Has(event) {
+				configured = append(configured, event)
+			}
+		}
+		fmt.Printf("Hooks: events=%s dir=%s\n", strings.Join(configured, ","), hooks.Dir)
 	}
 	// D30：过长的工具输出存进本对话的目录，模型用 read_output 读回。工具从第一次请求就提供，
 	// 不在中途加：工具列表是请求前缀的一部分，中途变化会让之前的提示词缓存全部失效。

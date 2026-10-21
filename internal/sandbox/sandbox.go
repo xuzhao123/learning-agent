@@ -123,6 +123,19 @@ func Definitions() []map[string]any {
 	}
 }
 
+// SeesUserFiles 报告 bash 能不能读到用户的文件：挂了工作区或项目目录，或本对话目录里已经有文件
+// （用户上传的，或之前的命令留下的）。D20 据此判断 bash 的输出算不算私有数据。目录读不了时按读得到算。
+func SeesUserFiles() bool {
+	if Project != "" || ProjectRO {
+		return true
+	}
+	entries, err := os.ReadDir(Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return err != nil || len(entries) > 0
+}
+
 // ApprovalWait 是 request_network_access 等待用户答复的时长；执行器给这个工具的单次时限比它多留一些余量。
 var ApprovalWait = 4 * time.Minute
 

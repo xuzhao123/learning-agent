@@ -46,7 +46,7 @@ type group struct {
 var (
 	config map[string][]group
 	Text   string // 原始配置，子 agent 照原样继承
-	Dir    string // hook 命令的工作目录：工作区，没有工作区时是 harness 目录
+	Dir    string // hook 命令的工作目录：工作区，没有工作区时是本对话的沙箱目录
 	// Harness 是本项目目录，hook 命令用 $AGENT_HARNESS_DIR 引用这里的脚本（工作目录可能是别的仓库）。
 	Harness string
 	// Session 是对话ID，写进每次输入，hook 可以据此把同一对话的几次调用关联起来。

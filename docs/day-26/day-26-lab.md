@@ -26,7 +26,9 @@
 
 ## 1. 本仓库实际使用的 hooks 与命令
 
-`hooks/hooks.json` 用 `$AGENT_HARNESS_DIR` 引用脚本：hook 的工作目录是工作区（可能是别的仓库），脚本在 harness 目录。
+`hooks/hooks.json` 用 `$AGENT_HARNESS_DIR` 引用脚本：hook 的工作目录（也是 `$AGENT_PROJECT_DIR`）是工作区（可能是别的仓库），脚本在 harness 目录。
+
+没有工作区时，工作目录是本对话的沙箱目录（bash 里的 `/workspace`）。10-21 之前退回的是 harness 目录：一段只做搜索的自用对话结束时，Stop 的 `go-check.sh` 查到 harness 自己未提交、暂时编译不过的改动，把报错交给了一个看不到这份代码的模型，模型在空沙箱里找了两轮文件才说明做不了。现在沙箱目录里没有 `go.mod`，检查直接通过；`Hooks:` 启动行会打印实际目录。
 
 | 事件 | 脚本 | 做什么 |
 | --- | --- | --- |

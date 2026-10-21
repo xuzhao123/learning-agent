@@ -9,7 +9,7 @@
  → 允许列表（D19）
  → 用户规则  deny › ask › allow            -deny / -ask / -allow，或观测台设置
  → 权限模式默认  plan · ask · edit · full   -permission-mode，或输入框旁的“权限”
- → D20 高风险规则                          任何模式下都照常
+ → D20 高风险规则                          照常判断；full 模式由程序放行（写审计），其余模式询问
  → 确认（tool/requestApproval，只由界面上的人回答）
  → 执行（bash 在沙箱里，工作区按模式挂成可写或只读）
 ```
@@ -20,6 +20,7 @@
 | 执行器 | [react.go](../../internal/agent/react.go) | 拒绝：不执行，记 `permission_deny` 审计；询问：并入 D20 的确认路径，风险标 `permission` |
 | 入口 | [main.go](../../main.go) | `-permission-mode`、`-allow`、`-ask`、`-deny`；子 agent 继承模式与规则 |
 | 沙箱 | [sandbox.go](../../internal/sandbox/sandbox.go) | 有工作区时 `/workspace` 挂仓库（plan 只读），`.git` 只读，`.env` 换成 `/dev/null`，`.data`、`.cache` 换空目录；本对话目录挂 `/scratch`；Go 工具链与模块缓存只读挂入，`GOPROXY=off`，编译缓存放 `.data/gocache`（按租户）；宿主机有 Node、Chrome 时也只读挂入（不在 `/usr` 下的挂到 `/opt/node`、`/opt/chrome`），提示词告诉模型改了网页要用 `node --check` 和无头 Chrome `--dump-dom` 实际检查一次（10-19 补：对话 review 发现改观测台页面三轮都没法验证）；bash 的工具描述也按有没有工作区写 `/workspace`、`/scratch`（10-20 补：原来一直是没有工作区的版本，说上传的文件在 `/workspace`） |
+| 全权不再询问（10-21 补） | [approval.go](../../internal/agent/approval.go) 的 `approve`、[react.go](../../internal/agent/react.go) 的 `replayBatch` | full 模式下 D20 的风险照常判断，审计记 `approval_decision`、决定 `allow_mode` 后直接执行，不发 `tool/requestApproval`；用户的 ask 规则和 hook 要求的确认（风险 `permission`）照样问；续跑重做不问也不做，回填结果未知。对照见[笔记 §6](day-25-notes.md#6-和高风险确认的关系) |
 | 环境信息 | [context.go](../../internal/workspace/context.go) | 加一行“权限：模式与规则”，模型据此不去尝试会被拒的操作 |
 | 观测台 | [settings.go](../../internal/observer/settings.go)、[server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html) | 设置里的默认权限模式与规则；输入框旁“权限”每轮可换（续聊带 `permission`）；规则拍进快照；确认卡片的风险显示“权限设置要求确认” |
 

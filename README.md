@@ -202,7 +202,7 @@ go build -o bin/learning-agent .
 | `-model` | 空 | 这家供应商下的具体模型，优先于 `LLM_MODEL` / `DEEPSEEK_MODEL`；写进检查点的启动参数，子 agent 继承，续跑与回放沿用 |
 | `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux）；工作目录按对话保留，续聊各轮共用，观测台可上传、下载 |
 | `-workspace` | 空 | D23：增加 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写；子 agent 继承。D25 起配合 `-bash` 时 bash 的 `/workspace` 就是这个仓库（`.git` 只读，`.env`、`.data` 看不到），本对话目录改挂 `/scratch` |
-| `-permission-mode` | edit | D25：plan（只读计划）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，规则与高风险确认照常） |
+| `-permission-mode` | edit | D25：plan（只读计划）、ask（改动都问）、edit（工作区内编辑与沙箱 bash 直接执行）、full（不问，含 D20 高风险确认，由程序放行并写审计；deny、ask 规则照常） |
 | `-allow` / `-ask` / `-deny` | 空 | D25：权限规则，可重复，如 `-allow "Bash(go build *)"`、`-deny "Bash(git push *)"`、`-ask "Edit(internal/agent/**)"`；顺序 deny › ask › allow；子 agent 继承 |
 | `-hooks` | 空 | D26：生命周期 hooks 配置（Claude Code 的 hooks 格式），JSON 原文或文件路径，如 `-hooks hooks/hooks.json`；命令在宿主机上运行，只由用户提供；子 agent 继承。问题以 `/名字` 开头时按 `commands/`、工作区 `.agents/commands/` 的模板展开 |
 | `-bash-project-ro` | false | 配合 `-bash`：项目只读挂到 `/project`（`.env`、`.data`、`.git`、`bin` 除外） |

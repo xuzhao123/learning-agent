@@ -84,7 +84,16 @@ Codex 的工作区可写模式也把 `.git` 设为只读，即使它在可写目
 
 ## 6. 和高风险确认的关系
 
-第 20 天的高风险确认（删除记忆、破坏性工具、读过私有数据后外发、续跑重做）是程序写死的规则，不应该被用户的模式关掉：全权模式下仍然要问。它和用户规则走同一条确认路径，界面上看到的是同一种确认卡片，只是原因不同。
+第 20 天的高风险确认（删除记忆、破坏性工具、读过私有数据后外发、续跑重做）是程序写死的规则，用户的规则改不了它。它和用户规则走同一条确认路径，界面上看到的是同一种确认卡片，只是原因不同。
+
+全权模式是例外。用户选全权，意思是“这个环境本身已经隔离好了，什么都别问我”，两家参考实现都这样处理：
+
+| | 全权模式下仍然生效 | 不再询问 |
+| --- | --- | --- |
+| Claude Code bypassPermissions | 拒绝规则；用户显式写的询问规则；要求用户交互的工具；对关键路径的删除 | 其余全部，包括写受保护目录；没有“读过私有数据后外发”这类按来源判断的确认，远程工具的破坏性注解也不触发询问 |
+| Codex 完全访问（从不询问 + 不开沙箱） | 安全监控可以暂停任务（不是审批） | 全部，带破坏性注解的远程工具调用也由程序直接放行 |
+
+所以合理的做法是：全权模式下风险照常判断、照常写审计，但由程序放行，不发确认。仍然询问的只有用户亲手写下的询问规则——那是用户明说“这类操作要问我”，模式不该盖过它。“续跑重做”是特例：参考实现里没有对应的确认，程序既不问也不自动重做，回填“结果未知”，让模型检查之后自己决定要不要再做一次。
 
 ## 自测
 
@@ -106,11 +115,13 @@ Codex 的工作区可写模式也把 `.git` 设为只读，即使它在可写目
 
 **全权模式下，删除长期记忆还会询问吗？**
 
-会。高风险确认是程序规则，不随用户模式关闭。
+不会。全权模式和 Claude Code 的 bypassPermissions、Codex 的完全访问一样不再询问：程序照常判断风险、写审计，然后放行。想让某类操作在全权模式下仍然要问，就写一条询问规则。
 
 ## 参考
 
 - [Claude Code：Configure permissions](https://code.claude.com/docs/en/permissions)
+- [Claude Code：Choose a permission mode（Actions no mode auto-approves）](https://code.claude.com/docs/en/permission-modes)
+- [Codex 源码：codex-mcp 的 mcp_permission_prompt_is_auto_approved](https://github.com/openai/codex/blob/main/codex-rs/codex-mcp/src/mcp/mod.rs)
 - [Claude Agent SDK：How the agent loop works（权限模式）](https://code.claude.com/docs/en/agent-sdk/agent-loop)
 - [Codex：Sandboxing and approvals](https://learn.chatgpt.com/docs/sandboxing)
 - [Codex CLI Internals（第三方）](https://codex.danielvaughan.com/2026/04/10/codex-cli-internals-queue-pair-guardian-sandbox/)

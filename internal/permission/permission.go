@@ -2,10 +2,11 @@
 //
 //	规则  Bash(go build *)、Edit(internal/agent/**)、Read(.env)、WebFetch(domain:github.com)、mcp_xxx
 //	顺序  deny › ask › allow：先看拒绝，再看询问，最后看允许；命中第一条就定，具体程度不改变顺序（Claude Code 同样如此）
-//	模式  plan（只读）· ask（改动都问）· edit（工作区内的编辑和沙箱里的 bash 直接做，默认）· full（不问，规则照常）
+//	模式  plan（只读）· ask（改动都问）· edit（工作区内的编辑和沙箱里的 bash 直接做，默认）· full（不问，deny、ask 规则照常）
 //
 // 规则和模式只能由用户给（命令行参数或观测台设置），模型、工具结果和项目指令都改不了它们。
-// D20 的高风险确认是程序写死的另一道关：权限放行之后照样检查，full 模式也不跳过。
+// D20 的高风险确认是程序写死的另一道关：权限放行之后照样检查。full 模式和 Claude Code 的 bypassPermissions、
+// Codex 的完全访问一样连它也不问，由程序放行并写审计；用户写的 deny 规则照样拒绝，ask 规则照样询问。
 package permission
 
 import (
@@ -207,7 +208,7 @@ func Describe() string {
 		"plan": "plan（只读：不能改文件，bash 里工作区只读；先给出计划）",
 		"ask":  "ask（改文件、跑 bash、调 MCP 前都要用户确认）",
 		"edit": "edit（工作区内的编辑和沙箱里的 bash 直接执行，MCP 照常）",
-		"full": "full（不再询问；规则与高风险确认照常）",
+		"full": "full（不再询问，高风险操作也直接执行并写审计；用户的 deny、ask 规则照常）",
 	}[Mode]
 	for _, r := range rules {
 		text += "；" + r.effect + " " + r.text

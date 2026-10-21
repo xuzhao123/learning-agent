@@ -17,6 +17,7 @@ import (
 	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/mcp"
+	"learning-agent/internal/permission"
 	"learning-agent/internal/protocol"
 	"learning-agent/internal/sandbox"
 	"learning-agent/internal/tenant"
@@ -25,6 +26,7 @@ import (
 // D20：高风险操作的人工确认。执行器在执行前按程序规则判断风险，命中就经协议向界面上的人发 tool/requestApproval，
 // 在这里暂停等待；只有人点了“允许”才执行。规则写在程序里，模型、工具结果和网页文字都改不了它。
 // 没有界面（命令行、队列、评测）时没有人能确认，按拒绝处理：宁可少做一步，也不替用户做不可撤回或外发的决定。
+// 例外是用户选了 full 模式：和 Claude Code 的 bypassPermissions、Codex 的完全访问一样不再询问，风险照常判断、写审计，由程序放行。
 //
 //	irreversible  删除长期记忆：删了就没有了
 //	destructive   MCP server 声明工具会做破坏性修改（注解只用来收紧，不用来放宽：server 自称只读也不免检）
@@ -39,7 +41,11 @@ var privateSources []string
 func markPrivate(source string) {
 	if !slices.Contains(privateSources, source) {
 		privateSources = append(privateSources, source)
-		fmt.Printf("Private data: source=%s（之后外发类工具需用户确认）\n", source)
+		note := "之后外发类工具需用户确认"
+		if permission.Mode == "full" {
+			note = "full 模式不询问，之后的外发照常执行、写审计"
+		}
+		fmt.Printf("Private data: source=%s（%s）\n", source, note)
 	}
 }
 
@@ -91,6 +97,17 @@ func risk(call llm.ToolCall) (kind, reason string) {
 // D21：请求与答复都写审计。请求写不进审计就不发出、不执行：没有记录的高风险动作事后无法追责。
 // 外发类调用的范围本对话已经被允许过，就不再问人，但同样先写审计（写不进去就不执行）。
 func approve(ctx context.Context, call llm.ToolCall, kind, reason string) string {
+	// full 模式不问人（kind 为 permission 的是用户写的 ask 规则或 hook 要求的确认，照样问）。放行也先写审计，写不进去就不执行。
+	if permission.Mode == "full" && kind != "permission" {
+		record := audit.Record{Actor: "program", Event: "approval_decision", CallID: call.ID, Tool: call.Function.Name, Risk: kind, Decision: "allow_mode", Detail: "权限模式 full，不询问：" + reason}
+		record.Args(call.Function.Arguments)
+		if err := audit.Write(ctx, record); err != nil {
+			fmt.Printf("Audit error [%s]: %v\n", call.ID, err)
+			return "audit_error"
+		}
+		fmt.Printf("Approval skipped [%s]: tool=%s risk=%s（权限模式 full）\n", call.ID, call.Function.Name, kind)
+		return "allow"
+	}
 	scope := ""
 	if kind == "outbound" {
 		scope = grantScope(call)
