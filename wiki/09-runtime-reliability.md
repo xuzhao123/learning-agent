@@ -178,11 +178,11 @@ A、A、A 且结果不变很可疑；A、B、A、B 也可能卡死；相同轮�
 
 Shell exit 2 可以是可解释的命令结局，返回 stdout/stderr 和退出码给模型。沙箱无法启动则属于执行器失败。两者不应走同一条无条件重试分支。
 
-若命令已开始，后续等待超时，仍应标未知并清理进程；清理成功证明它不再继续，不证明此前没有写文件。
+若命令已开始、等待超时：能确认整组进程已被杀掉并退出（cgroup 或进程组）时，结局是“已终止”，把终止前的输出和“终止前做的事可能已生效”一起交给模型；确认不了它已经停下（不配合取消、在别处执行的工具），才标未知。清理成功只证明它不再继续，不证明此前没有写文件。
 
 ### 对照已有实现
 
-[runWithRetry、runAttempt、replayBatch](../internal/agent/react.go)区分尝试、不可重试与未知；[runTool](../internal/agent/dispatch.go)在工具边界处理 panic。可重复工具通过显式集合控制。
+[runWithRetry、runAttempt、replayBatch](../internal/agent/react.go)区分尝试、不可重试与未知；[runTool](../internal/agent/dispatch.go)在工具边界处理 panic。可重复工具通过显式集合控制。bash 超时或任务被停止时，[沙箱](../internal/sandbox/sandbox.go)杀掉整个 cgroup、等进程退出后返回 `killed` 与终止前的输出，runAttempt 等它返回，不记未知（10-20 起；之前记未知，输出也丢了）。
 
 D20 起（[实践](../docs/day-20/day-20-lab.md)）：熔断改为最近 6 个动作的窗口（同一动作第 3 次即停，覆盖 A/B 交替）；另按结果指纹计“无进展轮数”，第 2 轮在结果上附程序提示，第 3 轮停止为 `no_progress`，状态存进检查点。每项调用一结束就写结果日志，续跑时先取回已完成的结果；不可重复又无记录的调用先问人要不要重做，见 [approval.go](../internal/agent/approval.go)。当前指纹不排除时间戳等噪声，按工具区分的进度标记还没有做。
 

@@ -128,6 +128,11 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		if (response.StatusCode == 400 || response.StatusCode == 413) && tooLong {
 			return Reply{}, ErrContextLength
 		}
+		// 带上上游的错误码与说明（压成一行、截短）：额度用完、限流、鉴权失败光看状态码分不清，
+		// 额度的重置时间也在说明里。前缀不变，errorType 按它归类。
+		if reason := strings.Join(strings.Fields(failure.Error.Code+" "+failure.Error.Message), " "); reason != "" {
+			return Reply{}, fmt.Errorf("模型API返回HTTP %d：%s", response.StatusCode, telemetry.Clip(reason, 400))
+		}
 		return Reply{}, fmt.Errorf("模型API返回HTTP %d", response.StatusCode)
 	}
 	// 上限按原始流算：每个 chunk 都带一层 JSON 外壳，同样的回答比非流式响应大很多。

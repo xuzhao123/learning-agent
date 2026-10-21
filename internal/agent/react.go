@@ -662,6 +662,7 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 
 // 单次尝试：工具在自己的 goroutine 里跑，执行器最多等到时限。
 // 不配合取消的工具也不会卡住循环；代价是它可能在后台继续跑完，副作用照样发生——所以记为“结果未知”。
+// bash 例外：沙箱到时会把命令整个终止并交回终止前的输出，执行器等它返回，不记成未知。
 func runAttempt(ctx context.Context, call llm.ToolCall) (any, error) {
 	timeout := ToolTimeout
 	switch call.Function.Name {
@@ -688,7 +689,13 @@ func runAttempt(ctx context.Context, call llm.ToolCall) (any, error) {
 			return o.value, o.err
 		}
 	case <-attemptCtx.Done():
-		if call.Function.Name == "spawn_agent" {
+		switch call.Function.Name {
+		case "bash":
+			// 沙箱到时把整条命令连同子进程杀掉、等它们退出，再交回终止前的输出：结果是确定的，等它返回。
+			if o := <-done; o.err == nil {
+				return o.value, nil
+			}
+		case "spawn_agent":
 			// 子 agent 配合取消：收到 SIGINT 后回填结果、写好检查点再退出，最多等 RunChild 的 WaitDelay。
 			// 等它收尾，子进程的输出和检查点才完整；父进程先退出会让它写输出时收到 SIGPIPE。
 			// 子 agent 的收尾信息里有 task_id，一并交给模型，续跑时它才能引用同一个子任务。

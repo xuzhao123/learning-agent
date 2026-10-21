@@ -89,7 +89,7 @@ var front = sync.OnceValue(func() (t frontTools) {
 	return t
 })
 
-// 资源上限：一次命令最多用这么多；时长由执行器的单次工具时限（-tool-timeout）控制。
+// 资源上限：一次命令最多用这么多；时长由执行器的单次工具时限（-tool-timeout，见 Timeout）控制。
 // 进程数按线程算：无头 Chrome 加载一个页面就要 100 个左右（64 时建不了线程直接崩），256 仍能挡住 fork 炸弹。
 const (
 	memoryMax   = "512M"
@@ -99,29 +99,42 @@ const (
 	outputLimit = 128 << 10  // 输出保留开头和结尾各 128KB：过长的结果由上下文存成文件（D30），这里只防内存被撑爆
 )
 
-var Definitions = []map[string]any{
-	{"name": "bash", "description": "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。工作目录 /workspace 在整个对话内保留文件（之前几轮写的、用户上传的都在）；每次调用是新的 shell（cd 和环境变量不保留）。不能写其他位置，默认不能联网。", "parameters": llm.Parameters("command")},
-	{"name": "request_network_access", "description": "请求用户允许沙箱访问一个域名（如 pypi.org）。由用户在界面上批准：用户当场批准时本轮接下来就能访问；没有界面或用户未答复时返回 pending。", "parameters": map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"domain": map[string]string{"type": "string", "description": "要访问的域名，小写，不含协议和路径，如 pypi.org"},
-			"reason": map[string]string{"type": "string", "description": "为什么需要访问，会原样展示给用户"},
-		},
-		"required": []string{"domain", "reason"},
-	}},
+// Timeout 是一条命令最多跑多久：就是执行器的单次工具时限（-tool-timeout），由 main 设置，写进工具描述与提示词。
+var Timeout = 30 * time.Second
+
+// Definitions 在 Project 定下之后调用：有没有工作区，/workspace 指的不是同一个目录，描述要和 Rules 一致。
+func Definitions() []map[string]any {
+	bash := "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。工作目录 /workspace 在整个对话内保留文件（之前几轮写的、用户上传的都在）；"
+	if Project != "" {
+		bash = "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。/workspace 是对话所选的工作区（和文件工具看到的是同一份代码）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）；"
+	}
+	bash += "每次调用是新的 shell（cd 和环境变量不保留），/tmp 每次都是空的。不能写其他位置，默认不能联网。" +
+		"单条命令最多 " + Timeout.String() + "，到时整条命令被终止，返回终止前的输出。"
+	return []map[string]any{
+		{"name": "bash", "description": bash, "parameters": llm.Parameters("command")},
+		{"name": "request_network_access", "description": "请求用户允许沙箱访问一个域名（如 pypi.org）。由用户在界面上批准：用户当场批准时本轮接下来就能访问；没有界面或用户未答复时返回 pending。", "parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"domain": map[string]string{"type": "string", "description": "要访问的域名，小写，不含协议和路径，如 pypi.org"},
+				"reason": map[string]string{"type": "string", "description": "为什么需要访问，会原样展示给用户"},
+			},
+			"required": []string{"domain", "reason"},
+		}},
+	}
 }
 
 // ApprovalWait 是 request_network_access 等待用户答复的时长；执行器给这个工具的单次时限比它多留一些余量。
 var ApprovalWait = 4 * time.Minute
 
 func Rules() string {
-	rule := "\n可以用 bash 在 Linux 沙箱里执行命令：工作目录 /workspace（整个对话内保留文件，包括之前几轮写的和用户上传的），每次调用是新的 shell；只能写 /workspace 和 /tmp；内存、进程数和时长有限。"
+	limits := "内存、进程数有限，单条命令最多 " + Timeout.String() + "（到时被终止，返回终止前的输出）。"
+	rule := "\n可以用 bash 在 Linux 沙箱里执行命令：工作目录 /workspace（整个对话内保留文件，包括之前几轮写的和用户上传的），每次调用是新的 shell；只能写 /workspace 和 /tmp（/tmp 每次调用都是空的）；" + limits
 	if Project != "" {
 		access := "可写"
 		if !ProjectWrite {
 			access = "只读（plan 模式）"
 		}
-		rule = "\n可以用 bash 在 Linux 沙箱里执行命令：/workspace 就是对话所选的工作区（" + access + "，和文件工具看到的是同一份代码；.git 只读，.env 与 .data 看不到）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）。每次调用是新的 shell；只能写这两处和 /tmp；内存、进程数和时长有限。有 Go 工具链，离线编译（模块缓存只读，GOPROXY=off）。用 bash 改过的文件，要用文件工具再改之前先重新 read_file。"
+		rule = "\n可以用 bash 在 Linux 沙箱里执行命令：/workspace 就是对话所选的工作区（" + access + "，和文件工具看到的是同一份代码；.git 只读，.env 与 .data 看不到）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）。每次调用是新的 shell；只能写这两处和 /tmp（/tmp 每次调用都是空的，要留到下一次调用的放 /scratch）；" + limits + "有 Go 工具链，离线编译（模块缓存只读，GOPROXY=off）。用 bash 改过的文件，要用文件工具再改之前先重新 read_file。"
 	}
 	if ProjectRO {
 		rule += "项目目录只读挂在 /project。"
@@ -301,6 +314,7 @@ func execute(ctx context.Context, callID, command string) (_ any, err error) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	killed := ""
 	select {
 	case err = <-done:
 	case <-ctx.Done():
@@ -310,11 +324,20 @@ func execute(ctx context.Context, callID, command string) (_ any, err error) {
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		fmt.Printf("Bash [%s]: killed after=%s reason=%v\n", callID, time.Since(start).Round(time.Millisecond), ctx.Err())
-		errorType = "killed"
-		return nil, ctx.Err() // 执行器按“超时 / 被取消 → 结果未知”处理
+		// 整条命令连同它起的进程都已结束（cgroup 或进程组整体杀掉，并等到退出），后台不会还在跑，
+		// 所以如实交回终止前的输出，执行器不必记成“结果未知”。终止前已经做了的事照样算数。
+		why := "timeout"
+		killed = "超过单条命令的时限 " + Timeout.String()
+		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			killed, why = "任务被停止", "cancelled"
+		}
+		span.SetAttributes(attribute.String("sandbox.killed", why))
 	}
 	result := map[string]any{"exit_code": cmd.ProcessState.ExitCode(), "duration_ms": time.Since(start).Milliseconds()}
-	if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+	if killed != "" {
+		result["killed"] = killed
+		result["note"] = "命令已被终止，沙箱里没有留下还在运行的进程；终止前已经执行的部分（比如写了一半的文件）可能已经生效，下面是终止前的输出"
+	} else if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 		result["signal"] = status.Signal().String()
 		if status.Signal() == syscall.SIGKILL {
 			result["note"] = "进程被强制结束：多半是超出了内存上限（" + memoryMax + "）"

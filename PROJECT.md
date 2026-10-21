@@ -14,7 +14,7 @@
 
 ## 下一阶段
 
-Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22–D30 已完成，下一步：D31 长任务接力与独立验证。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。10-19 做了一次架构评估（[架构评估](docs/architecture-review.md)），据此调整了 D31–D33、D36–D40 的内容，计划之外的优化 O1–O10 按收益排序记在评估里；同日复查一段自用对话（评估第 5 节，R1–R12），规划之外的已修，规划内的在 [plan.md](plan.md) 的 10-19 复查表里，做到那天回看。10-20 复查了图片输入 A–D 那段自用对话（被 Coding Plan 5 小时额度中断），发现 R13–R21 与建议 O11–O20 见 [自用对话复查 10-20](docs/selfuse-review-2026-10-20.md)，怎么改待定。
+Week 4–6（D22–D42）补编码 harness 这一层：编码工具、项目指令、统一权限、hooks、规划、文件回退、长任务、模型适配、终端客户端与编码任务评测，安排见 [plan.md](plan.md#week-4--编码-harness-的基础)，缺口逐项见 [Harness 能力对照](JOB_REQUIREMENTS.md#harness-能力对照)。D22–D30 已完成，下一步：D31 长任务接力与独立验证。自用任务集 T1–T6 留给 harness 自己修，见 [Day 22 实践](docs/day-22/day-22-lab.md#3-自用任务集)。10-19 做了一次架构评估（[架构评估](docs/architecture-review.md)），据此调整了 D31–D33、D36–D40 的内容，计划之外的优化 O1–O10 按收益排序记在评估里；同日复查一段自用对话（评估第 5 节，R1–R12），规划之外的已修，规划内的在 [plan.md](plan.md) 的 10-19 复查表里，做到那天回看。10-20 复查了图片输入 A–D 那段自用对话（被 Coding Plan 5 小时额度中断），发现 R13–R21 与建议 O11–O20 见 [自用对话复查 10-20](docs/selfuse-review-2026-10-20.md)；同日修了小而确定的四项（O11 报错原文、O17 bash 超时如实回报、O18、O19），用 DeepSeek 真实运行验证，其余待定。
 
 ## 课程进度
 

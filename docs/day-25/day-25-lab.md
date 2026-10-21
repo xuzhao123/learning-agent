@@ -19,7 +19,7 @@
 | 权限包 | [permission.go](../../internal/permission/permission.go) | 规则解析与匹配（Bash 按命令切段，Edit/Read 按路径，WebFetch 按域名）；四种模式的默认；ask 模式下只读命令（ls、cat、git diff/log/status……）不问；`Describe` 写进环境信息 |
 | 执行器 | [react.go](../../internal/agent/react.go) | 拒绝：不执行，记 `permission_deny` 审计；询问：并入 D20 的确认路径，风险标 `permission` |
 | 入口 | [main.go](../../main.go) | `-permission-mode`、`-allow`、`-ask`、`-deny`；子 agent 继承模式与规则 |
-| 沙箱 | [sandbox.go](../../internal/sandbox/sandbox.go) | 有工作区时 `/workspace` 挂仓库（plan 只读），`.git` 只读，`.env` 换成 `/dev/null`，`.data`、`.cache` 换空目录；本对话目录挂 `/scratch`；Go 工具链与模块缓存只读挂入，`GOPROXY=off`，编译缓存放 `.data/gocache`（按租户）；宿主机有 Node、Chrome 时也只读挂入（不在 `/usr` 下的挂到 `/opt/node`、`/opt/chrome`），提示词告诉模型改了网页要用 `node --check` 和无头 Chrome `--dump-dom` 实际检查一次（10-19 补：对话 review 发现改观测台页面三轮都没法验证） |
+| 沙箱 | [sandbox.go](../../internal/sandbox/sandbox.go) | 有工作区时 `/workspace` 挂仓库（plan 只读），`.git` 只读，`.env` 换成 `/dev/null`，`.data`、`.cache` 换空目录；本对话目录挂 `/scratch`；Go 工具链与模块缓存只读挂入，`GOPROXY=off`，编译缓存放 `.data/gocache`（按租户）；宿主机有 Node、Chrome 时也只读挂入（不在 `/usr` 下的挂到 `/opt/node`、`/opt/chrome`），提示词告诉模型改了网页要用 `node --check` 和无头 Chrome `--dump-dom` 实际检查一次（10-19 补：对话 review 发现改观测台页面三轮都没法验证）；bash 的工具描述也按有没有工作区写 `/workspace`、`/scratch`（10-20 补：原来一直是没有工作区的版本，说上传的文件在 `/workspace`） |
 | 环境信息 | [context.go](../../internal/workspace/context.go) | 加一行“权限：模式与规则”，模型据此不去尝试会被拒的操作 |
 | 观测台 | [settings.go](../../internal/observer/settings.go)、[server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html) | 设置里的默认权限模式与规则；输入框旁“权限”每轮可换（续聊带 `permission`）；规则拍进快照；确认卡片的风险显示“权限设置要求确认” |
 

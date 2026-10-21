@@ -38,6 +38,10 @@ var (
 	Dir  string // 工作区的绝对路径；空表示没有启用编码工具
 	root *os.Root
 
+	// OutputBudget 是一条工具结果的估算 token 上限（-tool-output-tokens，由 agent.NewContext 设置）。
+	// read_file 读到它的八成就停下、给出 next_offset：结果不会因为太长被转存给 read_output，行号也不会印两遍。
+	OutputBudget = 2000
+
 	mu   sync.Mutex            // 保护 seen，并让“核对 + 写入”成为一步：并行的两次编辑不会互相覆盖
 	seen = map[string]string{} // 路径 → 模型最近一次读到（或自己写入）的内容哈希
 )
@@ -50,11 +54,11 @@ func object(properties map[string]any, required ...string) map[string]any {
 }
 
 var Definitions = []map[string]any{
-	{"name": "read_file", "description": "读取工作区里的文本文件，每行前面带行号（行号与制表符不属于文件内容）。默认从第1行读200行；文件更长时结果里有 next_offset，用它继续读。改文件之前必须先读。",
+	{"name": "read_file", "description": "读取工作区里的文本文件，每行前面带行号（行号与制表符不属于文件内容）。默认从第1行读200行，内容太长时会提前停下；没读完时结果里有 next_offset，用它继续读。改文件之前必须先读。",
 		"parameters": object(map[string]any{
 			"path":   map[string]string{"type": "string", "description": "相对工作区根目录的路径"},
 			"offset": map[string]string{"type": "integer", "description": "从第几行开始，默认1"},
-			"limit":  map[string]string{"type": "integer", "description": "读多少行，默认200，最多2000"},
+			"limit":  map[string]string{"type": "integer", "description": "读多少行，默认200，最多2000；内容太长时会提前停下并给出 next_offset"},
 		}, "path")},
 	{"name": "glob", "description": "按文件名模式查找工作区里的文件，返回相对路径（最多200个，按路径排序）。* 不跨目录，** 跨任意层目录；模式里没有 / 时只匹配文件名，如 *.go。",
 		"parameters": object(map[string]any{
@@ -229,15 +233,27 @@ func readFile(p string, offset, limit int) (any, error) {
 		}
 		return nil, llm.Permanent(fmt.Errorf("offset=%d 超过文件总行数 %d", offset, len(lines)))
 	}
-	end := min(offset-1+limit, len(lines))
+	last := min(offset-1+limit, len(lines))
+	budget := OutputBudget * 4 / 5 // 留出外层字段的余量
 	var b strings.Builder
-	cut := 0
-	for i := offset - 1; i < end; i++ {
-		line := lines[i]
+	end, used, cut := offset-1, 0, 0
+	for ; end < last; end++ {
+		line, long := lines[end], false
 		if r := []rune(line); len(r) > maxLineChars {
-			line, cut = string(r[:maxLineChars])+"…（本行已截断）", cut+1
+			line, long = string(r[:maxLineChars])+"…（本行已截断）", true
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
+		text := fmt.Sprintf("%6d\t%s\n", end+1, line)
+		// 按写进观测 JSON 之后的长度算：制表符、换行、引号要转义，< > & 会变成 < 这样的 6 个字节，HTML 尤其明显。
+		quoted, _ := json.Marshal(text)
+		tokens := llm.TextTokens(string(quoted))
+		if used+tokens > budget && end > offset-1 {
+			break // 至少读一行；剩下的由 next_offset 接着读
+		}
+		b.WriteString(text)
+		used += tokens
+		if long {
+			cut++
+		}
 	}
 	result["start"], result["end"], result["content"] = offset, end, b.String()
 	if cut > 0 {

@@ -57,7 +57,7 @@ type Context struct {
 
 func NewContext(system func() string, options ContextOptions, withTools bool) *Context {
 	c := &Context{options: options, system: system, withTools: withTools, tailStart: 1, summaryAt: -1}
-	outputBudget = options.ToolOutput
+	outputBudget, workspace.OutputBudget = options.ToolOutput, options.ToolOutput
 	c.Append(llm.Message{Role: "system", Content: system()})
 	return c
 }

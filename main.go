@@ -150,7 +150,7 @@ func run() error {
 	flag.Var(&skillNames, "skill", "配合-skills：只启用这个名字的skill（可重复）；不给则启用全部")
 	skillsList := flag.Bool("skills-list", false, "只扫描skills/并以JSON输出每个skill的元数据、正文与错误，不请求模型；须单独使用")
 	timeout := flag.Duration("timeout", 0, "Day 8：整次运行的时限，如 2m；0 表示不限（仍可 Ctrl+C 取消）")
-	flag.DurationVar(&agent.ToolTimeout, "tool-timeout", agent.ToolTimeout, "Day 8：单次工具尝试的时限；超时记为结果未知")
+	flag.DurationVar(&agent.ToolTimeout, "tool-timeout", agent.ToolTimeout, "Day 8：单次工具尝试的时限；超时记为结果未知（bash 由沙箱终止，返回终止前的输出）")
 	taskID := flag.String("task-id", "", "Day 9：检查点ID（字母、数字和 ._-）；不给则生成随机 UUID")
 	resume := flag.String("resume", "", "Day 9：从这个ID的检查点续跑；配置取自检查点，须单独使用")
 	flag.BoolVar(&browser.Enabled, "browser", false, "Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料（CHROME_PATH 可指定浏览器）")
@@ -507,7 +507,6 @@ func run() error {
 		sandbox.Allow = append(sandbox.Allow, strings.ToLower(domain))
 	}
 	if sandbox.Enabled {
-		llm.Tools = append(llm.Tools, sandbox.Definitions...)
 		defer sandbox.Close()
 	}
 	if !slices.Contains(permission.Modes, permission.Mode) {
@@ -535,6 +534,11 @@ func run() error {
 			// 环境信息里写清 bash 里的工作区路径：编码工具用的是宿主机路径，bash 里是 /workspace。
 			workspace.BashMount = "/workspace"
 		}
+	}
+	// bash 的描述要等工作区定下来再写（/workspace 指的目录不同），时限就是单次工具时限。
+	if sandbox.Enabled {
+		sandbox.Timeout = agent.ToolTimeout
+		llm.Tools = append(llm.Tools, sandbox.Definitions()...)
 	}
 	if *hooksConfig != "" {
 		if err := hooks.Load(*hooksConfig); err != nil {

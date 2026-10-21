@@ -191,7 +191,7 @@ go build -o bin/learning-agent .
 | `-skill` | 空 | 配合 `-skills`，只启用这个名字的 skill（可重复）；不给则启用全部 |
 | `-skills-list` | false | 只扫描 `skills/`，stdout 输出每个 skill 的元数据、正文与校验错误（JSON），不请求模型；须单独使用 |
 | `-timeout` | 0 | Day 8：整次运行的时限，如 `2m`；0 不限，仍可 Ctrl+C |
-| `-tool-timeout` | 30s | Day 8：单次工具尝试的时限；到时记为结果未知，只读工具才重试 |
+| `-tool-timeout` | 30s | Day 8：单次工具尝试的时限；到时记为结果未知，只读工具才重试。bash 例外：沙箱终止整条命令，返回终止前的输出；时限写在 bash 的工具描述里 |
 | `-task-id` | 随机 UUID | Day 9：检查点ID（字母、数字和 `._-`）；已存在时拒绝启动，提示改用 `-resume` |
 | `-resume` | 空 | Day 9：从该ID的检查点续跑，配置取自检查点；须单独使用；已完成的直接返回存档答案 |
 | `-subagents` | false | 增加 spawn_agent：把独立子任务交给全新上下文的子 agent（子进程），每次运行最多4个 |
