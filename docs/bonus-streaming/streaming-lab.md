@@ -1,6 +1,6 @@
 # 扩展实践：模型流式输出（B1）
 
-原理见 [流式输出笔记](streaming-notes.md)，来由见 [进阶计划 B1](../../plan-advanced.md)。拼接逻辑在 [internal/llm/stream.go](../../internal/llm/stream.go)，请求在 [llm.go](../../internal/llm/llm.go) 的 `callModel`，观测台转发在 [observer/server.go](../../internal/observer/server.go) 的 `relayStream`，页面在 [index.html](../../internal/observer/index.html) 的 `applyNotify` 与 `renderCall`。
+原理见 [流式输出笔记](streaming-notes.md)，来由见 [进阶计划 B1](../../plan-advanced.md)。拼接逻辑在 [internal/llm/stream.go](../../internal/llm/stream.go)，请求在 [llm.go](../../internal/llm/llm.go) 的 `callModel`，观测台转发在 [observer/server.go](../../internal/observer/server.go) 的 `relayStream`，页面在 [runs.js](../../internal/observer/web/runs.js) 的 `applyNotify` 与 [chat.js](../../internal/observer/web/chat.js) 的 `renderCall`。
 
 ## 1. 改了什么
 
@@ -58,6 +58,8 @@ if stream.FinishReason != "stop" && stream.FinishReason != "tool_calls" {
 ### 2.4 页面：增量挂在最后一次请求上
 
 主任务的模型请求一次只有一个在进行，所以 `item/delta` 拼到 `r.calls.at(-1)` 的 `live` 上。请求已经有响应时，晚到的增量直接丢弃；响应到达时清空 `live`，改按完整响应渲染。
+
+等待提示带已等秒数（“思考中… 37 s”，每秒更新）：有的供应商思考时什么都不发。Coconut（Responses 协议）实测是这样：思考的一两分钟里没有任何事件，回答流完后才一次给出整段思考，所以思考的折叠块会在回答之后才出现。完整响应里的思考块标“思考 N tokens · 整次请求 X s”：各家流式顺序不同，只能给出整次请求的耗时，不再写成“思考了 X s”。
 
 ## 3. 验证
 

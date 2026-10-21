@@ -143,8 +143,8 @@ func valid(key, value string, f settingsFile) error {
 			return errors.New("memory_ttl 是空（永久）或正的时长，如 1h")
 		}
 	case "provider":
-		if !providerPattern.MatchString(value) {
-			return errors.New("provider 只能是小写字母")
+		if _, ok := llm.FindProvider(value); !ok {
+			return errors.New("provider 取 " + llm.ProviderNames())
 		}
 	case "workspace":
 		if value != "" && !slices.ContainsFunc(f.Workspaces, func(w workspaceDir) bool { return w.Name == value }) {

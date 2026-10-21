@@ -18,10 +18,14 @@ var Tools []map[string]any
 var TaskID string
 
 // Upstream 是供应商的真实地址；APIURL 是这次实际请求的地址，经观测台时是本机代理。
-type Config struct{ Provider, APIURL, Upstream, Model, APIKey, Effort string }
+// Protocol 是上游说的协议：空表示 chat/completions，"responses" 表示 OpenAI Responses（见 responses.go）。
+type Config struct{ Provider, Protocol, APIURL, Upstream, Model, APIKey, Effort string }
 
-// 模型路由表：每家供应商的默认地址、模型与读取的变量名。都是 OpenAI 兼容的 chat/completions，
+// 模型路由表：每家供应商的默认地址、模型与读取的变量名。方舟和 DeepSeek 是 OpenAI 兼容的 chat/completions，
 // 请求体、tool_calls 与 usage 格式一致，所以只需要换地址、模型和密钥。
+// Coconut 是本机的一个 Codex 兼容服务，只说 Responses 协议：agent 内部照旧用 chat 形式的消息，
+// 发往上游前才换成 Responses 的请求体，流式事件由同一个 Stream 拼回 chat 形式（见 responses.go）。
+// 它不要密钥，地址因机器而异，没有默认值，只从 .env 或环境变量的 COCONUT_API_URL 读。
 // 豆包默认走方舟 Coding Plan 订阅的专用入口 /api/coding/v3：按量付费的老入口 /api/v3 是另一套计费，
 // 两个地址不能混用（用错地址会用不了套餐额度）。套餐入口只认套餐里的 Model Name（如 doubao-seed-2.1-pro）
 // 或 ark-code-latest（跟控制台的模型选择走），带日期版本号的老模型名属于 /api/v3。
@@ -29,10 +33,11 @@ type Config struct{ Provider, APIURL, Upstream, Model, APIKey, Effort string }
 //
 // Models 是同一家供应商下可选的模型清单（观测台输入框的第二级下拉用它）；Model 是其中的默认值。
 // 清单只描述“这家供应商有哪些模型”；一次运行用哪个，由 agent 的 -model 参数或 ModelVar 决定。
+// Label 是页面上显示的名字；KeyVars 为空表示这家不要密钥。
 type Provider struct {
-	Name, APIURL, Model, URLVar, ModelVar string
-	KeyVars                               []string
-	Models                                []Model
+	Name, Label, Protocol, APIURL, Model, URLVar, ModelVar string
+	KeyVars                                                []string
+	Models                                                 []Model
 }
 
 // Model 是清单里的一个模型。Vision 记录它能不能看图：2026-10-20 用同一张 640×360 PNG、
@@ -54,7 +59,7 @@ func (p Provider) FindModel(name string) (Model, bool) {
 }
 
 var Providers = []Provider{
-	{Name: "ark", APIURL: "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
+	{Name: "ark", Label: "豆包", APIURL: "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
 		Model: "doubao-seed-2.1-pro", URLVar: "LLM_API_URL", ModelVar: "LLM_MODEL", KeyVars: []string{"ARK_API_KEY", "LLM_API_KEY"},
 		// 方舟 Coding Plan 文档列出的 Model Name，2026-10-20 逐个真实调用过（含一次工具调用）；套餐调整时改这里。
 		// glm-5.3 会报 InvalidParameter: Model only support text input；deepseek-v4-pro、deepseek-v4-flash
@@ -65,9 +70,27 @@ var Providers = []Provider{
 			{Name: "glm-5.3"}, {Name: "glm-5.3-flash", Vision: true},
 			{Name: "deepseek-v4-pro"}, {Name: "deepseek-v4-flash"}, {Name: "deepseek-v4.1-flash", Vision: true},
 			{Name: "minimax-m3", Vision: true}, {Name: "ark-code-latest"}}},
-	{Name: "deepseek", APIURL: "https://api.deepseek.com/chat/completions",
+	{Name: "deepseek", Label: "DeepSeek", APIURL: "https://api.deepseek.com/chat/completions",
 		Model: "deepseek-flash", URLVar: "DEEPSEEK_API_URL", ModelVar: "DEEPSEEK_MODEL", KeyVars: []string{"DEEPSEEK_API_KEY"},
 		Models: []Model{{Name: "deepseek-flash", Vision: true}}},
+	// 清单来自 2026-10-21 的 GET /models（要带 User-Agent: codex），同日逐个用 input_image 实测看图（结果见 docs/bonus-routing/routing-lab.md）。
+	// 这个服务对不认识的模型名也照样回答，响应里的 model 只是把请求原样写回，所以清单外的名字不会报错，也看不出是谁答的。
+	// openrouter-4o-max 当天一直被上游限流（502），没测成，按“不知道就不发图”标为不能看图。
+	{Name: "coconut", Label: "Coconut", Protocol: "responses", Model: "coconut-gpt-6-1-sol-max", URLVar: "COCONUT_API_URL", ModelVar: "COCONUT_MODEL",
+		Models: []Model{{Name: "coconut-gpt-6-1-sol-max", Vision: true}, {Name: "coconut-gpt-6-astra-max", Vision: true},
+			{Name: "coconut-gpt-5-6-sol-max", Vision: true}, {Name: "coconut-gpt-5-6-terra-max", Vision: true}, {Name: "coconut-gpt-5-6-luna-max", Vision: true},
+			{Name: "coconut-gpt-5-5-max", Vision: true}, {Name: "coconut-gpt-5-4-max", Vision: true},
+			{Name: "coconut-openrouter-4o-max"}, {Name: "coconut-openrouter-3o-max", Vision: true}, {Name: "coconut-openrouter-2o-max", Vision: true},
+			{Name: "coconut-deepseek-v4-1-flash-max", Vision: true}, {Name: "coconut-doubao-seed-evolving-dev", Vision: true}}},
+}
+
+// ProviderNames 用于提示：路由表里有哪些供应商。
+func ProviderNames() string {
+	names := make([]string, len(Providers))
+	for i, p := range Providers {
+		names[i] = p.Name
+	}
+	return strings.Join(names, "、")
 }
 
 // Vision 表示这次请求的模型能不能看图。
@@ -100,7 +123,7 @@ func FindProvider(name string) (Provider, bool) {
 func LoadConfig(provider string) (Config, error) {
 	p, ok := FindProvider(provider)
 	if !ok {
-		return Config{}, fmt.Errorf("未知的模型供应商 %q，可选 ark、deepseek", provider)
+		return Config{}, fmt.Errorf("未知的模型供应商 %q，可选 %s", provider, ProviderNames())
 	}
 	values := map[string]string{}
 	file, err := os.Open(".env")
@@ -138,7 +161,7 @@ func LoadConfig(provider string) (Config, error) {
 		}
 		return fallback
 	}
-	config := Config{Provider: p.Name, Upstream: get(p.APIURL, p.URLVar), Model: get(p.Model, p.ModelVar), APIKey: get("", p.KeyVars...)}
+	config := Config{Provider: p.Name, Protocol: p.Protocol, Upstream: get(p.APIURL, p.URLVar), Model: get(p.Model, p.ModelVar), APIKey: get("", p.KeyVars...)}
 	config.APIURL = config.Upstream
 	if value := strings.TrimSpace(os.Getenv("LLM_API_URL")); value != "" {
 		config.APIURL = value
@@ -150,7 +173,10 @@ func LoadConfig(provider string) (Config, error) {
 			}
 		}
 	}
-	if config.APIKey == "" {
+	if config.Upstream == "" {
+		return config, fmt.Errorf("请在 .env 或环境变量配置 %s", p.URLVar)
+	}
+	if config.APIKey == "" && len(p.KeyVars) > 0 {
 		return config, fmt.Errorf("请在 .env 或环境变量配置 %s", p.KeyVars[0])
 	}
 	return config, nil

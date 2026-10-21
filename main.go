@@ -113,7 +113,7 @@ func run() error {
 	maxSteps := flag.Int("max-steps", 10, "模型请求总次数，包含最终回答和上下文摘要；0 表示不限（靠熔断与停止收住）")
 	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
 	flag.BoolVar(&tools.LabEnabled, "lab-tools", false, "启用 Day 2 故障实验工具")
-	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）或 deepseek；地址、模型与密钥见 README")
+	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）、deepseek 或 coconut（本机 Responses 服务）；地址、模型与密钥见 README")
 	model := flag.String("model", "", "这家供应商下的具体模型，优先于 LLM_MODEL / DEEPSEEK_MODEL 与默认值；作为启动参数写进检查点，续跑、回放与子 agent 沿用")
 	effort := flag.String("reasoning-effort", "high", "所有请求统一的推理强度：minimal、low、medium或high")
 	window := flag.Int("context-window", 12288, "上下文总窗口（学习实验值），输入容量扣除输出预算预留与推理余量")

@@ -6,7 +6,7 @@
 
 | 修改 | 代码 | 起因 |
 | --- | --- | --- |
-| 界面显示结局，不显示退出码 | [index.html](../../internal/observer/index.html) | D27 预算耗尽被显示成“失败：exit status 1” |
+| 界面显示结局，不显示退出码 | [analysis.js](../../internal/observer/web/analysis.js) | D27 预算耗尽被显示成“失败：exit status 1” |
 | 默认上下文窗口 256K | [settings.go](../../internal/observer/settings.go) | 64K 下跨文件任务反复压缩，做不完 |
 | 规则里的域名转小写 | [permission.go](../../internal/permission/permission.go) | D26 review 发现 `WebFetch(domain:GitHub.com)` 永远匹配不到 |
 | 请求次数默认不限 | [llm.go](../../internal/llm/llm.go)、[main.go](../../main.go)、[server.go](../../internal/observer/server.go) | 预算难定：编码任务两次在收尾前用完 |

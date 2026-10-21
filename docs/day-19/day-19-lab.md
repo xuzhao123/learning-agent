@@ -20,7 +20,7 @@
 | 执行前检查 | [dispatch.go](../../internal/agent/dispatch.go) | 将模型请求的工具名与本轮 llm.Tools 比较；未提供则不执行，返回 permanent 错误。覆盖普通执行和实际重放的调用 |
 | 实验能力范围 | [main.go](../../main.go) | 新增 security-lab / security-protection。对照组只读样本并可计算；防护组只读样本。禁止与私有记忆、外部执行和续聊组合 |
 | 真实资料读取 | [security.go](../../internal/tools/security.go)、[样本目录](../../eval/security/) | 增加正常、答案偏离、工具偏离三份固定输入，只接受三个 id，不接受任意路径。模型回答与工具决定没有写死 |
-| 观测入口 | [server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html) | 增加样本、模型、防护开关；复用原始输入输出与请求代理，不新增服务 |
+| 观测入口 | [server.go](../../internal/observer/server.go)、[shell.js](../../internal/observer/web/shell.js) | 增加样本、模型、防护开关；复用原始输入输出与请求代理，不新增服务 |
 | 可重复对比 | [security-cases.jsonl](../../eval/security-cases.jsonl) | 复用 D16，三题两组；检查原任务与多余调用提议，不增加测试框架 |
 | 学习资料 | [Day 18 笔记](../day-18/day-18-notes.md)、[Day 19 笔记](day-19-notes.md)、[安全 Wiki](../../wiki/14-security-and-isolation.md) | 补术语、流程图、自测、源码对应；同步 README、进度、能力对照、计划与协作规则 |
 

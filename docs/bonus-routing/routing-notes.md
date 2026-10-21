@@ -5,7 +5,7 @@
 读完本文，应能回答以下问题：
 
 1. 什么是模型路由？它要解决哪几类问题？
-2. 几家供应商都说“兼容 OpenAI 接口”，接入时还会在哪些地方不一样？
+2. 几家供应商都说“兼容 OpenAI 接口”，接入时还会在哪些地方不一样？协议本身不同（Chat Completions 与 Responses）时怎么接？
 3. 常见的路由策略有哪些？各自的依据是什么？
 4. 为什么一段对话中途换模型要格外小心？
 5. 多供应商时，密钥与配置应该怎样管理？
@@ -42,6 +42,29 @@ agent 循环 ──请求──▶ 路由层 ──▶ 供应商 A（模型 a1�
 | 上下文窗口与输出上限 | 从几万到上百万 token，差别很大 |
 
 所以“兼容”只是起点：一个可靠的路由层要知道每家的这些差异，或者至少在接入时用真实请求验证一遍。
+
+### 2.1 协议本身不同：Chat Completions 与 Responses
+
+有的服务根本不说 Chat Completions，而是 OpenAI 后来推出的 Responses 接口（Codex 用的就是它）。两者表达的是同一件事，结构却不同：
+
+| 方面 | Chat Completions | Responses |
+| --- | --- | --- |
+| 系统提示词 | `messages` 里的 `system` 消息 | 单独的 `instructions` 字段 |
+| 对话历史 | `messages`：每条有 `role` 和 `content` | `input`：一串**项**（item），消息只是其中一种 |
+| 工具调用 | assistant 消息里的 `tool_calls` 数组 | 每个调用是独立的 `function_call` 项，带 `call_id` |
+| 工具结果 | `role: tool` 的消息，用 `tool_call_id` 配对 | `function_call_output` 项，用 `call_id` 配对 |
+| 工具定义 | `{type, function: {name, parameters}}` | 摊平成 `{type, name, parameters}` |
+| 推理 | 各家自定义字段（如 `reasoning_content`） | `reasoning` 项：摘要文字，或只能原样回传的加密内容 |
+| 流式 | 一种 chunk，靠 `delta` 里有什么区分 | 带 `type` 的事件：`response.output_text.delta`、`response.completed` 等 |
+| 状态 | 无状态，每次发完整历史 | 可以由服务端保存（`store`、`previous_response_id`），也可以关掉、照旧发完整历史 |
+
+接入这类服务，常见做法是**内部只保留一种消息格式，只在发出和收回的边上转换**（适配器）：历史、检查点、日志、界面都按内部格式写，换供应商不牵动它们。转换时要注意三点：
+
+1. **配对关系不能丢**：一条带两个工具调用的 assistant 消息，要拆成正文和两个 `function_call` 项，结果再按 `call_id` 对回去；
+2. **以最终事件为准**：流式里的片段只用于显示，完整的回答、工具调用和用量取自最后的完成事件，流在中途断了就当作没完成；
+3. **语义要对齐**：结束原因、用量字段名、错误格式都换成内部的同一套，截断检查、计费统计这些下游逻辑才能不分协议。
+
+适配器的代价是日志里存的是转换前的内部格式，不是线上原文；需要排查协议问题时，要能另外看到原始请求。
 
 ## 3. 路由策略
 
@@ -83,6 +106,9 @@ agent 循环 ──请求──▶ 路由层 ──▶ 供应商 A（模型 a1�
 **2. 主任务用大模型、上下文摘要用小模型，属于哪种路由？有什么好处？**
 按用途路由。摘要不需要最强的模型，用小模型可以降低成本和延迟，而且摘要请求不会把小模型的推理内容写回主对话。
 
+**2.1 一个服务只提供 Responses 接口，而 agent 内部的历史是 Chat Completions 的消息格式。怎样接入，又不让检查点、日志和界面跟着改？**
+在发出与收回的边上做适配：发请求前把消息换成 Responses 的项（system 变 `instructions`，`tool_calls` 拆成 `function_call` 项，工具结果变 `function_call_output`）；收流时按事件类型拼回内部格式，最终结果以完成事件为准，结束原因和用量换成内部的字段。内部格式不变，下游就都不用改。
+
 **3. 为什么主供应商返回 401 时不应该自动切到备用供应商重试？**
 401 说明密钥配置有问题，换一家掩盖了配置错误；应当报错让人修复。只有 429、5xx、超时这类暂时性故障才适合故障转移。
 
@@ -92,6 +118,7 @@ B 可能拒绝或看不懂 A 的推理内容；去掉推理内容又可能违反
 ## 参考
 
 - OpenAI，[Chat Completions API](https://platform.openai.com/docs/api-reference/chat)
+- OpenAI，[Responses API](https://platform.openai.com/docs/api-reference/responses)、[Migrating to the Responses API](https://platform.openai.com/docs/guides/migrate-to-responses)：项、`function_call` / `function_call_output` 与流式事件
 - DeepSeek，[API 文档](https://api-docs.deepseek.com/)：OpenAI 兼容接口、思考模式与 `reasoning_content`
 - 火山方舟，[文档中心](https://www.volcengine.com/docs/82379)
 - Lingjiao Chen 等，[FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance](https://arxiv.org/abs/2305.05176)，2023

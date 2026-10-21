@@ -12,7 +12,7 @@
 | 用量提醒 | [context_manager.go](../../internal/agent/context_manager.go) | `remindUsage`：越过 50%、75% 各发一次 `<system-reminder>`；`finishCompact` 压缩后发一次说明并清零档位 |
 | bash 输出上限 | [sandbox.go](../../internal/sandbox/sandbox.go) | 头尾各 8KB 改为各 128KB，只防内存被撑爆，长输出交给上下文层存文件 |
 | 入口 | [main.go](../../main.go) | 普通运行设置输出目录、注册 `read_output`（从第一次请求就提供，不在中途改工具列表）；D18 实验不加 |
-| 观测台 | [index.html](../../internal/observer/index.html) | 续聊的每一轮显示“闲置多久 · 首次请求缓存命中多少（多少 token 未命中）”；输入框发送键左侧的环显示最近一次主请求的输入占可用容量的比例，悬浮看明细 |
+| 观测台 | [chat.js](../../internal/observer/web/chat.js)、[shell.js](../../internal/observer/web/shell.js) | 续聊的每一轮显示“闲置多久 · 首次请求缓存命中多少（多少 token 未命中）”；输入框发送键左侧的环显示最近一次主请求的输入占可用容量的比例，悬浮看明细 |
 
 计数没有改：先用存档验证了现在的“服务端用量 + 增量估算”，误差已经很小（见第 1 节）。
 

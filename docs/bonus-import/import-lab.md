@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | 解析与归一化 | [transcript](../../internal/transcript/transcript.go)、[codex.go](../../internal/transcript/codex.go)、[claude.go](../../internal/transcript/claude.go) | 按第一条记录认格式；输出按时间排列的“一轮开始 / 一次请求 / 一轮结束” |
 | 导入接口 | [import.go](../../internal/observer/import.go) | `POST /runs/import`，最大 128 MB；换成 start/continue、request/response、exit 事件，时间用记录里的原始时间戳；start 带 `source` |
-| 页面 | [index.html](../../internal/observer/index.html) | 请求带 `append` 时接在上一次请求后面还原完整输入；导入的对话隐藏模型、工作区、权限选择 |
+| 页面 | [runs.js](../../internal/observer/web/runs.js)、[shell.js](../../internal/observer/web/shell.js) | 请求带 `append` 时接在上一次请求后面还原完整输入；导入的对话隐藏模型、工作区、权限选择 |
 
 切分请求的规则：
 

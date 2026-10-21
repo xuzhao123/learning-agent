@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learning Agent</title>
+<!-- 数学公式：模型常用 LaTeX 写公式。KaTeX 固定版本并带 SRI 校验（文件被改过浏览器就不执行）；加载失败时公式按源码显示。 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css" integrity="sha384-5TcZemv2l/9On385z///+d7MSYlvIEw9FuZTIdZ14vJLqWphw7e7ZPuOiCHJcFCP" crossorigin="anonymous">
+<script async id="katex-js" src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js" integrity="sha384-cMkvdD8LoxVzGF/RPUKAcvmm49FQ0oxwDF3BGKtDXcEc+T1b2N+teh/OJfpU0jr6" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/ui/app.css">
+<!-- 页面脚本是原生 ES 模块，不打包、不需要构建：入口 main.js，按功能分文件，见 docs/observer/observer-notes.md。 -->
+<script type="module" src="/ui/main.js"></script>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand"><span class="mark"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5"/><path d="M13 17h6"/></svg></span>Learning Agent</div>
+    <button id="new-chat" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>新对话</button>
+    <button id="settings" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg></span>设置</button>
+    <button id="import" class="navbtn" title="Codex 的 rollout-*.jsonl 或 Claude Code 的会话 .jsonl，导入后只读查看"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg></span>导入对话</button><input id="import-file" type="file" accept=".jsonl,application/x-ndjson,application/json" hidden>
+    <div class="navlabel"><span>中心</span></div>
+    <button id="skills-hub" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6-4.6-1.9 4.6-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg></span>Skills</button>
+    <button id="mcp-hub" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v5M15 2v5"/><path d="M6 7h12v4a6 6 0 0 1-12 0Z"/><path d="M12 17v5"/></svg></span>MCP</button>
+    <div class="navlabel"><span>实验</span></div>
+    <button id="lab" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 13 9 5 9-5"/></svg></span>上下文实验<span class="tag">D3</span></button>
+    <button id="rag-lab" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>检索对比<span class="tag">D4</span></button>
+    <button id="security-lab" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/></svg></span>内容与权限<span class="tag">D18</span></button>
+    <div class="navlabel"><span>记录</span></div>
+    <button id="memory" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4Z"/></svg></span>长期记忆<span class="tag">D5</span></button>
+    <button id="evals" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span>评测与归因<span class="tag">D16</span></button>
+    <button id="audit" class="navbtn"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M13 18l-1 1a4 4 0 0 1-6-6l1-1"/></svg></span>审计日志<span class="tag">D21</span></button>
+    <a class="navbtn" href="/slides/" target="_blank" rel="noopener noreferrer"><span class="ico"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/></svg></span>学习课件</a>
+    <div class="navlabel"><span>对话</span><span id="cmp-hint" hidden>勾选 2–5 条对比</span></div>
+    <div id="runs"></div>
+    <div class="whoami"><span class="avatar" id="avatar"></span><span id="whoami"></span><button id="logout" type="button">退出</button></div>
+  </aside>
+  <div id="main">
+    <div id="topbar">
+      <button id="menu" aria-label="对话列表"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+      <div id="heading"><div id="title">新对话</div><button id="run-id" type="button" aria-label="复制对话 ID" hidden></button></div>
+      <div class="seg"><button id="page-chat">对话</button><button id="page-observe">观测</button></div>
+      <button id="files-btn" class="ghost" type="button" hidden title="本对话的 /workspace：各轮 bash 共用">沙箱文件</button>
+      <span id="status"></span>
+    </div>
+    <section id="chat-pane">
+     <div id="chat-col">
+      <div id="chat-scroll"><div id="thread"></div></div><div id="viz-park" hidden></div>
+      <div id="composer-wrap">
+        <button id="jump" type="button" hidden></button>
+        <form id="composer">
+          <div id="slash" hidden></div>
+          <div id="attach-strip" hidden></div>
+          <textarea id="query" rows="1" placeholder="给 agent 布置一个任务"></textarea>
+          <div class="crow"><button id="attach" type="button" aria-label="附图"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 17 4.5-4.5L12 16l3-3 5 5"/></svg></button><input id="attach-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><select id="provider" class="pick" aria-label="模型" title="模型：对话开始后固定"></select><select id="model" class="pick" aria-label="具体模型" title="具体模型：对话开始后固定" hidden></select><select id="workspace" class="pick" aria-label="工作区" title="工作区：对话开始后固定"></select><select id="perm" class="pick" aria-label="权限模式" title="权限模式：每轮可以换"><option value="plan">只读计划</option><option value="ask">改动都问</option><option value="edit">自动编辑</option><option value="full">全权</option></select><button id="tools-link" type="button" class="link"></button><span id="mode-chip"></span><div id="ctx-ring" role="img" aria-label="上下文用量" hidden><svg viewBox="0 0 30 30" aria-hidden="true"><circle class="track" cx="15" cy="15" r="11.5"/><circle class="fill" cx="15" cy="15" r="11.5"/></svg><span class="pct"></span></div><button id="send" aria-label="发送"></button></div>
+        </form>
+        <p id="hint"></p>
+      </div>
+     </div>
+      <aside id="subpanel" aria-label="子 agent" hidden></aside>
+    </section>
+    <section id="observe-pane" hidden>
+      <div class="obs-grid">
+        <section class="panel">
+          <div class="toolbar">
+            <div class="tabs">
+              <button id="tab-trace">轨迹</button><button id="tab-maze">迷宫</button><button id="tab-spans" title="D13：OpenTelemetry span 树（每次交互一个 trace）">调用链</button><button id="tab-compare">对比</button>
+            </div>
+            <span class="grow"></span>
+            <input id="search" type="search" placeholder="搜索事件…">
+            <button id="expand" class="ghost">全部展开</button>
+            <button id="terminal" class="ghost" disabled>终端输出</button>
+            <button id="attribute" class="ghost" disabled title="D17：模型诊断这段对话最后一轮的成败与决定性错误，再从那一步回放验证">归因</button>
+            <select id="speed" title="回放速度"><option value="1">1×</option><option value="5">5×</option><option value="20" selected>20×</option><option value="100">100×</option><option value="300">300×</option></select>
+            <label class="meta"><input id="fold" type="checkbox" checked> 折叠空闲</label>
+            <button id="replay" class="ghost">▶ 回放</button>
+          </div>
+          <div id="stats" class="stats" hidden></div>
+          <div id="view"><div class="empty">先在对话中提问，或从左侧选择历史对话</div></div>
+        </section>
+        <aside id="inspector" class="panel side ins"><div class="empty">点击事件或节点查看详情</div></aside>
+      </div>
+    </section>
+  </div>
+</div>
+<div id="ctx-tip" hidden></div>
+</body>
+</html>

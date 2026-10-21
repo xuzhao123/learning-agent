@@ -194,7 +194,7 @@ todo 清单靠复述抵抗长上下文里的遗忘，模型越强价值越低，
 
 [callModel 与 Client.CallKeeping](../internal/llm/llm.go)负责结束原因、请求计数和用途；[Message](../internal/llm/protocol.go)保留已知的 reasoning_content、encrypted_content 和工具字段。
 
-现有请求已改为流式（B1）：[stream.go](../internal/llm/stream.go) 按 index 重组工具调用，流结束后再做结束原因与空回答检查，观测台代理用同一份逻辑还原存档，见 [B1 实践](../docs/bonus-streaming/streaming-lab.md)。消息仍是明确的结构体，尚未实现上述通用 RawMessage 适配，只解析 OpenAI 兼容格式。这些代码与流程是技术设计示意，不代表已接入所有供应商。
+现有请求已改为流式（B1）：[stream.go](../internal/llm/stream.go) 按 index 重组工具调用，流结束后再做结束原因与空回答检查，观测台代理用同一份逻辑还原存档，见 [B1 实践](../docs/bonus-streaming/streaming-lab.md)。消息仍是明确的结构体，尚未实现上述通用 RawMessage 适配；能解析 chat/completions 与 OpenAI Responses 两种格式：Responses 只在发出与收回时转换（[responses.go](../internal/llm/responses.go)），内部、检查点与存档仍是 chat 形式，见 [模型路由实践](../docs/bonus-routing/routing-lab.md#5-coconutresponses-协议)。这些代码与流程是技术设计示意，不代表已接入所有供应商。
 
 ### 进阶推演
 

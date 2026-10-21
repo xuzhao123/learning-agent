@@ -61,8 +61,10 @@ func LimitText(limit int) string {
 func callModel(ctx context.Context, config Config, history []Message, withTools bool, output int, purpose string, onDelta func(content, reasoning string)) (Reply, error) {
 	endpoint, err := url.Parse(config.APIURL)
 	local := endpoint != nil && endpoint.Scheme == "http" && endpoint.Hostname() == "127.0.0.1"
-	if err != nil || (endpoint.Scheme != "https" && !local) || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" {
-		return Reply{}, errors.New("模型地址需要是完整的HTTPS URL，或本机http://127.0.0.1观测代理")
+	// 明文 HTTP 只用于本机观测代理和不要密钥的上游（本机的 Coconut）：密钥不能经明文发出去。
+	plain := endpoint != nil && endpoint.Scheme == "http" && (local || config.APIKey == "")
+	if err != nil || (endpoint.Scheme != "https" && !plain) || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" {
+		return Reply{}, errors.New("模型地址需要是完整的HTTPS URL；明文HTTP只用于本机观测代理和不要密钥的上游")
 	}
 	body := map[string]any{"model": config.Model, "messages": prepareHistory(history, config.Vision()), "stream": true, "reasoning_effort": config.Effort,
 		// 流式默认不返回用量；要了它，[DONE] 前会多一个只有 usage 的 chunk，检查点与 D15 的成本才有数据。
@@ -82,13 +84,25 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 	if err != nil {
 		return Reply{}, err
 	}
+	// Responses 上游：直连时在这里换请求体；经观测台时发 chat 形式，由代理换（存档仍是 chat 形式）。
+	if config.Protocol == "responses" && !local {
+		if data, err = ResponsesBody(data); err != nil {
+			return Reply{}, err
+		}
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.APIURL, bytes.NewReader(data))
 	if err != nil {
 		return Reply{}, errors.New("无法创建模型请求")
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+config.APIKey)
+	if config.APIKey != "" {
+		request.Header.Set("Authorization", "Bearer "+config.APIKey)
+	}
 	if local {
+		// 上游说 Responses 协议时告诉代理，代理转发前换请求体。
+		if config.Protocol != "" {
+			request.Header.Set("X-Agent-Protocol", config.Protocol)
+		}
 		// 观测台按这个明确标记区分主任务、摘要和记忆辅助调用，不靠回答内容猜测；代理不转发给上游。
 		request.Header.Set("X-Agent-Purpose", purpose)
 		// 任务ID区分父 agent 与子 agent：子进程继承同一个代理地址，靠它才能分开显示。

@@ -200,7 +200,7 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 | 连接、等待表、通知与请求 | [protocol.go](../internal/protocol/protocol.go) | [B0 实践](../docs/bonus-protocol/protocol-lab.md) |
 | `-app-server`、stdout/stderr 分流、`turn/start`、`turn/interrupt` | [main.go](../main.go) | 同上 |
 | 子 Agent 的事件与请求转发 | [RunChild、relayRequest](../internal/agent/child.go) | 同上 |
-| 界面一侧：保存通知、记下等待项、答复 | [server.go](../internal/observer/server.go) 的 `handle`、`decideNetwork`、`decideTool`；页面 [index.html](../internal/observer/index.html) 的 `applyNotify` | 同上、[Day 20 实践](../docs/day-20/day-20-lab.md) |
+| 界面一侧：保存通知、记下等待项、答复 | [server.go](../internal/observer/server.go) 的 `handle`、`decideNetwork`、`decideTool`；页面 [runs.js](../internal/observer/web/runs.js) 的 `applyNotify` | 同上、[Day 20 实践](../docs/day-20/day-20-lab.md) |
 | 联网审批与高风险确认 | [sandbox.go](../internal/sandbox/sandbox.go)、[approval.go](../internal/agent/approval.go) | [Day 20 实践](../docs/day-20/day-20-lab.md) |
 
 评测与队列也用这套协议启动子进程，但上面没有界面：通知不转发，审批如实回答 unavailable。

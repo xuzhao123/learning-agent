@@ -42,6 +42,7 @@ go build -o bin/learning-agent .
 | --- | --- | --- |
 | 方舟聊天模型 | `ARK_API_KEY`（兼容 `LLM_API_KEY`）、`LLM_API_URL`、`LLM_MODEL` | `-provider ark`；`https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions`；`doubao-seed-2.1-pro` |
 | DeepSeek 聊天模型 | `DEEPSEEK_API_KEY`、`DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` | `-provider deepseek`；`https://api.deepseek.com/chat/completions`；`deepseek-flash` |
+| Coconut 聊天模型 | `COCONUT_API_URL`（必填，指向本机 Codex 兼容服务的 `.../v1/responses`）、`COCONUT_MODEL`；不要密钥 | `-provider coconut`；没有默认地址；`coconut-gpt-6-1-sol-max`；走 Responses 协议，见 [模型路由实践](docs/bonus-routing/routing-lab.md#5-coconutresponses-协议) |
 | 线上向量模型 | 与方舟共用 `ARK_API_KEY` | `-embedding ark` |
 | 本地向量模型 | 不需要 embedding API 密钥；首次使用会下载模型 | `-embedding local`；聊天请求仍使用选定的线上模型 |
 | 浏览器 | 本机安装 Chrome/Chromium；`CHROME_PATH` 可指定可执行文件 | `-browser`；仅环境变量读取浏览器配置 |
@@ -125,7 +126,7 @@ go build -o bin/learning-agent .
 | 编码工具 | [workspace](internal/workspace/)、[permission](internal/permission/) | 读、找、搜、改；`os.Root` 路径边界、读后才写的版本核对、输出预算；项目指令、环境信息与系统提醒；权限规则与模式 |
 | 扩展点 | [hooks](internal/hooks/)、[commands](internal/commands/) | 生命周期 hooks（配置与脚本在 [hooks/](hooks/)）；斜杠命令模板（[commands/](commands/) 与工作区的 `.agents/commands/`） |
 | 外部执行 | [browser](internal/browser/)、[sandbox](internal/sandbox/)、[netguard](internal/netguard/) | 页面读取、进程隔离、网络与资源边界、出口地址判断 |
-| 观测与实验 | [observer](internal/observer/)、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
+| 观测与实验 | [observer](internal/observer/)（页面在 [web](internal/observer/web/)，原生 ES 模块）、[protocol](internal/protocol/)、[telemetry](internal/telemetry/)、[metrics](internal/metrics/)、[labs](internal/labs/) | 模型请求代理、agent 与界面的结构化协议、OpenTelemetry span 与导出、D15 指标、上下文与检索实验 |
 | 评测与归因 | [eval](internal/eval/)、[评测集](eval/cases.jsonl)、[观测台评测页](internal/observer/eval.go) | 题目与打分器、多次尝试与 pass^k、评审模型、消融与基线对比、归因卡片与回放验证 |
 | 审计 | [audit](internal/audit/) | 只追加的审计记录、哈希链与校验；agent 与观测台共同写入 |
 | 多租户与登录 | [tenant](internal/tenant/)、[观测台登录](internal/observer/auth.go) | 按租户决定数据路径；账号、密码哈希、会话、租户策略与访问检查 |
@@ -198,7 +199,7 @@ go build -o bin/learning-agent .
 | `-tenant` | 空 | 多租户：本任务所属的租户，数据都在 `.data/tenants/<租户>/` 下；观测台和带 `tenant` 的队列任务自动加上；可与 `-resume` 一起用 |
 | `-private-input` | false | D20：任务输入已含私有数据，外发类工具执行前要确认；父 agent 派出子任务时自动加上，一般不手动使用 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
-| `-provider` | ark | 模型路由：`ark`（豆包，方舟 Coding Plan）或 `deepseek`；子 agent 继承，续跑沿用 |
+| `-provider` | ark | 模型路由：`ark`（豆包，方舟 Coding Plan）、`deepseek` 或 `coconut`（本机 Responses 服务）；子 agent 继承，续跑沿用 |
 | `-model` | 空 | 这家供应商下的具体模型，优先于 `LLM_MODEL` / `DEEPSEEK_MODEL`；写进检查点的启动参数，子 agent 继承，续跑与回放沿用 |
 | `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux）；工作目录按对话保留，续聊各轮共用，观测台可上传、下载 |
 | `-workspace` | 空 | D23：增加 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写；子 agent 继承。D25 起配合 `-bash` 时 bash 的 `/workspace` 就是这个仓库（`.git` 只读，`.env`、`.data` 看不到），本对话目录改挂 `/scratch` |

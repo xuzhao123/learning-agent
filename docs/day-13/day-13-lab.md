@@ -122,7 +122,7 @@ ctx = telemetry.Extract(ctx, request.Params.Meta.AdditionalFields)
 - `proxy` 从 `traceparent` 头取出 span_id，记进 request 事件的 `span` 字段。
 - `GET /traces/{id}` 读一个 trace 的全部 span；`GET /trace-metrics[?conversation=对话ID]` 汇总指标。
 
-页面的“调用链”标签（[index.html](../../internal/observer/index.html) 的 `renderSpans`）：上方是指标表，下方每个 Turn 一棵 span 树和瀑布条；点击 span 在右侧显示属性和事件；chat span 有“在轨迹中查看原始请求”按钮。找不到父节点的 span 标黄。
+页面的“调用链”标签（[observe.js](../../internal/observer/web/observe.js) 的 `renderSpans`）：上方是指标表，下方每个 Turn 一棵 span 树和瀑布条；点击 span 在右侧显示属性和事件；chat span 有“在轨迹中查看原始请求”按钮。找不到父节点的 span 标黄。
 
 ## 3. 实验记录
 

@@ -26,7 +26,7 @@
 | 结果日志 | [approval.go](../../internal/agent/approval.go) | 每项调用结束写 `.data/checkpoints/<任务ID>.calls/<调用ID哈希>.json`；续跑先查日志，有记录就取回，不重做 |
 | 中断重做 | [react.go](../../internal/agent/react.go) | 续跑时不可重复、又无记录的调用先问人；不允许就回填“结果未知”，说明与超时的一致（不重做、不构造标识） |
 | 循环检测 | [approval.go](../../internal/agent/approval.go)、[checkpoint.go](../../internal/agent/checkpoint.go) | 相邻计数改为 6 个动作的窗口；新增结果指纹与无进展轮数；状态存检查点 `progress`，分叉回放时重算 |
-| 界面 | [server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html)、[child.go](../../internal/agent/child.go) | 观测台接收确认请求，对话里出现确认卡片，`POST /runs/{id}/approval` 当场回复；子 agent 的请求经父进程逐级转发 |
+| 界面 | [server.go](../../internal/observer/server.go)、[sandbox.js](../../internal/observer/web/sandbox.js)、[child.go](../../internal/agent/child.go) | 观测台接收确认请求，对话里出现确认卡片，`POST /runs/{id}/approval` 当场回复；子 agent 的请求经父进程逐级转发 |
 
 ## 1. 风险规则
 
@@ -138,7 +138,7 @@ agent 所有读写落在 .data/tenants/<租户>/：checkpoints · memory.json ·
 | agent 各模块 | [checkpoint.go](../../internal/agent/checkpoint.go)、[child.go](../../internal/agent/child.go)、[memory.go](../../internal/memory/memory.go)、[main.go](../../main.go) | 检查点、结果日志、记忆与索引、沙箱和浏览器目录都按空间取路径；`RunChild` 按 `ChildIO.Tenant` 读写并给子进程带上 `-tenant`；`-resume` 可与 `-tenant` 一起用 |
 | 审计 | [audit.go](../../internal/audit/audit.go) | 每个空间一条链；记录增加 `user`、`tenant`；`go run . audit -tenant 租户` |
 | 登录 | [auth.go](../../internal/observer/auth.go) | 账号在 `.data/users.json`（PBKDF2-SHA256 60 万次、每账号随机盐）；会话令牌只存哈希、12 小时过期；连续 5 次失败锁定 1 分钟；未知用户名也算一遍哈希；登录、失败与退出写审计 |
-| 观测台 | [server.go](../../internal/observer/server.go)、[eval.go](../../internal/observer/eval.go)、[index.html](../../internal/observer/index.html) | 对话带租户；列表、事件流、续聊、停止、确认、联网审批、画面、调用链都只对本租户可见；评测、归因、Skills/MCP 修改与全局指标只给平台账号；页面显示账号、可退出，隐藏没开通的功能 |
+| 观测台 | [server.go](../../internal/observer/server.go)、[eval.go](../../internal/observer/eval.go)、[main.js](../../internal/observer/web/main.js)、[shell.js](../../internal/observer/web/shell.js) | 对话带租户；列表、事件流、续聊、停止、确认、联网审批、画面、调用链都只对本租户可见；评测、归因、Skills/MCP 修改与全局指标只给平台账号；页面显示账号、可退出，隐藏没开通的功能 |
 | 租户策略与配额 | [auth.go](../../internal/observer/auth.go)、[queue.go](../../internal/queue/queue.go) | `tenants` 里的 `features` 与 `max_running`（默认全部功能、2 个）；队列任务可带 `tenant`，`-per-tenant` 限制每个租户同时占用的 worker |
 | 模型代理 | [llm.go](../../internal/llm/llm.go)、[server.go](../../internal/observer/server.go) | 每次启动 agent 生成令牌，经 `X-Agent-Token` 核对；没有令牌的本机进程不能往别人的对话里写请求记录 |
 

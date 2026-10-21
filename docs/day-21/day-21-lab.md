@@ -24,7 +24,7 @@ agent 进程（执行方）  ──写──┐
 | 执行与续跑 | [react.go](../../internal/agent/react.go) | 任务开始/结束；不可重复或经过确认的调用结束时写 `tool_call`；续跑写 `replay_journal`、`replay_unknown` |
 | 联网审批 | [sandbox.go](../../internal/sandbox/sandbox.go)、[main.go](../../main.go) | `network_request` / `network_decision`；启动参数 `-net-allow` 每次运行记 `network_allow_flag` |
 | 记忆变更 | [memory.go](../../internal/memory/memory.go)、[main.go](../../main.go) | 写入、刷新、删除、过期、淘汰各记一条，只记编号；`-memory-forget`（含观测台记忆页的删除按钮）先记 `memory_forget_command` |
-| 观测台 | [server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html) | 人的点击写 `user_decision` / `user_network_decision`，先写审计再回复 agent；`GET /audit` 与审计页 |
+| 观测台 | [server.go](../../internal/observer/server.go)、[sandbox.js](../../internal/observer/web/sandbox.js)、[pages.js](../../internal/observer/web/pages.js) | 人的点击写 `user_decision` / `user_network_decision`，先写审计再回复 agent；`GET /audit` 与审计页 |
 
 ## 1. 一条记录
 

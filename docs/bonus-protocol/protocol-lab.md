@@ -1,6 +1,6 @@
 # 扩展实践：仿 app-server 的结构化协议（B0）
 
-原理见 [结构化协议笔记](protocol-notes.md)，来由见 [进阶计划 B0](../../plan-advanced.md)。协议层在 [internal/protocol](../../internal/protocol/protocol.go)，agent 一侧在 [main.go](../../main.go) 的 `-app-server`，界面一侧在 [observer/server.go](../../internal/observer/server.go) 与 [index.html](../../internal/observer/index.html) 的 `applyNotify`。
+原理见 [结构化协议笔记](protocol-notes.md)，来由见 [进阶计划 B0](../../plan-advanced.md)。协议层在 [internal/protocol](../../internal/protocol/protocol.go)，agent 一侧在 [main.go](../../main.go) 的 `-app-server`，界面一侧在 [observer/server.go](../../internal/observer/server.go) 与 [runs.js](../../internal/observer/web/runs.js) 的 `applyNotify`。
 
 ## 1. 改了什么
 

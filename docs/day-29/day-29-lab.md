@@ -12,7 +12,7 @@
 | 写入路径 | [workspace.go](../../internal/workspace/workspace.go) | `editFile`、`writeFile` 在 `root.WriteFile` 前后各调用一次；快照写不进去就不改文件 |
 | 按轮撤销 | [rewind.go](../../internal/agent/rewind.go) | 沿续接链往后找到最新一轮；给每轮加锁；先写审计再恢复；最后写 `rewound.json` 标记；`RewindCommand` 是命令行入口 |
 | 入口 | [main.go](../../main.go) | `go run . rewind`；设置本轮的快照目录（子 agent 经环境变量 `AGENT_FILES_TURN` 写进父 agent 那一轮）；已撤销的轮次不能 `-resume`、不能 `-continues` |
-| 观测台 | [server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html) | `POST /runs/{id}/rewind`（`dry_run` 预览）；调用 agent 的 rewind 命令，结果记成对话里的 `rewind` 事件；之后续聊从撤销点的上一轮的检查点接着；页面上被撤销的轮次淡化显示 |
+| 观测台 | [server.go](../../internal/observer/server.go)、[shell.js](../../internal/observer/web/shell.js)、[chat.js](../../internal/observer/web/chat.js) | `POST /runs/{id}/rewind`（`dry_run` 预览）；调用 agent 的 rewind 命令，结果记成对话里的 `rewind` 事件；之后续聊从撤销点的上一轮的检查点接着；页面上被撤销的轮次淡化显示 |
 
 ## 1. 快照放在哪里
 

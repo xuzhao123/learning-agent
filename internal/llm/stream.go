@@ -15,6 +15,7 @@ import (
 //	usage         请求里带 stream_options.include_usage 时，[DONE] 前多一个 choices 为空、只有 usage 的 chunk
 //
 // agent 用它边收边拼出完整回答，观测台的代理用同一份逻辑把转发过的流还原成完整响应留档。
+// Responses 协议的流（每行 data 带 type）也由它接收，拼回同样的 Message，见 responses.go。
 type Stream struct {
 	ID, Model    string
 	Message      Message
@@ -61,6 +62,13 @@ func (s *Stream) Add(line string) (content, reasoning string, err error) {
 	if data == "[DONE]" {
 		s.Done = true
 		return "", "", nil
+	}
+	// chat 的 chunk 顶层没有 type，Responses 的事件都有。
+	var kind struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal([]byte(data), &kind) == nil && kind.Type != "" {
+		return s.addResponses(data)
 	}
 	var c streamChunk
 	if err := json.Unmarshal([]byte(data), &c); err != nil {

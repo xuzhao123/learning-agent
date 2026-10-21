@@ -21,7 +21,7 @@
 | 执行器 | [react.go](../../internal/agent/react.go) | 四个事件的接入点；改写记审计 `hook_rewrite` 并在结果的 `note` 里告诉模型；hook 的 allow 只免掉模式默认的询问 |
 | 命令包 | [commands.go](../../internal/commands/commands.go) | 个人级 `commands/*.md` 与项目级 `<工作区>/.agents/commands/*.md`（同名项目级优先）；`$ARGUMENTS`、`$1…$9`；未知命令报错 |
 | 入口 | [main.go](../../main.go) | `-hooks`（JSON 原文或文件路径）；子 agent 继承；问题以 `/名字` 开头时先展开 |
-| 观测台 | [settings.go](../../internal/observer/settings.go)、[server.go](../../internal/observer/server.go)、[index.html](../../internal/observer/index.html) | 平台设置 `hooks`（个人层改它返回 403），对话开始时读成原文拍进快照；`GET /commands` 列出命令，输入框打 `/` 弹出菜单；工具上方、回答下方显示 HOOK 卡片 |
+| 观测台 | [settings.go](../../internal/observer/settings.go)、[server.go](../../internal/observer/server.go)、[pages.js](../../internal/observer/web/pages.js)、[composer.js](../../internal/observer/web/composer.js)、[chat.js](../../internal/observer/web/chat.js) | 平台设置 `hooks`（个人层改它返回 403），对话开始时读成原文拍进快照；`GET /commands` 列出命令，输入框打 `/` 弹出菜单；工具上方、回答下方显示 HOOK 卡片 |
 | 配置与脚本 | [hooks/](../../hooks/hooks.json)、[commands/review.md](../../commands/review.md)、[.agents/commands/self-task.md](../../.agents/commands/self-task.md) | 见第 1 节 |
 
 ## 1. 本仓库实际使用的 hooks 与命令

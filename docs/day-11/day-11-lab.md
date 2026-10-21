@@ -1,6 +1,6 @@
 # Day 11 项目实践：用 chromedp 给 agent 一个查资料的浏览器
 
-原理见 [Day 11 学习笔记](day-11-notes.md)。代码在 [browser.go](../../internal/browser/browser.go)，观测台的实时画面在 [server.go](../../internal/observer/server.go) 的 `browserFrame` 和 [index.html](../../internal/observer/index.html) 的“Day 11 浏览器”一节。
+原理见 [Day 11 学习笔记](day-11-notes.md)。代码在 [browser.go](../../internal/browser/browser.go)，观测台的实时画面在 [server.go](../../internal/observer/server.go) 的 `browserFrame` 和 [browser.js](../../internal/observer/web/browser.js)。
 
 ## 1. 实现概览
 
@@ -37,7 +37,7 @@ agent 进程
 | 工具粒度 | 只做读取型（笔记 3.1），不做 click/type：查资料够用，模型不容易用错 |
 | 有无状态 | 无状态：每次调用一个新标签页。可以并行、可以重试，超时只需关标签；代价是同一页面要重复加载（实验 3.5） |
 | 浏览器生命周期 | 每个 agent 进程一个浏览器，第一次调用时启动、进程退出时关闭；不挂在某次调用的 ctx 上 |
-| 等待 | `Navigate` 等 load 事件，然后在页面里每 300ms 检查一次条件（搜索结果出现 / 正文不为空），最多 5 秒 |
+| 等待 | `Navigate` 等 load 事件，然后在页面里每 300ms 检查一次条件（搜索结果出现 / 给了 `find` 时正文里出现关键词，否则正文不为空），最多 5 秒 |
 | 返回内容 | `innerText`；优先取 `main`/`article`，正文不足 200 字才退回整页；结构体固定字段顺序，正文在前、链接在后 |
 | 错误分类 | 参数错误、内网地址、浏览器无法启动、验证码页：`llm.Permanent`；导航失败：可重试；超时/取消：结果未知 |
 | 可重复 | 两个工具都是只读的，列入 `repeatable`：结果未知时可以重试，续跑时可以重放 |
@@ -151,6 +151,8 @@ Action Input: {"url": "https://go.dev/doc/devel/release", "find": "go1.27."}
 ```
 
 第一次只看到目录，模型从“已截断”判断还有内容，第二次用 `find` 只取 go1.27 的段落，找到了 go1.27.1。
+
+10-21 补：单页应用常常先渲染标题和导航，列表稍后才由脚本填进来。一段自用对话里，模型对 Harbor Hub 的任务列表页用 `find=biped`，“正文不为空”的条件在标题出来时就满足了，读到的是灰色占位条，最终截图也停在占位条；没匹配上时 `text` 是空串、`matched_paragraphs` 被省略，模型分不清是没找到还是页面是空的。现在给了 `find` 就等到关键词出现再读（仍最多 5 秒），没找到时像 `ds_fetch` 一样返回 `note`（“等了 5 秒，渲染出的正文（N 字）里没有找到 …”）。DeepSeek 真实运行：同一页面 `find=biped` 命中 `terminal-bench/biped-contact-dynamics`；`example.com` 上 `find=kubernetes` 返回 note。没给 `find` 的调用仍按“正文不为空”判断，这类页面不给关键词还是可能读早。
 
 ### 3.4 内网地址被拒
 

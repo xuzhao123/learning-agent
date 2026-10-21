@@ -5,12 +5,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net/http"
 	"net/url"
@@ -38,8 +39,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-//go:embed index.html
-var page []byte
+// 页面在 web/：外壳 index.html、样式 app.css 和按功能拆开的原生 ES 模块（入口 main.js），不打包，打进同一个程序。
+//
+//go:embed web
+var webFS embed.FS
 
 const contextLabTitle = "Day 3 上下文实验（33轮对话 + 大工具输出）"
 const ragLabTitle = "Day 4 检索实验（10题无检索 / 有检索对比）"
@@ -171,9 +174,21 @@ func Run(args []string, mcpHandler http.Handler) error {
 	s.loadRuns()
 	mux := http.NewServeMux()
 	mux.Handle("GET /slides/", http.StripPrefix("/slides/", http.FileServer(http.Dir(filepath.Join(dir, "docs", "slides")))))
+	web, _ := fs.Sub(webFS, "web")
+	page, err := fs.ReadFile(web, "index.html")
+	if err != nil {
+		return err
+	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Write(page)
+	})
+	// 样式与模块：embed 的文件没有修改时间，浏览器拿不到 Last-Modified；no-cache 让它每次都来问，换了程序就拿到新文件。
+	files := http.StripPrefix("/ui/", http.FileServerFS(web))
+	mux.HandleFunc("GET /ui/", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, req)
 	})
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.loginPage)
@@ -456,19 +471,26 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 // default 是不选具体模型时 agent 实际会用的那个：.env 或环境变量里的 LLM_MODEL / DEEPSEEK_MODEL 覆盖路由表默认值，
 // agent 子进程继承观测台的环境、在同一目录读 .env，所以按同样的规则解析。
 // 每个模型带上能不能看图：页面据此禁用附图按钮，服务端收图时同样按这条规则判断。
+// 供应商的下拉（输入框与设置页）也从这里来：label 是显示名，error 是本机没配好的原因（缺密钥或地址），页面据此灰掉。
 func (s *server) listModels(w http.ResponseWriter, req *http.Request) {
 	type providerModels struct {
 		Name    string      `json:"name"`
+		Label   string      `json:"label"`
 		Default string      `json:"default"`
+		Error   string      `json:"error,omitempty"`
 		Models  []llm.Model `json:"models"`
 	}
 	out := []providerModels{}
 	for _, p := range llm.Providers {
-		def := p.Model
-		if config, _ := llm.LoadConfig(p.Name); config.Model != "" { // 没有密钥时仍会解析出模型
+		def, problem := p.Model, ""
+		config, err := llm.LoadConfig(p.Name)
+		if config.Model != "" { // 没有密钥时仍会解析出模型
 			def = config.Model
 		}
-		out = append(out, providerModels{Name: p.Name, Default: def, Models: p.Models})
+		if err != nil {
+			problem = err.Error()
+		}
+		out = append(out, providerModels{Name: p.Name, Label: p.Label, Default: def, Error: problem, Models: p.Models})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
@@ -1238,21 +1260,30 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	r.add(event{Kind: "request", Call: call, Body: raw(s.archiveImages(r.Tenant, body)), Purpose: purpose, Task: task, Sub: sub, Span: spanID})
 
 	start := time.Now()
-	// 模型路由在 agent 里：它在 X-Agent-Upstream 里声明这次请求的真实地址（方舟或 DeepSeek），代理照此转发。
-	// 只接受 https。浏览器里的网页设不了这个自定义头（跨域预检会被拒），能设它的只有本机进程，而本机进程本来就能直接访问外网。
+	// 模型路由在 agent 里：它在 X-Agent-Upstream 里声明这次请求的真实地址（方舟、DeepSeek 或 Coconut），代理照此转发。
+	// 只接受 https；明文 http 只给不带密钥的请求（本机的 Coconut 不要密钥），密钥不经明文发出。
+	// 浏览器里的网页设不了这个自定义头（跨域预检会被拒），能设它的只有本机进程，而本机进程本来就能直接访问外网。
+	key := req.Header.Get("Authorization")
 	target, err := url.Parse(req.Header.Get("X-Agent-Upstream"))
-	if err == nil && (target.Scheme != "https" || target.Host == "" || target.User != nil) {
-		err = errors.New("X-Agent-Upstream 需要是 https 地址")
+	if err == nil && ((target.Scheme != "https" && (target.Scheme != "http" || key != "")) || target.Host == "" || target.User != nil) {
+		err = errors.New("X-Agent-Upstream 需要是 https 地址（不带密钥的请求可以是 http）")
+	}
+	// 上游说 Responses 协议时，转发前把 chat 形式的请求体换过去；存档留的仍是 chat 形式，页面、续聊和归因不用分协议。
+	forward := body
+	if err == nil && req.Header.Get("X-Agent-Protocol") == "responses" {
+		forward, err = llm.ResponsesBody(body)
 	}
 	if err != nil {
 		r.add(event{Kind: "response", Call: call, Status: http.StatusBadRequest, Text: err.Error(), Purpose: purpose, Task: task, Sub: sub})
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	upstream, err := http.NewRequestWithContext(req.Context(), http.MethodPost, target.String(), bytes.NewReader(body))
+	upstream, err := http.NewRequestWithContext(req.Context(), http.MethodPost, target.String(), bytes.NewReader(forward))
 	if err == nil {
 		upstream.Header.Set("Content-Type", req.Header.Get("Content-Type"))
-		upstream.Header.Set("Authorization", req.Header.Get("Authorization"))
+		if key != "" {
+			upstream.Header.Set("Authorization", key)
+		}
 		var response *http.Response
 		if response, err = http.DefaultClient.Do(upstream); err == nil {
 			defer response.Body.Close()

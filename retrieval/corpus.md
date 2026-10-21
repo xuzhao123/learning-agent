@@ -73,7 +73,7 @@ Transcript 保存本次进程收到的原文，View 是真正发送给模型的�
 观测台续聊恢复最后一次有效请求的 View 加最后的 assistant 回答，并非重新加载全部原始记录。每个新提问重置模型请求预算；页面 Turn 编号在同一条对话中继续递增。
 
 ## D15 | history 与本轮输入
-来源：internal/observer/index.html
+来源：internal/observer/web/runs.js
 
 观测台 history 只展示这次实际发送的历史消息，system 单列，本轮提问在 user 中。新对话 Turn 1 没有历史。message 详情可查看完整请求，包括 system、历史和本轮输入。
 

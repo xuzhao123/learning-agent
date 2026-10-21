@@ -124,7 +124,7 @@ load_skill(visualization, references/echarts-web-pc-spec.md) → 观测台是电
 模型回答：一句数据口径 + ```echarts 块（option 对象）+ 结论
 ```
 
-两种输出块在观测台里渲染（[index.html](../../internal/observer/index.html) 的 `md(text, visual)`、`claimViz`）：
+两种输出块在观测台里渲染（[md.js](../../internal/observer/web/md.js) 的 `md(text, visual)`、`claimViz`）：
 
 | 代码块 | 观测台怎么显示 |
 | --- | --- |

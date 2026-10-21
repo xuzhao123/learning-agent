@@ -25,7 +25,7 @@
 | 项目指令与环境 | [context.go](../../internal/workspace/context.go) | `Open` 时读根目录项目指令；读、改、写文件后检查各级子目录有没有自己的项目指令，没进过上下文就排进提醒；`Reminders` 取走提醒，并检查读过的文件有没有被别人改过；`Environment` 用 git 取分支、HEAD 与改动数，并在 `BashMount` 非空时写出 bash 里的工作区路径 |
 | 组装 | [react.go](../../internal/agent/react.go) | 系统提示词加入项目指令；新对话在问题前放环境信息，续聊对比上一份、变了才追加；每次请求模型之前追加提醒 |
 | 排除提醒 | [memory.go](../../internal/memory/memory.go)、[context_manager.go](../../internal/agent/context_manager.go) | 记忆的“用户原话”和压缩时保留的原话都不含提醒 |
-| 观测台 | [index.html](../../internal/observer/index.html) | 原始消息里的提醒标为“harness 提醒” |
+| 观测台 | [util.js](../../internal/observer/web/util.js) | 原始消息里的提醒标为“harness 提醒” |
 
 “被改过”的提醒不更新读后才写的账本：模型要改那个文件，仍然得先重新读（D23 的核对照旧生效）。同一次改动只提醒一次。
 
