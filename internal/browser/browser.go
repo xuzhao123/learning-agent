@@ -257,6 +257,13 @@ func open(ctx context.Context, callID, address, find string) (any, error) {
 	}
 	fmt.Printf("Browser [%s]: open url=%s\n", callID, address)
 	protocol.Notify("browser/navigate", map[string]string{"call_id": callID, "action": "open", "url": address})
+	// 单页应用常常先渲染标题和导航，列表、表格稍后才由脚本填进来（期间是灰色占位条）。
+	// 给了 find 就等到正文里出现这个词再读，没给就等到正文非空；都最多等 5 秒。
+	ready := "p => p.text.trim().length > 0"
+	if find != "" {
+		word, _ := json.Marshal(strings.ToLower(find))
+		ready = "p => p.text.toLowerCase().includes(" + string(word) + ")"
+	}
 	// innerText 是渲染后用户看到的文字：脚本生成的内容在，隐藏元素和 <script> 不在。
 	// 正文和链接优先取 main/article 里的，跳过导航栏的“登录”“首页”之类（正文太短时退回整页）；链接按地址去重。
 	page, err := inTab[struct {
@@ -273,13 +280,17 @@ func open(ctx context.Context, callID, address, find string) (any, error) {
 			.filter(l => l.text && l.url.startsWith("http") && !seen.has(l.url) && seen.add(l.url));
 		const main = root !== document.body && root.innerText.trim().length > 200;
 		return {title: document.title, url: location.href, text: (main ? root : document.body).innerText, main, links};
-	})()`, "p => p.text.trim().length > 0"))
+	})()`, ready))
 	if err != nil {
 		return nil, err
 	}
-	text, matched := page.Text, 0
+	text, matched, note := page.Text, 0, ""
 	if find != "" {
 		text, matched = paragraphs(page.Text, find)
+		if matched == 0 {
+			// 和 ds_fetch 一样明说没找到：只给一个空 text，模型分不清是没匹配上还是页面本身是空的。
+			note = fmt.Sprintf("等了 5 秒，渲染出的正文（%d 字）里没有找到 %s", utf8.RuneCountInString(page.Text), find)
+		}
 	}
 	total := utf8.RuneCountInString(text)
 	if total > textLimit {
@@ -294,12 +305,13 @@ func open(ctx context.Context, callID, address, find string) (any, error) {
 		Title     string              `json:"title"`
 		Find      string              `json:"find,omitempty"`
 		Matched   int                 `json:"matched_paragraphs,omitempty"`
+		Note      string              `json:"note,omitempty"`
 		MainOnly  bool                `json:"main_only"`
 		TextChars int                 `json:"text_chars"`
 		Truncated bool                `json:"truncated"`
 		Text      string              `json:"text"`
 		Links     []map[string]string `json:"links"`
-	}{page.URL, page.Title, find, matched, page.Main, total, total > textLimit, text, page.Links}, nil
+	}{page.URL, page.Title, find, matched, note, page.Main, total, total > textLimit, text, page.Links}, nil
 }
 
 // 页面 load 事件之后，很多内容还要等脚本渲染（搜索结果、单页应用）。每 300ms 取一次，
