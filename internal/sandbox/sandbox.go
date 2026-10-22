@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -109,9 +111,28 @@ func Definitions() []map[string]any {
 		bash = "在隔离的 Linux 沙箱里用 bash 执行一条命令，返回退出码和输出。/workspace 是对话所选的工作区（和文件工具看到的是同一份代码）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）；"
 	}
 	bash += "每次调用是新的 shell（cd 和环境变量不保留），/tmp 每次都是空的。不能写其他位置，默认不能联网。" +
-		"单条命令最多 " + Timeout.String() + "，到时整条命令被终止，返回终止前的输出。"
+		"单条命令最多 " + Timeout.String() + "，到时整条命令被终止，返回终止前的输出。要跑得更久的（起服务、长时间构建、监视）设 background=true：立刻返回 job_id，用 bash_output 读输出，用 bash_kill 停掉。"
+	job := map[string]any{"type": "string", "description": "bash 带 background=true 时返回的 job_id"}
 	return []map[string]any{
-		{"name": "bash", "description": bash, "parameters": llm.Parameters("command")},
+		{"name": "bash", "description": bash, "parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command":    map[string]string{"type": "string"},
+				"background": map[string]string{"type": "boolean", "description": "true 时在后台运行、立刻返回 job_id，不等它结束；后台命令只活到这一轮结束，最多同时 4 个"},
+			},
+			"required": []string{"command"},
+		}},
+		{"name": "bash_output", "description": "读一个后台命令自上次读取以来的新输出，并告诉你它结束没有（结束时带退出码）。wait 是最多等几秒（命令结束就提前返回），不传就立刻返回。", "parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"job_id": job,
+				"wait":   map[string]string{"type": "integer", "description": "最多等几秒，0 到 20"},
+			},
+			"required": []string{"job_id"},
+		}},
+		{"name": "bash_kill", "description": "停掉一个后台命令（连同它起的进程），返回剩下的输出。", "parameters": map[string]any{
+			"type": "object", "properties": map[string]any{"job_id": job}, "required": []string{"job_id"},
+		}},
 		{"name": "request_network_access", "description": "请求用户允许沙箱访问一个域名（如 pypi.org）。由用户在界面上批准：用户当场批准时本轮接下来就能访问；没有界面或用户未答复时返回 pending。", "parameters": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -147,7 +168,7 @@ func Rules() string {
 		if !ProjectWrite {
 			access = "只读（plan 模式）"
 		}
-		rule = "\n可以用 bash 在 Linux 沙箱里执行命令：/workspace 就是对话所选的工作区（" + access + "，和文件工具看到的是同一份代码；.git 只读，.env 与 .data 看不到）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）。每次调用是新的 shell；只能写这两处和 /tmp（/tmp 每次调用都是空的，要留到下一次调用的放 /scratch）；" + limits + "有 Go 工具链，离线编译（模块缓存只读，GOPROXY=off）。用 bash 改过的文件，要用文件工具再改之前先重新 read_file。"
+		rule = "\n可以用 bash 在 Linux 沙箱里执行命令：/workspace 就是对话所选的工作区（" + access + "，和文件工具看到的是同一份代码；.git 只读，.env 与 .data 看不到）；/scratch 是本对话的临时目录（整个对话内保留，用户上传的文件在这里）。每次调用是新的 shell；只能写这两处和 /tmp（/tmp 每次调用都是空的，要留到下一次调用的放 /scratch）；" + limits + "有 Go 工具链，离线编译（模块缓存只读，GOPROXY=off）。改工作区的源码用 edit_file、write_file（有快照可以撤销，会跑编辑 hook），bash 用来构建、测试和查看；bash 改的文件没有快照，撤销时不会还原。"
 	}
 	if ProjectRO {
 		rule += "项目目录只读挂在 /project。"
@@ -193,9 +214,20 @@ func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 	if runtime.GOOS != "linux" {
 		return nil, llm.Permanent(errors.New("沙箱只支持 Linux（bubblewrap）"))
 	}
-	var args struct{ Command, Domain, Reason string }
+	var args struct {
+		Command, Domain, Reason string
+		Background              bool
+		JobID                   string `json:"job_id"`
+		Wait                    int
+	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return nil, llm.Permanent(errors.New("参数需要是字符串"))
+		return nil, llm.Permanent(errors.New("参数类型不对：command、domain、reason、job_id 是字符串，background 是布尔值，wait 是整数"))
+	}
+	switch name {
+	case "bash_output":
+		return jobOutput(args.JobID, args.Wait)
+	case "bash_kill":
+		return jobKill(args.JobID)
 	}
 	if name == "request_network_access" {
 		domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(args.Domain)), ".")
@@ -254,10 +286,23 @@ func Run(ctx context.Context, callID, name, arguments string) (any, error) {
 	if command == "" || len(command) > 16<<10 {
 		return nil, llm.Permanent(errors.New("command 需要是1到16KB的非空字符串"))
 	}
-	return execute(ctx, callID, command)
+	if args.Background {
+		return startJob(ctx, callID, command)
+	}
+	return execute(ctx, callID, command, ProjectWrite)
 }
 
-func execute(ctx context.Context, callID, command string) (_ any, err error) {
+// Check 在工作区只读挂载的沙箱里跑一条校验命令（D31 独立验证）：验证命令自己改不了被验证的代码。
+func Check(ctx context.Context, callID, command string) (map[string]any, error) {
+	result, err := execute(ctx, callID, command, false)
+	if err != nil {
+		return nil, err
+	}
+	return result.(map[string]any), nil
+}
+
+// writable 决定工作区（Project）挂成可写还是只读：普通 bash 跟着权限模式（ProjectWrite），校验命令一律只读。
+func execute(ctx context.Context, callID, command string, writable bool) (_ any, err error) {
 	// D13：一次沙箱执行一个 span，等锁的时间也算在内（同一进程的 bash 调用串行）。
 	ctx, span := telemetry.Begin(ctx, "sandbox.exec", trace.SpanKindInternal, attribute.Int("sandbox.command_bytes", len(command)))
 	telemetry.Content(span, "sandbox.command", command)
@@ -269,72 +314,20 @@ func execute(ctx context.Context, callID, command string) (_ any, err error) {
 	deniedMu.Lock()
 	denials = nil
 	deniedMu.Unlock()
-	workspace, err := filepath.Abs(Dir)
-	if err == nil {
-		err = os.MkdirAll(workspace, 0o755)
-	}
+	out := &capture{}
+	start := time.Now()
+	cmd, unit, err := launch(ctx, callID, command, out, writable)
 	if err != nil {
-		return nil, llm.Permanent(fmt.Errorf("无法创建工作目录：%w", err))
-	}
-	netDir, err := startProxy()
-	if err != nil {
-		return nil, llm.Permanent(fmt.Errorf("无法启动沙箱网络代理：%w", err))
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return nil, llm.Permanent(err)
-	}
-	// seccomp 程序通过文件描述符交给 bwrap（--seccomp 3）。
-	filter, err := os.CreateTemp("", "la-seccomp-")
-	if err != nil {
-		return nil, llm.Permanent(err)
-	}
-	defer os.Remove(filter.Name())
-	defer filter.Close()
-	if _, err := filter.Write(seccompProgram()); err != nil {
-		return nil, llm.Permanent(err)
-	}
-	filter.Seek(0, 0)
-
-	// 和 Claude Code 给 Bash 子进程设 TRACEPARENT 一样：沙箱里的程序愿意的话，可以把自己的 span 接到这次执行下面。
-	argv := bwrapArgs(workspace, netDir, self, command, telemetry.Env(ctx))
-	unit := ""
-	if cgroupOK() {
-		// 每次执行一个有名字的 scope（一个 cgroup）：超时时按 cgroup 整体杀掉。
-		// 不能只杀进程组：bwrap 的 --new-session 让沙箱里的进程进了新的会话，进程组信号打不到它们。
-		unit = fmt.Sprintf("la-sandbox-%d-%d", os.Getpid(), time.Now().UnixNano())
-		opts := []string{"--user", "--scope", "--quiet", "--collect", "--unit", unit}
-		if noExpandEnv() {
-			// 不让 systemd 替换命令行里的 ${...}：命令要原样交给沙箱里的 shell，否则模型写的 `${x}`、`${PIPESTATUS[0]}` 都变成空。
-			opts = append(opts, "--expand-environment=no")
-		}
-		opts = append(opts, "-p", "MemoryMax="+memoryMax, "-p", "MemorySwapMax=0", "-p", "TasksMax="+tasksMax, "-p", "CPUQuota="+cpuQuota, "--")
-		argv = append(append([]string{"systemd-run"}, opts...), argv...)
-	} else {
-		fmt.Println("Sandbox: cgroup 不可用（没有 systemd 用户会话），本次不限制内存、CPU 与进程数")
+		return nil, err
 	}
 	span.SetAttributes(attribute.Bool("sandbox.cgroup", unit != ""))
-	fmt.Printf("Bash [%s]: %s\n", callID, oneLine(command, 200))
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.ExtraFiles = []*os.File{filter}
-	out := &capture{}
-	cmd.Stdout, cmd.Stderr = out, out
-	// 自己的进程组：没有 cgroup 时退而求其次，杀掉整组（bwrap 带 --die-with-parent，沙箱里的进程随之结束）。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	start := time.Now()
-	if err := cmd.Start(); err != nil {
-		return nil, llm.Permanent(fmt.Errorf("无法启动沙箱（需要 bubblewrap）：%w", err))
-	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	killed := ""
 	select {
 	case err = <-done:
 	case <-ctx.Done():
-		if unit != "" {
-			exec.Command("systemctl", "--user", "kill", "--signal=SIGKILL", unit+".scope").Run()
-		}
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		kill(cmd, unit)
 		<-done
 		fmt.Printf("Bash [%s]: killed after=%s reason=%v\n", callID, time.Since(start).Round(time.Millisecond), ctx.Err())
 		// 整条命令连同它起的进程都已结束（cgroup 或进程组整体杀掉，并等到退出），后台不会还在跑，
@@ -364,15 +357,97 @@ func execute(ctx context.Context, callID, command string) (_ any, err error) {
 	deniedMu.Lock()
 	span.SetAttributes(attribute.Int("sandbox.network_denied", len(denials)))
 	if len(denials) > 0 {
-		result["network_denied"] = append([]string(nil), denials...)
-		result["network_hint"] = "这些主机不在白名单，访问被代理拒绝。确实需要时调用 request_network_access 请用户批准。"
+		var hosts, notes []string
+		approvable, fixed := false, false
+		for _, d := range denials {
+			if !slices.Contains(hosts, d.host) {
+				hosts = append(hosts, d.host)
+			}
+			notes = append(notes, d.host+"："+d.reason)
+			approvable, fixed = approvable || d.approvable, fixed || !d.approvable
+		}
+		hint := "访问被代理拒绝（" + strings.Join(notes, "；") + "）。"
+		if approvable {
+			hint += "不在白名单的主机，确实需要时调用 request_network_access 请用户批准。"
+		}
+		if fixed {
+			hint += "端口不对、解析到内网或解析失败的，用户批准了也打不开，不要为它们申请联网。"
+		}
+		result["network_denied"], result["network_hint"] = hosts, hint
 	}
 	deniedMu.Unlock()
 	fmt.Printf("Bash [%s]: exit=%d bytes=%d duration=%s\n", callID, cmd.ProcessState.ExitCode(), total, time.Since(start).Round(time.Millisecond))
 	return result, nil
 }
 
-func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
+// launch 建好一次沙箱执行并启动它：bwrap + seccomp，有 systemd 用户会话时放进一个有名字的 scope（cgroup），
+// 输出写到 out。返回进程和 scope 名（没有 cgroup 时为空）；前台命令等它结束，后台命令交给 jobs.go 管。
+func launch(ctx context.Context, callID, command string, out io.Writer, writable bool) (*exec.Cmd, string, error) {
+	workspace, err := filepath.Abs(Dir)
+	if err == nil {
+		err = os.MkdirAll(workspace, 0o755)
+	}
+	if err != nil {
+		return nil, "", llm.Permanent(fmt.Errorf("无法创建工作目录：%w", err))
+	}
+	netDir, err := startProxy()
+	if err != nil {
+		return nil, "", llm.Permanent(fmt.Errorf("无法启动沙箱网络代理：%w", err))
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, "", llm.Permanent(err)
+	}
+	// seccomp 程序通过文件描述符交给 bwrap（--seccomp 3）。
+	filter, err := os.CreateTemp("", "la-seccomp-")
+	if err != nil {
+		return nil, "", llm.Permanent(err)
+	}
+	defer os.Remove(filter.Name())
+	defer filter.Close()
+	if _, err := filter.Write(seccompProgram()); err != nil {
+		return nil, "", llm.Permanent(err)
+	}
+	filter.Seek(0, 0)
+
+	// 和 Claude Code 给 Bash 子进程设 TRACEPARENT 一样：沙箱里的程序愿意的话，可以把自己的 span 接到这次执行下面。
+	argv := bwrapArgs(workspace, netDir, self, command, telemetry.Env(ctx), writable)
+	unit := ""
+	if cgroupOK() {
+		// 每次执行一个有名字的 scope（一个 cgroup）：超时时按 cgroup 整体杀掉。
+		// 不能只杀进程组：bwrap 的 --new-session 让沙箱里的进程进了新的会话，进程组信号打不到它们。
+		unit = fmt.Sprintf("la-sandbox-%d-%d", os.Getpid(), time.Now().UnixNano())
+		opts := []string{"--user", "--scope", "--quiet", "--collect", "--unit", unit}
+		if noExpandEnv() {
+			// 不让 systemd 替换命令行里的 ${...}：命令要原样交给沙箱里的 shell，否则模型写的 `${x}`、`${PIPESTATUS[0]}` 都变成空。
+			opts = append(opts, "--expand-environment=no")
+		}
+		opts = append(opts, "-p", "MemoryMax="+memoryMax, "-p", "MemorySwapMax=0", "-p", "TasksMax="+tasksMax, "-p", "CPUQuota="+cpuQuota, "--")
+		argv = append(append([]string{"systemd-run"}, opts...), argv...)
+	} else {
+		fmt.Println("Sandbox: cgroup 不可用（没有 systemd 用户会话），本次不限制内存、CPU 与进程数")
+	}
+	fmt.Printf("Bash [%s]: %s\n", callID, oneLine(command, 200))
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.ExtraFiles = []*os.File{filter}
+	cmd.Stdout, cmd.Stderr = out, out
+	// 自己的进程组：没有 cgroup 时退而求其次，杀掉整组（bwrap 带 --die-with-parent，沙箱里的进程随之结束）。
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return nil, "", llm.Permanent(fmt.Errorf("无法启动沙箱（需要 bubblewrap）：%w", err))
+	}
+	return cmd, unit, nil
+}
+
+// kill 把一次执行整个结束：有 cgroup 时按 cgroup 杀（bwrap 的 --new-session 让沙箱里的进程离开了进程组），再杀进程组。
+func kill(cmd *exec.Cmd, unit string) {
+	if unit != "" {
+		exec.Command("systemctl", "--user", "kill", "--signal=SIGKILL", unit+".scope").Run()
+	}
+	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}
+
+func bwrapArgs(workspace, netDir, self, command string, env []string, writable bool) []string {
 	args := []string{"bwrap",
 		// 新的用户、PID、网络、IPC、UTS、cgroup namespace；禁止沙箱里再建 user namespace；去掉全部特权。
 		"--unshare-all", "--unshare-user", "--disable-userns", "--cap-drop", "ALL",
@@ -405,7 +480,7 @@ func bwrapArgs(workspace, netDir, self, command string, env []string) []string {
 	var extraEnv []string
 	if Project != "" {
 		mode := "--ro-bind"
-		if ProjectWrite {
+		if writable {
 			mode = "--bind"
 		}
 		args = append(args, mode, Project, "/workspace")
@@ -479,8 +554,9 @@ func minimalEtc() string {
 	return etcDir
 }
 
-// Close 关闭代理并删掉临时目录；main 退出前调用。
+// Close 终止还在跑的后台命令，关闭代理并删掉临时目录；main 退出前调用。
 func Close() {
+	stopJobs()
 	if proxyDir != "" {
 		os.RemoveAll(proxyDir)
 	}

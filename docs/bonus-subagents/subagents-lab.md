@@ -171,7 +171,8 @@ go run . observe   # 新对话勾选“子 agent”
 
 ## 4. 已知边界
 
-- 父进程被 kill -9 后，子进程靠 SIGPIPE 间接退出，而不是被主动清理；在不打印的阶段（如等待模型响应），子进程会一直运行到下一次输出。Linux 可用 `Pdeathsig` 让内核在父进程死亡时发信号，macOS 没有对应机制，本项目没有使用。
+- 父进程被 kill -9 后：10-21 起 Linux 上用 `Pdeathsig` 让内核给子进程发 SIGINT，子进程照常收尾（回填结果、写检查点、释放锁）。这个信号跟的是创建子进程的线程，所以 `RunChild` 从 `Start` 到 `Wait` 锁住当前线程。实测：子 agent 在跑 60 秒的 `slow_job` 时 kill -9 父进程，子进程随即停下，检查点是 `stopped（cancelled）`。macOS 没有对应机制，子进程仍靠 SIGPIPE 间接退出。
+- 续跑与续聊时，把这条对话已经派出的子任务（task_id、状态、任务摘要）作为提醒放在第一次请求模型之前，引导模型按 task_id 续跑或取回结果（Q15 的改进第 2 条）。
 - 子 agent 数量上限按进程内计数，续跑后重新计数。
 - 子 agent 的请求不经过父 agent 的预算；整次运行的最大请求数约为 父 `-max-steps` + 4 × `-subagent-steps`。
 - 观测台按任务ID区分父子请求；同一次对话里父 agent 的 Turn/Step 编号不含子 agent 的请求，但全局请求编号 #N 是共用的，所以父对话的编号会跳号。

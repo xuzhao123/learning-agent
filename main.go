@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,10 +17,12 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"learning-agent/internal/agent"
 	"learning-agent/internal/audit"
 	"learning-agent/internal/browser"
+	"learning-agent/internal/chat"
 	"learning-agent/internal/commands"
 	"learning-agent/internal/eval"
 	"learning-agent/internal/hooks"
@@ -55,6 +58,10 @@ func main() {
 		os.Exit(sandbox.Init(os.Args[2:]))
 	}
 	service := "agent"
+	// D34：终端客户端，每一轮启动一个 -app-server 的 agent 子进程，经协议交互。
+	if len(os.Args) > 1 && os.Args[1] == "chat" {
+		run, service = func() error { return chat.Run(os.Args[2:]) }, "chat"
+	}
 	if len(os.Args) > 1 && os.Args[1] == "queue" {
 		run, service = func() error { return queue.Run(os.Args[2:]) }, "queue"
 	}
@@ -96,8 +103,13 @@ func main() {
 	shutdown := telemetry.Start(service)
 	err := run()
 	shutdown()
+	status := "exit 0"
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
+		status = "exit status 1"
+	}
+	protocol.Finish(status)
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -113,7 +125,15 @@ func run() error {
 	maxSteps := flag.Int("max-steps", 10, "模型请求总次数，包含最终回答和上下文摘要；0 表示不限（靠熔断与停止收住）")
 	retries := flag.Int("retries", 2, "工具失败后额外重试次数，0 到 5")
 	flag.BoolVar(&tools.LabEnabled, "lab-tools", false, "启用 Day 2 故障实验工具")
-	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）、deepseek 或 coconut（本机 Responses 服务）；地址、模型与密钥见 README")
+	provider := flag.String("provider", "ark", "模型路由：ark（豆包，方舟）、deepseek、deepseekanthropic（DeepSeek 的 Anthropic 接口）或 coconut（本机 Responses 服务）；地址、模型与密钥见 README")
+	check := flag.String("check", "", "D36：不请求模型，只在沙箱里跑这条校验命令（工作区只读挂载，同 verify_feature），输出 JSON 的退出码与输出后退出；须配合 -workspace 与 -bash")
+	// D37 消融的开关：默认值就是现在的做法。
+	flag.StringVar(&llm.ToolFormat, "tool-format", "json", "D37 消融：工具结果发给模型的格式，json（默认）或 text（只在发请求时换成纯文本，多行原样）")
+	flag.StringVar(&workspace.PromptVariant, "coding-prompt", "default", "D37 消融：编码提示词，minimal（只说工作区）、default、extended（加并行读取、只用编辑工具改、该问就问、没验证不下结论）")
+	flag.BoolVar(&agent.Todo, "todo", false, "D37 消融：提供上下文内的 todo_write 清单工具（默认不提供，见 D27）")
+	flag.BoolVar(&agent.ClearOldResults, "clear-old-results", false, "D37 消融：续聊时把之前各轮的工具结果换成占位（R2、O13）")
+	flag.BoolVar(&agent.AskUser, "ask-user", false, "D34：提供 ask_user 工具，模型可以在运行中向用户提问（经协议的 user/requestInput）；只在界面上有人能当场回答时打开（终端客户端、观测台）")
+	verifier := flag.String("verifier", "", "D31：判定功能是否完成的验证者用哪家供应商；默认和主模型不同的一家（主模型是 DeepSeek 时用 ark，否则 deepseek）")
 	model := flag.String("model", "", "这家供应商下的具体模型，优先于 LLM_MODEL / DEEPSEEK_MODEL 与默认值；作为启动参数写进检查点，续跑、回放与子 agent 沿用")
 	effort := flag.String("reasoning-effort", "high", "所有请求统一的推理强度：minimal、low、medium或high")
 	window := flag.Int("context-window", 12288, "上下文总窗口（学习实验值），输入容量扣除输出预算预留与推理余量")
@@ -206,16 +226,15 @@ func run() error {
 	// B0：-app-server 时 stdout 归协议所有，在任何打印之前分流。
 	var history *agent.HistoryInput
 	var turnImages []imageRef // turn/start 带进来的附件引用，与 -image 一样在本轮用户消息里
+	var turnNotes []string    // turn/start 带进来的提醒（D34）
 	starts := make(chan protocol.Message, 1)
 	interrupted := make(chan struct{})
 	var interruptOnce sync.Once
 	interrupt := func() { interruptOnce.Do(func() { close(interrupted) }) }
 	if *appServer {
-		out := os.Stdout
-		os.Stdout = os.Stderr
 		// 界面先退出时写协议会失败；忽略 SIGPIPE，让进程照常走第一段收尾，而不是被信号直接杀掉。
 		signal.Ignore(syscall.SIGPIPE)
-		protocol.Client = protocol.NewConn(os.Stdin, out, func(m protocol.Message) {
+		handle := func(m protocol.Message) {
 			switch m.Method {
 			case "turn/start":
 				select {
@@ -226,13 +245,39 @@ func run() error {
 			case "turn/interrupt":
 				interrupt()
 				protocol.Client.Reply(*m.ID, nil, nil)
+			case "turn/steer": // D34：运行中插话，排进下一次模型请求；这一轮已经结束时如实拒绝，界面改作下一轮的问题
+				var p struct{ Text string }
+				json.Unmarshal(m.Params, &p)
+				switch {
+				case strings.TrimSpace(p.Text) == "":
+					protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32602, Message: "turn/steer 需要非空的 text"})
+				case agent.Steer(strings.TrimSpace(p.Text)):
+					protocol.Client.Reply(*m.ID, nil, nil)
+				default:
+					protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32000, Message: "这一轮已经结束"})
+				}
 			default:
 				if m.IsRequest() {
 					protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32601, Message: "未知方法 " + m.Method})
 				}
 			}
-		})
-		// 界面断开等同于中断：收尾、写好检查点再退出。
+		}
+		// 观测台启动的 agent 在它给的 Unix socket 上等界面连进来（见 protocol/session.go）：观测台重启后可以重新接管。
+		// 读完就删掉这个环境变量，子 agent 继承环境时不会去抢同一个 socket。
+		if path := os.Getenv("AGENT_APP_SOCKET"); path != "" {
+			os.Unsetenv("AGENT_APP_SOCKET")
+			conn, err := protocol.Listen(path, os.Getenv("AGENT_PROXY_TOKEN"), handle)
+			if err != nil {
+				return fmt.Errorf("app-server socket：%w", err)
+			}
+			protocol.Client = conn
+			protocol.CaptureLogs()
+		} else {
+			out := os.Stdout
+			os.Stdout = os.Stderr
+			protocol.Client = protocol.NewConn(os.Stdin, out, handle)
+		}
+		// 界面断开等同于中断：收尾、写好检查点再退出。可以脱离的连接要脱离超过 DetachGrace 才算断开。
 		go func() { <-protocol.Client.Closed(); interrupt() }()
 		if *question == "" && agent.Resume == nil && !*contextLab && !*ragLab {
 			var m protocol.Message
@@ -247,12 +292,15 @@ func run() error {
 				History   *agent.HistoryInput `json:"history"`
 				Continues string              `json:"continues"`
 				Images    []imageRef          `json:"images"`
+				Compact   bool                `json:"compact"` // D34：/compact，第一次请求前先压缩
+				Notes     []string            `json:"notes"`   // D34：界面要告诉模型的情况（如只退了对话、文件没退），以提醒追加在问题后面
 			}
 			if err := json.Unmarshal(m.Params, &params); err != nil || strings.TrimSpace(params.Question) == "" {
 				protocol.Client.Reply(*m.ID, nil, &protocol.Error{Code: -32602, Message: "turn/start 需要非空的 question"})
 				return errors.New("turn/start 参数无效")
 			}
 			*question, history, agent.Continues, turnImages = params.Question, params.History, params.Continues, params.Images
+			agent.CompactFirst, turnNotes = params.Compact, params.Notes
 			protocol.Client.Reply(*m.ID, nil, nil)
 		}
 	}
@@ -540,6 +588,40 @@ func run() error {
 		sandbox.Timeout = agent.ToolTimeout
 		llm.Tools = append(llm.Tools, sandbox.Definitions()...)
 	}
+	// D36：评测的校验命令。和 verify_feature 一样在工作区只读的沙箱里跑：被测的代码是模型改过的，不在宿主机上直接执行。
+	// 沙箱目录（/scratch）默认每次新建；评测用 AGENT_CHECK_DIR 指定，先把这道题的检查脚本放进去，用完删掉。
+	// 结果是 stdout 的最后一行（之前的日志也在 stdout）。
+	if *check != "" {
+		if workspace.Dir == "" || !sandbox.Enabled {
+			return errors.New("check 须配合 -workspace 与 -bash")
+		}
+		sandbox.Dir = cmp.Or(os.Getenv("AGENT_CHECK_DIR"), tenant.Here("sandbox", "check-"+agent.NewCheckpointID()))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		result, err := sandbox.Check(ctx, "check", *check)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
+	// D31：有工作区又开了 bash 时提供长任务接力：进度文件与独立验证（校验命令在工作区只读的沙箱里跑）。
+	if workspace.Dir != "" && sandbox.Enabled {
+		llm.Tools = append(llm.Tools, agent.ProgressDefinitions...)
+		workspace.Protected[".agent/progress.json"] = "进度文件只能用 progress、verify_feature 改：一项是否通过由独立验证决定"
+		agent.VerifierProvider = cmp.Or(*verifier, agent.DefaultVerifier(*provider))
+	}
+	if agent.AskUser {
+		llm.Tools = append(llm.Tools, agent.AskDefinitions...)
+	}
+	if agent.Todo {
+		llm.Tools = append(llm.Tools, agent.TodoDefinitions...)
+	}
+	if llm.ToolFormat != "json" && llm.ToolFormat != "text" {
+		return errors.New("tool-format 取 json 或 text")
+	}
+	if !slices.Contains([]string{"minimal", "default", "extended"}, workspace.PromptVariant) {
+		return errors.New("coding-prompt 取 minimal、default 或 extended")
+	}
 	if *hooksConfig != "" {
 		if err := hooks.Load(*hooksConfig); err != nil {
 			return err
@@ -608,7 +690,7 @@ func run() error {
 		// 子 agent 继承工具开关和运行参数；不继承长期记忆（子 agent 的“用户”是父 agent，不是真人）、
 		// 不继承 -subagents（只允许一层）、不继承续聊与整次时限（由父进程的 ctx 管）。
 		share := map[string]bool{"parallel": true, "retries": true, "lab-tools": true, "reasoning-effort": true, "context-window": true, "max-output-tokens": true,
-			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "ds-search": true, "disallowed-tools": true, "provider": true, "model": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
+			"reasoning-reserve": true, "tool-output-tokens": true, "keep-groups": true, "rag": true, "embedding": true, "min-score": true, "skills": true, "tool-timeout": true, "browser": true, "ds-search": true, "disallowed-tools": true, "provider": true, "model": true, "verifier": true, "bash": true, "bash-project-ro": true, "workspace": true, "permission-mode": true, "hooks": true}
 		agent.SubagentArgs = []string{}
 		flag.Visit(func(f *flag.Flag) {
 			if share[f.Name] {
@@ -630,7 +712,7 @@ func run() error {
 				agent.SubagentArgs = append(agent.SubagentArgs, flagName, text)
 			}
 		}
-		llm.Tools = append(llm.Tools, agent.SpawnDefinition)
+		llm.Tools = append(append(llm.Tools, agent.SpawnDefinition), agent.ControlDefinitions...)
 	}
 	// D9：每次普通运行都写检查点，并在整个运行期间持有它的锁，同一任务不会被两个进程同时执行。
 	// 通信方式不存进检查点：之后在命令行续跑时，不该变成协议模式。
@@ -728,6 +810,7 @@ func run() error {
 			*question = prompt
 		}
 	}
+	agent.OpenJournal() // D40：只追加的会话记录，从 turn/started 起写
 	turnStarted(agent.CheckpointID)
 	// 图片输入：本轮的附图。续跑沿用检查点里的消息，不再从文件重读；处理不了的图换成文字占位，不让这一轮失败。
 	// 续聊时编号接着历史里已有的图往后数。
@@ -739,6 +822,7 @@ func run() error {
 			start = llm.LastImageNumber(history.Messages)
 		}
 		images, notes = attachImages(imagePaths, turnImages, start)
+		notes = append(notes, turnNotes...)
 	}
 	return agent.Run(ctx, config, *question, images, notes, *parallel, *maxSteps, *retries, options, history)
 }

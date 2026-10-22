@@ -176,6 +176,10 @@ func report(r *Runner, baselineID string) error {
 		}
 		fmt.Printf("  %s %-18s %-8s %d/%d  %s\n", mark, c.ID, c.Group, c.Passed, c.Trials, clip(c.Question, 50))
 	}
+	if cd := s.Coding; cd != nil {
+		fmt.Printf("\n编码题：%d 个试次，模型自称完成 %d 次，校验全部通过 %d 次；自称完成但校验没过（误报）%d 次，没正常结束但校验通过 %d 次\n",
+			cd.Trials, cd.Claimed, cd.Verified, cd.FalseClaims, cd.SilentSuccess)
+	}
 	if len(s.Ablation) > 0 {
 		fmt.Println("\n消融（不计只有实验组可能通过的检查）：")
 		for _, d := range s.Ablation {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -51,8 +52,11 @@ type Context struct {
 	tailStart, summaryAt   int
 	stepsSinceCompact      int
 	forceFull              bool
+	forceCompact           bool // D34：下一次请求前先压缩，不管用量（/compact）
 	// D30：已经提醒过模型的用量档位（50、75）；压缩后用量回落，清零重新计。
 	announced int
+	// D24/O7：上一次告诉模型的环境（按字段）；压缩后清空，下一轮重发整份。随检查点的 State 跨进程。
+	env map[string]string
 }
 
 func NewContext(system func() string, options ContextOptions, withTools bool) *Context {
@@ -86,6 +90,13 @@ func restoreContext(history HistoryInput, options ContextOptions) (*Context, err
 	if _, err := llm.Groups(messages); err != nil {
 		return nil, fmt.Errorf("续聊历史无效：%w", err)
 	}
+	if ClearOldResults {
+		var cleared int
+		if messages, cleared = clearOldResults(messages); cleared > 0 {
+			history.Usage = nil // 服务端用量是清理前的，按估算重新计
+			fmt.Printf("Clear old results: cleared=%d\n", cleared)
+		}
+	}
 	if last := messages[len(messages)-1]; last.Role == "assistant" && strings.TrimSpace(last.Content) == "" {
 		return nil, errors.New("续聊历史的最后一条 assistant 回答为空")
 	}
@@ -93,9 +104,40 @@ func restoreContext(history HistoryInput, options ContextOptions) (*Context, err
 	return rebuildContext(history, options), nil
 }
 
+// D37 消融（R2、O13）：续聊时把之前各轮的工具结果换成占位，只留工具名、原长度和存档名（还能用 read_output 读）。
+// 每轮开头清一次：这一轮的请求前缀从被清理处起不再命中缓存，之后整轮都稳定（“一轮只破一次缓存”）。
+// 已经清过的保持原样，所以上一轮清过的部分在下一轮仍是同一个前缀。短结果（不到 400 字）不清。
+var ClearOldResults bool
+
+func clearOldResults(messages []llm.Message) ([]llm.Message, int) {
+	names := map[string]string{}
+	out, cleared := slices.Clone(messages), 0
+	for i, m := range out {
+		for _, call := range m.ToolCalls {
+			names[call.ID] = call.Function.Name
+		}
+		if m.Role != "tool" || utf8.RuneCountInString(m.Content) < 400 || strings.Contains(m.Content, `"cleared":true`) {
+			continue
+		}
+		result := map[string]any{"cleared": true, "original_chars": utf8.RuneCountInString(m.Content)}
+		if saved := savedName.FindStringSubmatch(m.Content); saved != nil {
+			result["saved_output"] = saved[1]
+		}
+		data, _ := json.Marshal(llm.Observation{ID: m.ToolCallID, Tool: names[m.ToolCallID], Status: "ok", Result: result,
+			Note: "之前一轮的工具结果已清理；需要时重新读取（文件用 read_file，存过档的输出用 read_output）"})
+		out[i].Content, out[i].Images = string(data), nil
+		cleared++
+	}
+	return out, cleared
+}
+
 // 续聊与 D9 续跑共用：按已校验的消息组重建 View，摘要消息单独标记。
 func rebuildContext(history HistoryInput, options ContextOptions) *Context {
-	c := NewContext(func() string { return history.Messages[0].Content }, options, true)
+	system := func() string { return history.Messages[0].Content }
+	if history.Messages[0].Content == "" {
+		system = SystemPrompt // D39 分叉：父对话的系统提示词说的是父的工具，子 agent 换成自己的
+	}
+	c := NewContext(system, options, true)
 	for _, m := range history.Messages[1:] {
 		if m.Role == "user" && strings.HasPrefix(m.Content, llm.SummaryPrefix) {
 			// 摘要不是用户原话，不能混入下次keepUsers的保留区。
@@ -187,13 +229,23 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 	before, source := c.used()
 	cap := c.options.Capacity()
 	action := "none"
-	if before >= cap*9/10 {
+	force := c.forceCompact && before < cap*9/10 // 手动压缩：只清理旧工具结果不算数，要做摘要；做不成也不让这一轮失败
+	c.forceCompact = false
+	if before >= cap*9/10 || force {
 		action = "compact"
 	}
 	fmt.Printf("Context: used=%d(%s) cap=%d trigger=%d %s action=%s\n", before, source, cap, cap*9/10, c.parts(), action)
 	if action == "none" {
 		c.remindUsage(before, cap)
 		return nil
+	}
+	if force {
+		defer func() {
+			if err != nil {
+				fmt.Printf("Compact skipped: %v\n", err)
+				err = nil
+			}
+		}()
 	}
 	// D13：压缩单独一个 span；摘要请求（purpose=compact 的 chat span）挂在它下面。
 	ctx, span := telemetry.Begin(ctx, "compact_context", trace.SpanKindInternal, attribute.Int("agent.context.before", before), attribute.Int("agent.context.capacity", cap))
@@ -254,7 +306,7 @@ func (c *Context) Prepare(ctx context.Context, client *llm.Client) (err error) {
 			cleared++
 		}
 	}
-	if cleared > 0 && llm.ContextTokens(clean, c.withTools) <= limit*4/10 {
+	if cleared > 0 && !force && llm.ContextTokens(clean, c.withTools) <= limit*4/10 {
 		clean[0] = llm.Message{Role: "system", Content: c.system()}
 		if llm.ContextTokens(clean, c.withTools) <= limit*4/10 {
 			c.View = clean
@@ -343,7 +395,7 @@ func (c *Context) finishCompact(before, cleared, summarized, kept, retries int) 
 	c.stepsSinceCompact = 0
 	c.CompactCount++
 	// D30：告诉模型刚压缩过。不说的话，它以为之前读过的内容还在，找不到时只能猜；说了它才知道该重读，而且有 read_output 可用。
-	c.announced = 0
+	c.announced, c.env = 0, nil
 	c.Append(llm.Reminder("[上下文已压缩] 较早的工具结果或对话已经清理或换成摘要，原文不在上下文里了。需要其中的细节时重新读取；工具结果里有 saved_output 的，用 read_output 读。"))
 	// 摘要会把子目录项目指令的提醒并进去，原文不在视图里了；按新视图重新标记，之后用到那个目录时再发一次原文。
 	workspace.Prime(c.reminders())

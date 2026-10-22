@@ -36,6 +36,10 @@ type Trial struct {
 	Checks  []Check   `json:"checks"`
 	Score   float64   `json:"score"` // 通过的检查占比
 	Pass    bool      `json:"pass"`  // 全部检查通过
+	// D36 编码题：自称完成（这一轮正常结束）、校验命令的结果、改动的 diff 文件
+	Claimed  bool            `json:"claimed,omitempty"`
+	Commands []CommandResult `json:"commands,omitempty"`
+	Diff     string          `json:"diff,omitempty"`
 }
 
 // ToolUse 来自 B0 事件流里的 toolCall Item：和检查点不同，它不受上下文压缩影响，是完整的过程记录。
@@ -169,6 +173,13 @@ func gradeRule(g Grader, t *Trial) (bool, string) {
 		want := math.Floor(midnight.Sub(at).Minutes())
 		tol := max(g.Tol, 1)
 		return near(numbers(answer), want, tol), fmt.Sprintf("期望约 %.0f 分钟（%s 起算）", want, at.Format("15:04:05"))
+	case "command":
+		for _, r := range t.Commands {
+			if r.Run == g.Run {
+				return r.ExitCode == 0, fmt.Sprintf("退出码 %d：%s", r.ExitCode, tail(strings.TrimSpace(r.Output), 600))
+			}
+		}
+		return false, "没有运行（工作区没准备好或这一轮中断了）"
 	case "tool_used":
 		count := 0
 		for _, u := range t.Tools {

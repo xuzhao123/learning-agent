@@ -234,6 +234,46 @@ func (s *server) uploadFile(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"path": name, "size": len(data)})
 }
 
+// 删除：和上传一样只在这一轮结束后、只经 os.Root（路径穿越和指向沙箱外的链接都出不去；删链接只删链接本身），
+// 目录连同内容一起删。先写审计 user_delete，写不进去就不删。
+func (s *server) deleteFile(w http.ResponseWriter, req *http.Request) {
+	r, root := s.sandboxOf(w, req, false)
+	if r == nil {
+		return
+	}
+	if root == nil {
+		http.NotFound(w, req)
+		return
+	}
+	defer root.Close()
+	r.mu.Lock()
+	running, task := r.proc != nil, r.sandboxID()
+	r.mu.Unlock()
+	if running {
+		http.Error(w, "对话正在运行，等这一轮结束再删除", http.StatusConflict)
+		return
+	}
+	name := req.PathValue("path")
+	if name == "" || !fs.ValidPath(name) {
+		http.NotFound(w, req)
+		return
+	}
+	if _, err := root.Lstat(name); err != nil {
+		http.Error(w, "找不到这个文件（不存在，或路径经过指向沙箱外的链接）", http.StatusNotFound)
+		return
+	}
+	record := audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_delete", Task: task, Conversation: r.ID, Target: name, Detail: "观测台页面"}
+	if err := audit.Write(req.Context(), record); err != nil {
+		http.Error(w, "审计日志写入失败，没有删除："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := root.RemoveAll(name); err != nil {
+		http.Error(w, "删除失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write([]byte("ok"))
+}
+
 func validUploadName(name string) bool {
 	if name == "" || len(name) > 128 || !utf8.ValidString(name) || strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\`) {
 		return false

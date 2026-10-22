@@ -151,7 +151,7 @@ export async function openSettings() {
   line("默认模型", select("provider", providers.length ? providers : [[values.provider, values.provider]]), "provider");
   line("默认工作区", select("workspace", [["", "无工作区"], ...e.workspaces.map((w) => [w.name, w.name])]), "workspace");
   num("max_steps", "模型请求预算", "每轮最多多少次模型请求；0 表示不限，靠重复动作与无进展熔断、停止按钮收住");
-  num("context_window", "上下文窗口", "token，工具全开时每次请求要带全部工具定义，窗口小会很快压缩");
+  num("context_window", "上下文窗口", "token；0 表示按模型（取路由表里核对过的输入上限，不知道时 262144）。工具全开时每次请求要带全部工具定义，窗口小会很快压缩");
   num("tool_output", "工具输出上限", "单个工具结果写进上下文的 token 上限");
   line("默认权限模式", select("permission_mode", [["plan", "只读计划：不能改文件，bash 里工作区只读"], ["ask", "改动都问：改文件、跑 bash、调 MCP 前确认"], ["edit", "自动编辑：工作区内编辑与沙箱 bash 直接做"], ["full", "全权：不再询问（含高风险确认），deny、ask 规则照常"]]), "permission_mode");
   const rules = el("textarea"); rules.rows = 4; rules.style.width = "100%"; rules.value = values.permission_rules;

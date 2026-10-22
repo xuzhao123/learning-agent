@@ -20,15 +20,20 @@
 | --- | --- | --- | --- |
 | 界面 → agent | `turn/start` | 请求 | `question`、`history`（续聊上下文）、`continues`（上一轮的检查点ID） |
 | 界面 → agent | `turn/interrupt` | 请求 | 开始第一段停止 |
+| 界面 → agent | `turn/steer`（D34） | 请求 | `text`：运行中插话，排进下一次模型请求；这一轮已经结束时返回错误，界面改作下一轮的问题 |
 | agent → 界面 | `turn/started` | 通知 | `turn_id`（检查点ID）、`thread_id`、`continues`、`resume`、`trace_id`、`input_capacity`、模型与 `pid` |
 | agent → 界面 | `item/started`、`item/completed` | 通知 | Item：`userMessage`、`modelCall`（用途、序号、用量）、`toolCall`（参数，完成时带 Observation）、`compaction`（前后估算量） |
-| agent → 界面 | `turn/completed` | 通知 | 结局、答案或错误首行、模型请求数、用量 |
+| agent → 界面 | `turn/completed` | 通知 | 结局、答案或错误首行、模型请求数、用量；D31 起有 `final_check`；D34 起没赶上这一轮的插话放在 `queued` |
 | agent → 界面 | `memory/event`、`capability/event` | 通知 | 记忆读写、skill 与 MCP 连接：`kind` 与给人看的 `text` |
 | agent → 界面 | `browser/navigate` | 通知 | 调用ID与地址，页面据此找画面 |
 | agent → 界面 | `subagent/started`、`subagent/completed`、`subagent/log`、`subagent/message` | 通知 | 子任务ID、结局；子 agent 的日志行；子 agent 自己的通知（原样包一层） |
 | agent → 界面 | `lab/case`、`lab/phase` | 通知 | Day 3/4 实验的分组与阶段 |
 | agent → 界面 | `network/requestApproval` | 请求 | `domain`、`reason`、`call_id`（子 agent 发起时另有 `task_id`）；回复 `{"decision":"allow" \| "deny" \| "unavailable"}` |
 | agent → 界面 | `tool/requestApproval`（D20） | 请求 | `call_id`、`tool`、`arguments`、`risk`、`reason`；外发类另有 `scope`（可以整段对话放行的范围）；回复 `allow`、`deny`、`unavailable`，带 `scope` 的还可以回 `allow_session`（10-19 补） |
+| agent → 界面 | `user/requestInput`（D34） | 请求 | `ask_user` 的提问：`call_id`、`question`、`options`；回复 `{"answer": …}`，答不了回 `{"decision":"unavailable"}` |
+| 界面 → agent | `session/attach`（10-21） | 请求 | 只在可以脱离的连接上、每次连上的第一条：`token`（代理令牌）、`after`（已经收到的最后一条的序号）；agent 答复后补发 |
+| agent → 界面 | `log`（10-21） | 通知 | 可以脱离的连接上，给人看的终端日志也走协议：`text`，一行一条 |
+| agent → 界面 | `process/exit`（10-21） | 请求 | 退出前的最后一条：`status`（`exit 0` 或 `exit status 1`）；界面记下后答复，agent 才断开退出 |
 
 ## 3. 读代码
 
@@ -87,6 +92,22 @@ default:                          // 用户暂未答复：pending，下一轮再
 
 页面的 `applyNotify` 按方法名更新运行状态。子 agent 转发上来的 `subagent/message` 原样递归应用到这个子 agent 的状态上，所以任务ID、浏览器地址、结局的处理和父 agent 完全一样。start/continue 事件带 `protocol: true`；没有这个标记的旧存档，日志行先经过 `legacyLine` 换算成同样的通知。
 
+### 3.6 观测台重启后接管（10-21）
+
+以前观测台用 stdio 连 agent：观测台一退出，agent 读到 EOF 就按中断收尾。现在观测台启动的 agent 改走 Unix socket，观测台退出时 agent 照常运行，重启后重新接管。命令行、队列、评测与子 agent 仍用 stdio，行为不变。
+
+| 部分 | 做法 | 代码 |
+| --- | --- | --- |
+| 连接 | 观测台经环境变量 `AGENT_APP_SOCKET` 给出 `.data/[tenants/<租户>/]live/<对话ID>.sock`（目录 0700），agent 在上面 `Listen`，读完就删掉这个变量，子 agent 不会去抢 | [session.go](../../internal/protocol/session.go)、[main.go](../../main.go) |
+| 编号与留存 | agent 发出的通知与请求带 `seq`（`item/delta` 与响应除外），留在内存里；观测台把它记进事件的 `aseq` | `Conn.write`、`session.keep` |
+| 连回补发 | 每次连上先发 `session/attach{token, after}`：令牌不对就断开；对了就丢掉 `after` 以前的，补发之后的，以及还在等答复的请求（即使界面收到过：新的观测台要重新登记等待） | `Conn.serve` |
+| 日志 | `os.Stdout`、`os.Stderr` 换成管道，一行一条 `log` 通知；文件描述符 2 接 `<对话ID>.err`，只会有 Go 运行时崩溃一类的输出，结束时并进存档 | `CaptureLogs` |
+| 退出 | 最后发 `process/exit` 请求：观测台按顺序处理到它，说明之前的都已记下，答复后 agent 才断开；接管的进程不是观测台的子进程，拿不到退出码，靠它 | `Finish` |
+| 观测台不在时 | 模型代理连不上（ECONNREFUSED，请求没发出去）就每 2 秒再试，不占重试次数；脱离超过 `DetachGrace`（10 分钟）仍没有界面连回，按界面断开处理：中断、写检查点、退出 | [llm.go](../../internal/llm/llm.go) 的 `proxyDown` |
+| 接管 | 观测台启动时、开始监听之前，对存档里这一轮还没有 exit、`<对话ID>.json`（进程号与代理令牌，0600）还在的对话：恢复令牌与父任务ID，从存档里最大的 `aseq` 之后补齐；转发到一半的请求补一条 502 响应（agent 那边会重试）；进程已经不在就记 exit，结局以检查点为准 | [live.go](../../internal/observer/live.go) 的 `adopt` |
+
+agent 自己的进程组（`Setpgid`）不受观测台所在终端 Ctrl-C 的影响。要停下它，用页面的停止按钮（接管后照样经 `turn/interrupt`）。
+
 ## 4. 实验记录
 
 均使用真实方舟模型。
@@ -120,6 +141,19 @@ turn/completed  答案：requests 包在 PyPI 上的最新版本号是 2.34.2
 - 页面（无头 Chrome 读取页面状态，无 JS 异常）：新运行还原出检查点、输入容量、每个子 agent 的状态、日志、检查点、浏览器地址（2、5、2 个）和停止原因；B0 之前的演练存档经兼容层还原，结果与改动前一致。
 - 发现并修复：最初没有把子 agent 的 `browser/navigate` 拆开，子 agent 面板拿不到画面地址；改为递归应用 `subagent/message` 后正常。只传 `task_id` 续跑的子 agent 卡片原来显示一串ID，改为显示 `subagent/started` 带来的任务原文。
 
+### 4.5 观测台重启后接管（10-21）
+
+DeepSeek `deepseek-flash`，`qa` 账号，四种时机各一次：
+
+| 时机 | 做法 | 结果 |
+| --- | --- | --- |
+| 等联网审批时 | 模型调 `request_network_access`（序号 64 的请求）后结束观测台进程，5 秒后重启 | agent 的父进程变成 1，仍在等待；新观测台记下“重新接管……补齐第 64 条之后”，重新登记这个请求；登录后点“允许”，agent 当轮接着 curl，之后的模型请求经新观测台转发（令牌照旧），`exit 0`，live 文件删掉 |
+| 模型流式输出中 | 第一次请求开始 1.5 秒后结束观测台，12 秒后重启 | agent 日志：流中断后重试一次，接着 `Model proxy unreachable … waiting`；观测台回来后重新发出请求，答完全部计算 |
+| 回答写完、正要退出 | 最后一次响应记下后立刻 SIGSTOP 观测台，4 秒后 SIGKILL 再重启（模拟收到了还没记下） | agent 停在 `Finish` 等答复；新观测台补到 `turn/completed` 与 `process/exit`，退出状态记为 `exit 0` |
+| bash 运行中（模型选了后台运行） | 结束观测台 4 秒后重启，再按停止 | 被打断的请求补了一条 502；停止经 `turn/interrupt` 生效，结局 `cancelled`，后台命令被终止，`exit status 1`（和没重启时停止一样） |
+
+页面（无头 Chrome，无脚本异常）完整显示这几段对话：被打断的请求显示“模型请求失败 · HTTP 502”，接管说明排在补齐的消息前面。同时修了页面上后台 bash 卡片显示 `exit undefined` 的问题（D32 的遗留），改为“后台 job-1”。脱离超过 10 分钟后自行中断这一条没有实际等过。
+
 ## 5. 动手
 
 1. 用 4.1 的管道方式自己当界面，在 agent 执行工具时再发一行 `{"jsonrpc":"2.0","id":2,"method":"turn/interrupt"}`，观察它怎样收尾。
@@ -129,7 +163,8 @@ turn/completed  答案：requests 包在 PyPI 上的最新版本号是 2.34.2
 
 ## 6. 已知边界
 
-- **进程绑定连接**：观测台重启后，正在运行的 agent 失去协议连接（会按中断收尾），观测台不能重新接管；这需要 daemon 或事件先落盘再补读，留在进阶计划的 B2/B3。
+- **接管靠 agent 进程本身活着**（10-21 起）：没有另做 daemon。agent 把发出的消息留在内存里，进程被 SIGKILL 或机器重启时这些消息随之丢失，结局以检查点为准；观测台换了监听地址，agent 的模型请求找不到它，等满 10 分钟后中断。留存的消息只在每次连回时清掉，一轮里一直连着就一直留着（一段 100 多次请求的对话约 1 MB）。
+- **delta 不补发**：观测台不在时的增量直接丢掉，连回后等这次模型调用结束显示完整内容。
 - **delta 已由 B1 补上**：模型调用进行中发 `item/delta`，只用于实时显示，不落盘，见 [B1 实践](../bonus-streaming/streaming-lab.md)。
 - **日志仍是文本**：给人看的日志没有结构化，终端输出照旧；结构化日志经 OTel Logs API 导出留在进阶计划 C6。
 - **兼容层**：旧存档仍靠正则还原，只在没有 `protocol` 标记的存档上运行。

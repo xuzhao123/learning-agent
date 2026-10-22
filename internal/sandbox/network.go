@@ -61,8 +61,15 @@ var (
 	proxyDir  string
 	proxyErr  error
 	deniedMu  sync.Mutex
-	denials   []string // 本次 bash 调用被拒绝的主机（调用串行，所以一份就够）
+	denials   []denial // 本次 bash 调用被拒绝的连接（调用串行，所以一份就够）
 )
+
+// denial 记下被拒绝的主机与原因。只有“不在白名单”能靠用户批准解决；端口不对、解析到内网或解析失败，
+// 批准了也打不开，提示里要说清楚，免得模型去申请一个没用的批准。
+type denial struct {
+	host, reason string
+	approvable   bool
+}
 
 // 唯一的放行检查点：白名单、端口、解析后的地址都在这里核对，然后直接连接核对过的 IP，
 // 不让后续再解析一次（否则 DNS 可以在“检查”和“连接”之间换成内网地址）。
@@ -71,28 +78,29 @@ func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	deny := func(reason string) (net.Conn, error) {
+	deny := func(reason string, approvable bool) (net.Conn, error) {
+		d := denial{host, reason, approvable}
 		deniedMu.Lock()
-		if !slices.Contains(denials, host) {
-			denials = append(denials, host)
+		if !slices.Contains(denials, d) {
+			denials = append(denials, d)
 		}
 		deniedMu.Unlock()
 		fmt.Printf("Sandbox net: deny host=%s port=%s reason=%s\n", host, port, reason)
 		return nil, errors.New(reason)
 	}
 	if port != "80" && port != "443" {
-		return deny("只允许 80 和 443 端口")
+		return deny("只允许 80 和 443 端口", false)
 	}
 	if !allowed(host) {
-		return deny("域名不在白名单")
+		return deny("域名不在白名单", true)
 	}
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil || len(ips) == 0 {
-		return deny("无法解析域名")
+		return deny("无法解析域名", false)
 	}
 	for _, ip := range ips {
 		if netguard.Internal(ip.IP) {
-			return deny("解析到本机、内网或保留地址 " + ip.IP.String())
+			return deny("解析到本机、内网或保留地址 "+ip.IP.String(), false)
 		}
 	}
 	fmt.Printf("Sandbox net: allow host=%s port=%s\n", host, port)

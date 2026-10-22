@@ -22,6 +22,7 @@ import (
 // 问题写入后、模型决定调用工具后（写前日志）、这批工具结果写回后、运行结束时。
 // 续跑只依赖这个文件和其中保存的启动参数，不依赖进程内存，所以 kill -9 之后也能接着跑。
 type Checkpoint struct {
+	Version  int      `json:"version"` // 格式版本，见 CheckpointVersion；加版本号之前写的检查点读出来是 0
 	ID       string   `json:"id"`
 	Args     []string `json:"args"`     // 首次启动的命令行参数：续跑时原样恢复工具开关、预算等配置
 	Question string   `json:"question"` // 也是幂等校验的依据：同一个ID不能换问题
@@ -45,13 +46,52 @@ type Checkpoint struct {
 	Traces    []string  `json:"traces,omitempty"` // 每次运行（首次与各次续跑）的 trace_id
 	Fork      *Fork     `json:"fork,omitempty"`   // D17 回放验证：从哪个检查点的第几轮分叉、注入了什么
 	Summary   []string  `json:"summary"`
-	Progress  progress  `json:"progress"`          // 循环检测：最近的动作与见过的结果，跨续跑累计
-	Private   []string  `json:"private,omitempty"` // D20：本任务已读入的私有数据来源；非空时外发类工具要用户确认
-	Granted   []string  `json:"granted,omitempty"` // D20：用户选了“本对话内都允许”的外发范围（如 ds_search、open_page · github.com）
-	// D23：“读过才能改”的账本（相对路径 → 读取时的内容哈希）。续聊是新进程，靠它接上上一轮读过哪些文件；
-	// 只恢复“读过”这个事实和当时的哈希，编辑前仍比对当前内容，两轮之间被改过照样拒绝。回放分叉不继承它，见 ForkSnapshot。
-	Seen      map[string]string `json:"seen,omitempty"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	Progress  progress  `json:"progress"` // 循环检测：最近的动作与见过的结果，跨续跑累计
+	State     State     `json:"state"`
+	// 版本 2 之前，State 里的前三项写在顶层；读的时候搬进 State（见 LoadCheckpointIn），写出时不再有。
+	OldPrivate []string          `json:"private,omitempty"`
+	OldGranted []string          `json:"granted,omitempty"`
+	OldSeen    map[string]string `json:"seen,omitempty"`
+	// O12：不正常结束时 harness 自己跑的收尾检查（复用 Stop hook 的命令）；正常结束或没配 Stop hook 时为空。
+	FinalCheck *FinalCheck `json:"final_check,omitempty"`
+	// D40：写这份检查点时会话记录写到了第几条：检查点是“记录到第 N 条时的状态快照”（见 journal.go）。
+	LogSeq    int64     `json:"log_seq,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// O7（D38）：State 是影响下一步、要带进下一轮（续聊）和续跑的状态，收在一处，由检查点整体保存。
+// 续跑取自己检查点里的；续聊取上一轮的；回放分叉只继承私有来源（只会更严），其余从空开始。
+// 以前前三项是检查点的几个顶层字段，环境与用量提醒则从视图里的提醒文字反推。
+// 子目录项目指令有没有进上下文仍按视图判断（见 workspace.Prime）：它描述的就是视图里有什么。
+type State struct {
+	Private []string `json:"private,omitempty"` // D20：已读入的私有数据来源；非空时外发类工具要用户确认
+	Granted []string `json:"granted,omitempty"` // D20：用户选了“本对话内都允许”的外发范围（如 ds_search、open_page · github.com）
+	// D23：“读过才能改”的账本（相对路径 → 读取时的内容哈希）。只恢复“读过”这个事实和当时的哈希，编辑前仍比对当前内容。
+	Seen map[string]string `json:"seen,omitempty"`
+	// D24：上一次告诉模型的环境，按字段（工作区、分支、未提交改动、日期、权限……）。续聊时只把变了的字段发出去；
+	// 压缩后清空（那份提醒已经并进摘要），下一轮重发整份。
+	Env map[string]string `json:"env,omitempty"`
+	// D30：已经提醒过的用量档位（50、75）。续聊时上下文是接着的，档位也接着；压缩后清零。
+	Announced int `json:"announced,omitempty"`
+}
+
+// FinalCheck 是收尾检查的结论：Passed 为 false 时 Detail 是 hook 给出的原因（比如编译错误）。
+type FinalCheck struct {
+	Passed bool   `json:"passed"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// CheckpointVersion 是本程序写的检查点格式。字段的含义变了（不是单纯加一个可以缺省的字段）才加一；
+// 读到比它新的版本就拒绝续跑：旧程序会把不认识的字段悄悄丢掉，下一次写回时数据就没了。
+// 版本 2（D38）：私有来源、外发授权与读后才写账本收进 state；旧版本读的时候搬过去。
+const CheckpointVersion = 2
+
+// CheckVersion 判断这个程序能不能读写某个版本的检查点。0 是加版本号之前的格式，与 1 相同；1 与 2 的差别在 LoadCheckpointIn 里搬。
+func CheckVersion(id string, version int) error {
+	if version > CheckpointVersion {
+		return fmt.Errorf("检查点 %s 的格式版本是 %d，这个程序只认识到 %d：请用新版程序续跑或接着聊", id, version, CheckpointVersion)
+	}
+	return nil
 }
 
 // 由 main 设置：CheckpointID 为空表示不写检查点（Day 3/4 实验）；Resume 不为空表示本次是续跑。
@@ -95,13 +135,20 @@ func LoadCheckpointIn(space, id string) (*Checkpoint, error) {
 	if err := json.Unmarshal(data, cp); err != nil {
 		return nil, fmt.Errorf("%s 不是有效的检查点：%w", checkpointPathIn(space, id), err)
 	}
+	if err := CheckVersion(id, cp.Version); err != nil {
+		return nil, err
+	}
+	if cp.Version < 2 {
+		cp.State.Private, cp.State.Granted, cp.State.Seen = cp.OldPrivate, cp.OldGranted, cp.OldSeen
+		cp.OldPrivate, cp.OldGranted, cp.OldSeen = nil, nil, nil
+	}
 	return cp, nil
 }
 
 // 先写临时文件再改名：任何时刻读到的都是一份完整的旧版本或新版本，不会是写了一半的文件。
 // 没有 fsync：进程崩溃（包括 kill -9）不丢已写的数据，整机断电可能丢最后一次写入。
 func (cp *Checkpoint) write() error {
-	cp.UpdatedAt = time.Now()
+	cp.Version, cp.UpdatedAt = CheckpointVersion, time.Now()
 	data, err := json.MarshalIndent(cp, "", "  ")
 	if err != nil {
 		return err
@@ -261,7 +308,7 @@ func ForkSnapshot(src *Checkpoint, id string, messages []llm.Message, step, call
 	// D23 的账本不继承：分叉后的 View 被截断过，账本里可能有截断点之后才读的文件，凭它改文件等于改一个
 	// 自己没看过的版本。从空账本开始，代价最多是重新读一次，方向是安全的一侧。
 	cp := &Checkpoint{ID: id, Args: src.Args, Question: src.Question, Status: "running", Step: step, Calls: calls, Messages: messages,
-		StartedAt: time.Now().UTC(), Fork: &Fork{From: src.ID, Rounds: rounds, Note: note}, Progress: replayProgress(messages), Private: src.Private}
+		StartedAt: time.Now().UTC(), Fork: &Fork{From: src.ID, Rounds: rounds, Note: note}, Progress: replayProgress(messages), State: State{Private: src.State.Private}}
 	for _, line := range src.Summary {
 		var n int
 		if _, err := fmt.Sscanf(line, "- 第%d轮", &n); err == nil && n <= rounds {

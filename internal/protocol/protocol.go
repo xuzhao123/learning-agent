@@ -29,6 +29,9 @@ type Message struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *Error          `json:"error,omitempty"`
+	// Seq：可以脱离的连接上（见 session.go），agent 发出的通知与请求按发出顺序编号，从 1 开始；item/delta 与响应不编号。
+	// 界面重新连上时凭它说明已经收到第几条。JSON-RPC 2.0 没有这个字段，两端都是本项目的程序，按扩展字段处理。
+	Seq int64 `json:"seq,omitempty"`
 }
 
 type Error struct {
@@ -44,52 +47,90 @@ func (m Message) IsRequest() bool { return m.ID != nil && m.Method != "" }
 // Conn 是协议的一端。读到的响应交给等待它的 Call；请求和通知交给 handle（在读循环里依次调用，handle 不能阻塞）。
 type Conn struct {
 	mu      sync.Mutex
-	w       io.Writer
+	w       io.Writer // 可以脱离的连接在没有界面连着时为 nil
 	next    int64
 	pending map[int64]chan Message
 	closed  chan struct{}
+	handle  func(Message)
+	*session
 }
 
 func NewConn(r io.Reader, w io.Writer, handle func(Message)) *Conn {
-	c := &Conn{w: w, pending: map[int64]chan Message{}, closed: make(chan struct{})}
+	c := &Conn{w: w, pending: map[int64]chan Message{}, closed: make(chan struct{}), handle: handle}
 	go func() {
 		defer close(c.closed)
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 64*1024), 16<<20)
-		for scanner.Scan() {
-			var m Message
-			if json.Unmarshal(scanner.Bytes(), &m) != nil || m.JSONRPC != "2.0" {
-				continue
-			}
-			if m.ID != nil && m.Method == "" {
-				c.mu.Lock()
-				ch := c.pending[*m.ID]
-				delete(c.pending, *m.ID)
-				c.mu.Unlock()
-				if ch != nil {
-					ch <- m
-				}
-				continue
-			}
-			handle(m)
-		}
+		c.read(r, nil)
 	}()
 	return c
+}
+
+// read 逐行读对端发来的消息，直到对端关闭。first 不为 nil 时，第一条消息先交给它（可以脱离的连接用它核对 session/attach）。
+func (c *Conn) read(r io.Reader, first func(Message) bool) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 16<<20)
+	for scanner.Scan() {
+		var m Message
+		if json.Unmarshal(scanner.Bytes(), &m) != nil || m.JSONRPC != "2.0" {
+			continue
+		}
+		if first != nil {
+			if !first(m) {
+				return
+			}
+			first = nil
+			continue
+		}
+		if m.ID != nil && m.Method == "" {
+			c.mu.Lock()
+			ch := c.pending[*m.ID]
+			delete(c.pending, *m.ID)
+			if c.session != nil {
+				delete(c.asked, *m.ID)
+			}
+			c.mu.Unlock()
+			if ch != nil {
+				ch <- m
+			}
+			continue
+		}
+		c.handle(m)
+	}
 }
 
 // Closed 在对端关闭（读到 EOF）后关闭。
 func (c *Conn) Closed() <-chan struct{} { return c.closed }
 
 func (c *Conn) write(m Message) error {
+	_, err := c.send(m)
+	return err
+}
+
+// send 写出一条消息，返回实际写出的样子（可以脱离的连接上带着编号）。
+func (c *Conn) send(m Message) (_ Message, err error) {
 	m.JSONRPC = "2.0"
-	data, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() {
+		// D40：agent 一侧发出的通知与请求另写一份进只追加的会话记录（Journal），和发给界面的同序。
+		if c == Client && Journal != nil && !(m.ID != nil && m.Method == "") && !IsDelta(m) && m.Method != "log" {
+			Journal(m)
+		}
+	}()
+	if c.session != nil {
+		c.keep(&m)
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return m, err
+	}
+	if c.w == nil {
+		return m, nil // 脱离中：已经留下等界面连回时补发（delta 直接丢掉）
+	}
 	_, err = c.w.Write(append(data, '\n'))
-	return err
+	if c.session != nil {
+		return m, nil // 写失败说明界面刚断开，读循环会把连接标成脱离；消息已经留下
+	}
+	return m, err
 }
 
 func raw(v any) json.RawMessage {
@@ -147,17 +188,36 @@ func (c *Conn) Call(ctx context.Context, method string, params any, result any) 
 	}
 }
 
+// IsDelta：item/delta（子 agent 的经 subagent/message 包一层）只用于实时显示，不留档、不补发。
+func IsDelta(m Message) bool {
+	for m.Method == "subagent/message" {
+		var p struct{ Message Message }
+		if json.Unmarshal(m.Params, &p) != nil {
+			return false
+		}
+		m = p.Message
+	}
+	return m.Method == "item/delta"
+}
+
 // ---------- agent 一侧 ----------
 
 // Client 是本进程的界面连接；为 nil 表示命令行直接运行，通知不发出，请求不可用。
 var Client *Conn
 
-// Notify 在没有界面连接时什么都不做：命令行运行照常只看终端日志。
+// Notify 在没有界面连接时不发给界面：命令行运行照常只看终端日志；会话记录照写。
 func Notify(method string, params any) {
 	if Client != nil {
 		Client.Notify(method, params)
+		return
+	}
+	if m := (Message{Method: method, Params: raw(params)}); Journal != nil && !IsDelta(m) && method != "log" {
+		Journal(m)
 	}
 }
+
+// Journal 由 agent 设置（D40，见 agent/journal.go）：发出的每条通知与请求（item/delta、日志行与响应除外）交给它一份。
+var Journal func(m Message)
 
 // ErrNoClient：命令行直接运行或队列里的任务，没有可以回答请求的人。
 var ErrNoClient = errors.New("没有连接界面，无法向用户发起请求")

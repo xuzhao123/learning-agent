@@ -135,15 +135,17 @@ func git(args ...string) string {
 var BashMount string
 
 // Environment 是给模型看的环境信息。只放会影响决策、而且便宜可得的事实；变了就整份重发一次。
-func Environment() string {
-	var b strings.Builder
-	b.WriteString("<environment>\n")
-	fmt.Fprintf(&b, "工作区：%s\n", Dir)
+// EnvField 是环境信息的一项。O7：按字段保存上一次告诉模型的样子，续聊时只发变了的字段。
+type EnvField struct{ Name, Value string }
+
+// EnvironmentFields 是当前的环境信息，按固定顺序。
+func EnvironmentFields() []EnvField {
+	fields := []EnvField{{"工作区", Dir}}
 	if BashMount != "" {
-		fmt.Fprintf(&b, "bash 里的工作区：%s（bash 命令里 cd、grep 都用这个路径；read_file、edit_file、write_file 等文件工具的 path 仍写相对工作区根目录的路径，不要带 %s 前缀）\n", BashMount, BashMount)
+		fields = append(fields, EnvField{"bash 里的工作区", fmt.Sprintf("%s（bash 命令里 cd、grep 都用这个路径；read_file、edit_file、write_file 等文件工具的 path 仍写相对工作区根目录的路径，不要带 %s 前缀）", BashMount, BashMount)})
 	}
 	if branch := git("rev-parse", "--abbrev-ref", "HEAD"); branch != "" {
-		fmt.Fprintf(&b, "git 分支：%s（HEAD %s）\n", branch, git("log", "-1", "--format=%h %s"))
+		fields = append(fields, EnvField{"git 分支", fmt.Sprintf("%s（HEAD %s）", branch, git("log", "-1", "--format=%h %s"))})
 		lines := strings.Split(git("status", "--porcelain"), "\n")
 		modified, untracked := 0, 0
 		for _, l := range lines {
@@ -154,22 +156,23 @@ func Environment() string {
 				modified++
 			}
 		}
-		fmt.Fprintf(&b, "未提交改动：%d 个已跟踪文件有改动，%d 个未跟踪文件\n", modified, untracked)
+		fields = append(fields, EnvField{"未提交改动", fmt.Sprintf("%d 个已跟踪文件有改动，%d 个未跟踪文件", modified, untracked)})
 	} else {
-		b.WriteString("git：不是 git 仓库，或读不到 git 信息\n")
+		fields = append(fields, EnvField{"git", "不是 git 仓库，或读不到 git 信息"})
 	}
-	fmt.Fprintf(&b, "日期：%s（UTC）\n系统：%s/%s\n", time.Now().UTC().Format("2006-01-02"), runtime.GOOS, runtime.GOARCH)
-	fmt.Fprintf(&b, "权限：%s\n", permission.Describe())
+	return append(fields, EnvField{"日期", time.Now().UTC().Format("2006-01-02") + "（UTC）"},
+		EnvField{"系统", runtime.GOOS + "/" + runtime.GOARCH}, EnvField{"权限", permission.Describe()})
+}
+
+// FormatEnvironment 把环境信息写成提醒里的一段。
+func FormatEnvironment(fields []EnvField) string {
+	var b strings.Builder
+	b.WriteString("<environment>\n")
+	for _, f := range fields {
+		fmt.Fprintf(&b, "%s：%s\n", f.Name, f.Value)
+	}
 	b.WriteString("</environment>")
 	return b.String()
 }
 
-// EnvironmentIn 从一条提醒里取出环境信息，用来和当前环境比较。
-func EnvironmentIn(text string) string {
-	start := strings.Index(text, "<environment>")
-	end := strings.Index(text, "</environment>")
-	if start < 0 || end < start {
-		return ""
-	}
-	return text[start : end+len("</environment>")]
-}
+func Environment() string { return FormatEnvironment(EnvironmentFields()) }

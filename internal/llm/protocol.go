@@ -18,7 +18,7 @@ var Tools []map[string]any
 var TaskID string
 
 // Upstream 是供应商的真实地址；APIURL 是这次实际请求的地址，经观测台时是本机代理。
-// Protocol 是上游说的协议：空表示 chat/completions，"responses" 表示 OpenAI Responses（见 responses.go）。
+// Protocol 是上游说的协议：空表示 chat/completions，"responses" 表示 OpenAI Responses（见 responses.go），"messages" 表示 Anthropic Messages（见 messages.go）。
 type Config struct{ Provider, Protocol, APIURL, Upstream, Model, APIKey, Effort string }
 
 // 模型路由表：每家供应商的默认地址、模型与读取的变量名。方舟和 DeepSeek 是 OpenAI 兼容的 chat/completions，
@@ -46,6 +46,9 @@ type Provider struct {
 type Model struct {
 	Name   string `json:"name"`
 	Vision bool   `json:"vision"`
+	// R5：能放进一次请求的输入 token 上限（供应商模型列表里核对过的）；0 表示不知道，用设置或命令行给的窗口。
+	// 方舟套餐名对应多个带日期的版本时取其中最小的；Coconut 照 Codex 的做法只用 95%。
+	Window int `json:"window,omitempty"`
 }
 
 // FindModel 在这家供应商的清单里找模型。
@@ -64,24 +67,31 @@ var Providers = []Provider{
 		// 方舟 Coding Plan 文档列出的 Model Name，2026-10-20 逐个真实调用过（含一次工具调用）；套餐调整时改这里。
 		// glm-5.3 会报 InvalidParameter: Model only support text input；deepseek-v4-pro、deepseek-v4-flash
 		// 返回 200 但回答“看不到图”；ark-code-latest 跟控制台选择走，可能路由到不能看图的模型，一律标为不能看图。
-		Models: []Model{{Name: "doubao-seed-2.1-pro", Vision: true}, {Name: "doubao-seed-2.1-lite", Vision: true},
-			{Name: "doubao-seed-evolving", Vision: true}, {Name: "doubao-seed-2.0-mini", Vision: true},
+		// 窗口来自 2026-10-21 方舟 GET /models 的 token_limits.max_input_token_length；列表里没有 kimi、minimax、glm-5.3 与 ark-code-latest，不填。
+		Models: []Model{{Name: "doubao-seed-2.1-pro", Vision: true, Window: 262144}, {Name: "doubao-seed-2.1-lite", Vision: true, Window: 1048576},
+			{Name: "doubao-seed-evolving", Vision: true, Window: 1048576}, {Name: "doubao-seed-2.0-mini", Vision: true, Window: 229376},
 			{Name: "kimi-k3", Vision: true}, {Name: "kimi-k2.8-preview", Vision: true}, {Name: "kimi-k2.7-code", Vision: true},
-			{Name: "glm-5.3"}, {Name: "glm-5.3-flash", Vision: true},
-			{Name: "deepseek-v4-pro"}, {Name: "deepseek-v4-flash"}, {Name: "deepseek-v4.1-flash", Vision: true},
+			{Name: "glm-5.3"}, {Name: "glm-5.3-flash", Vision: true, Window: 1048576},
+			{Name: "deepseek-v4-pro", Window: 1048576}, {Name: "deepseek-v4-flash", Window: 1048576}, {Name: "deepseek-v4.1-flash", Vision: true, Window: 1048576},
 			{Name: "minimax-m3", Vision: true}, {Name: "ark-code-latest"}}},
 	{Name: "deepseek", Label: "DeepSeek", APIURL: "https://api.deepseek.com/chat/completions",
 		Model: "deepseek-flash", URLVar: "DEEPSEEK_API_URL", ModelVar: "DEEPSEEK_MODEL", KeyVars: []string{"DEEPSEEK_API_KEY"},
-		Models: []Model{{Name: "deepseek-flash", Vision: true}}},
+		Models: []Model{{Name: "deepseek-flash", Vision: true, Window: 1048576}}}, // DeepSeek GET /models：context_window 1048576
+	// D33：同一把 DeepSeek 密钥的 Anthropic Messages 接口（/anthropic）。模型与窗口来自 DeepSeek GET /models；
+	// deepseek-v4-pro 只收文字。思考块不强制传回（实测），这里有就传回。
+	{Name: "deepseekanthropic", Label: "DeepSeek（Anthropic 接口）", Protocol: "messages", APIURL: "https://api.deepseek.com/anthropic/v1/messages",
+		Model: "deepseek-flash", URLVar: "DEEPSEEK_ANTHROPIC_URL", ModelVar: "DEEPSEEK_MODEL", KeyVars: []string{"DEEPSEEK_API_KEY"},
+		Models: []Model{{Name: "deepseek-flash", Vision: true, Window: 1048576}, {Name: "deepseek-v4-pro", Window: 1048576}}},
 	// 清单来自 2026-10-21 的 GET /models（要带 User-Agent: codex），同日逐个用 input_image 实测看图（结果见 docs/bonus-routing/routing-lab.md）。
 	// 这个服务对不认识的模型名也照样回答，响应里的 model 只是把请求原样写回，所以清单外的名字不会报错，也看不出是谁答的。
 	// openrouter-4o-max 当天一直被上游限流（502），没测成，按“不知道就不发图”标为不能看图。
+	// 窗口：/models 报 context_window 936000、effective_context_window_percent 95，照 Codex 只用 95%。
 	{Name: "coconut", Label: "Coconut", Protocol: "responses", Model: "coconut-gpt-6-1-sol-max", URLVar: "COCONUT_API_URL", ModelVar: "COCONUT_MODEL",
-		Models: []Model{{Name: "coconut-gpt-6-1-sol-max", Vision: true}, {Name: "coconut-gpt-6-astra-max", Vision: true},
-			{Name: "coconut-gpt-5-6-sol-max", Vision: true}, {Name: "coconut-gpt-5-6-terra-max", Vision: true}, {Name: "coconut-gpt-5-6-luna-max", Vision: true},
-			{Name: "coconut-gpt-5-5-max", Vision: true}, {Name: "coconut-gpt-5-4-max", Vision: true},
-			{Name: "coconut-openrouter-4o-max"}, {Name: "coconut-openrouter-3o-max", Vision: true}, {Name: "coconut-openrouter-2o-max", Vision: true},
-			{Name: "coconut-deepseek-v4-1-flash-max", Vision: true}, {Name: "coconut-doubao-seed-evolving-dev", Vision: true}}},
+		Models: []Model{{Name: "coconut-gpt-6-1-sol-max", Vision: true, Window: 889200}, {Name: "coconut-gpt-6-astra-max", Vision: true, Window: 889200},
+			{Name: "coconut-gpt-5-6-sol-max", Vision: true, Window: 889200}, {Name: "coconut-gpt-5-6-terra-max", Vision: true, Window: 889200}, {Name: "coconut-gpt-5-6-luna-max", Vision: true, Window: 889200},
+			{Name: "coconut-gpt-5-5-max", Vision: true, Window: 889200}, {Name: "coconut-gpt-5-4-max", Vision: true, Window: 889200},
+			{Name: "coconut-openrouter-4o-max", Window: 889200}, {Name: "coconut-openrouter-3o-max", Vision: true, Window: 889200}, {Name: "coconut-openrouter-2o-max", Vision: true, Window: 889200},
+			{Name: "coconut-deepseek-v4-1-flash-max", Vision: true, Window: 889200}, {Name: "coconut-doubao-seed-evolving-dev", Vision: true, Window: 889200}}},
 }
 
 // ProviderNames 用于提示：路由表里有哪些供应商。
@@ -91,6 +101,20 @@ func ProviderNames() string {
 		names[i] = p.Name
 	}
 	return strings.Join(names, "、")
+}
+
+// WindowOf 是这家供应商这个模型核对过的输入上限；model 为空表示默认模型。0 表示不知道。
+func WindowOf(provider, model string) int {
+	p, ok := FindProvider(provider)
+	if !ok {
+		return 0
+	}
+	if model == "" {
+		config, _ := LoadConfig(provider) // 没有密钥时仍会解析出默认模型
+		model = config.Model
+	}
+	m, _ := p.FindModel(model)
+	return m.Window
 }
 
 // Vision 表示这次请求的模型能不能看图。

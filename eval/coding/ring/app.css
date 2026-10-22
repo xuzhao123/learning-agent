@@ -1,0 +1,10 @@
+:root { --bg: #fff; --text: #0d0d0d; --muted: #6b6b6b; --line: #e5e5e5; --soft: #f4f4f4; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+#thread { min-height: 300px; }
+.msg { padding: 10px 14px; border-radius: 14px; background: var(--soft); display: inline-block; }
+#composer { border: 1px solid var(--line); border-radius: 22px; padding: 10px 12px; }
+#query { width: 100%; border: 0; resize: none; font: inherit; outline: none; }
+.row { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+#mode-chip { color: var(--muted); font-size: 12px; margin-right: auto; }
+#send { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); font-size: 16px; cursor: pointer; }

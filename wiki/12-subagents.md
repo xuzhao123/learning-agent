@@ -68,6 +68,8 @@
 
 子任务不应自动拥有父层全部秘密、写权限和联网能力。父取消要传到子任务，父恢复要核查哪些子任务完成、哪些仍在执行，避免重复启动。
 
+“派出去、等它做完”之外，父 Agent 还需要一个控制面：**后台派出**（不被一个子任务卡住）、**等待**（需要结论时再取，可设上限）、**插话**（补充条件而不作废已做的）、**停止**（方向错了及时止损，停下时写好检查点）。父 Agent 就是子 Agent 的界面，界面对 Agent 能做的（插话、中断），父对子同样能做。另一种派法是**分叉**：子 Agent 带着父对话开始，任务说明只写要它做什么；代价是上下文和父一样大，还要说清它的身份——父对话里“派一个子 agent 去……”是对父说的，子 Agent 会误以为是对自己说的。后台子 Agent 跟着父的这一轮走：父想结束时还有后台子 Agent 在跑先提醒，这一轮结束时停下。
+
 ## 技术展开
 
 ### 进阶术语：委派契约、权限集合与聚合预算
@@ -174,6 +176,8 @@ Setpgid 可把子进程分到独立进程组，避免它同时收到终端和父
 [spawnAgent、prefixWriter](../internal/agent/subagent.go)实现委派、文本派生ID与关联输出；[RunChild](../internal/agent/child.go)复用执行/恢复逻辑，取消时给子进程收尾时间。
 
 当前交付主要是 answer、model_calls 与 replayed，未强制上述结构化证据契约；预算是父子各自管理。父被kill -9后的全部后代回收、全局费用额度与复杂权限衰减也仍需加强。
+
+D39 起有控制面：`spawn_agent` 的 `background`、`fork`，以及 `agent_wait`、`agent_send`、`agent_stop`（[subcontrol.go](../internal/agent/subcontrol.go)），插话与停止经子进程的协议连接发 `turn/steer`、`turn/interrupt`，分叉的对话经 `turn/start` 的 history 交过去，见 [Day 39 实践](../docs/day-39/day-39-lab.md)。后台子 Agent 不跨轮。
 
 D20 起，子 Agent 继承两样安全状态：父任务已含私有数据时，子进程带 `-private-input` 启动，从一开始就算“已接触私有数据”；子任务读过私有数据，交回的结论会让父任务也被标记。子进程发出的确认请求经 [RunChild](../internal/agent/child.go) 转给父进程、再到界面，只能由人回答。多租户补充后子进程带同一个 `-tenant`，检查点与记忆都在父任务的租户目录里。见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#私有标记的传播规则)；事件与请求怎样经父进程逐级转发见 [19 · Agent 与界面的协议](19-agent-client-protocol.md#确认请求的完整链路)。
 

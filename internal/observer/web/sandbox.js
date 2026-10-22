@@ -7,18 +7,22 @@ export function bashCard(r, c, t) {
   const icon = running ? el("span", "ico") : ico(res?.status === "ok" ? "ok" : "bad", res?.status === "ok" ? "ok" : "bad");
   if (running) icon.append(el("span", "spin"));
   const head = [icon, el("span", "hub-chip", "bash"), el("span", "targs", clip(args.command || t.args, 90))];
-  if (res?.status === "ok" && (out.signal || out.exit_code !== 0)) head.push(el("span", "exit-chip bad", out.signal ? out.signal : "exit " + out.exit_code));
+  // D32：background=true 的命令立刻返回 job_id，没有退出码；之后用 bash_output 读输出。
+  if (out.job_id) head.push(el("span", "exit-chip", "后台 " + out.job_id));
+  else if (res?.status === "ok" && (out.signal || out.exit_code !== 0)) head.push(el("span", "exit-chip bad", out.signal ? out.signal : "exit " + out.exit_code));
   if (t.done) head.push(el("span", "", sec(t.done - c.end)));
   const term = el("pre", "term");
   term.append(el("span", "cmd", "$ " + (args.command || t.args) + "\n"));
-  if (res?.status === "ok") term.append(out.output || "（无输出）");
+  if (res?.status === "ok") term.append(out.output || (out.job_id ? "（在后台运行）" : "（无输出）"));
   else if (res) term.append(res.error || pretty(res));
   else term.append(running ? "执行中…" : t.state === "lost" ? "进程已结束，没有结果" : "");
   const body = [term];
   const notes = [];
   if (out.truncated) notes.push(`输出共 ${out.output_bytes} 字节，只保留开头和结尾各 8KB`);
   if (out.note) notes.push(out.note);
-  if (out.network_denied) notes.push("被代理拒绝的主机：" + out.network_denied.join("、") + "（不在白名单）");
+  if (out.workspace_changes) notes.push("改了工作区：" + out.workspace_changes.join("、") + "（没有快照，撤销时不会还原）");
+  // 旧存档只有主机名，原因一律是“不在白名单”；之后的记录带 network_hint，写着每个主机被拒的原因。
+  if (out.network_denied) notes.push(out.network_hint?.startsWith("访问被代理拒绝") ? out.network_hint : "被代理拒绝的主机：" + out.network_denied.join("、") + "（不在白名单）");
   if (res?.status === "unknown") notes.push("超时或被停止：沙箱里的进程已全部结束；命令是否已经产生副作用不确定");
   for (const n of notes) body.push(el("div", "meta", n));
   return step(`t${c.n}-${t.index}`, head, body);
@@ -81,6 +85,46 @@ export function approvalCard(root, callID) {
     if (always) always.onclick = () => decide(true, true);
     acts.append(...buttons, el("span", "meta", always ? "agent 正在等待：“允许”只对这一次调用有效" : "agent 正在等待：只对这一次调用有效"));
   } else acts.append(el("span", "meta", { allow: "已允许", allow_session: `已允许，本对话内 ${a.scope || "同一范围"} 不再询问`, deny: "已拒绝", expired: "未答复（agent 已结束或等待超时）" }[a.state] || a.state));
+  card.append(acts);
+  return card;
+}
+// D34：模型向你提问（ask_user）。agent 在这里等：点一个选项或写一句话，回答作为这次工具调用的结果交给模型。
+// 页面随新事件整页重画，输入到一半的草稿记在提问上，重画后放回去、保持焦点。
+export function askCard(root, t) {
+  const args = parse(t.args) || {}, a = root.asks[t.id], res = parse(t.result);
+  const card = el("div", "net-card ask-card");
+  card.append(el("div", "", "agent 问你："), el("b", "", args.question || ""));
+  const acts = el("div", "acts");
+  if (a?.state === "waiting" && !root.exit) {
+    const buttons = [];
+    const send = async (answer) => {
+      for (const b of buttons) b.disabled = true;
+      try {
+        const resp = await fetch(`/runs/${encodeURIComponent(root.id)}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ call_id: t.id, answer }) });
+        if (!resp.ok) throw new Error(await resp.text());
+        Object.assign(a, { state: "answered", answer });
+        ui.askFocus = null;
+        renderChat();
+      } catch (err) { alert("回答失败：" + err.message); for (const b of buttons) b.disabled = false; }
+    };
+    for (const option of args.options || []) {
+      const b = el("button", "", option);
+      b.type = "button";
+      b.onclick = () => send(option);
+      buttons.push(b);
+    }
+    const input = el("input", "ask-input");
+    input.placeholder = (args.options || []).length ? "或者写下你的回答，回车发送" : "写下你的回答，回车发送";
+    input.value = a.draft || "";
+    input.oninput = () => { a.draft = input.value; ui.askFocus = t.id; };
+    input.onkeydown = (ev) => { if (ev.key === "Enter" && !ev.isComposing && input.value.trim()) { ev.preventDefault(); send(input.value.trim()); } };
+    buttons.push(input);
+    acts.append(...buttons);
+    if (ui.askFocus === t.id) queueMicrotask(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+  } else {
+    const answer = a?.answer ?? res?.result?.answer;
+    acts.append(el("span", "meta", answer != null ? "你的回答：" + answer : res?.status === "error" ? res.error || "" : res?.result?.answered === false ? "没有回答（等待超时）" : root.exit ? "没有回答（agent 已结束）" : "等待中…"));
+  }
   card.append(acts);
   return card;
 }

@@ -295,6 +295,13 @@ select.pick:disabled { background-image: none; padding-right: 8px; }
 .net-card button { padding: 4px 14px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel); font-size: 13px; }
 .net-card button:hover { background: var(--hover); }
 .net-card button.yes { border-color: var(--text); background: var(--text); color: var(--bg); }
+/* D34：ask_user 的提问卡片与运行中插话 */
+.ask-card b { font: 600 14px var(--sans, inherit); }
+.ask-card .acts { margin-top: 8px; }
+.ask-input { flex: 1 1 220px; min-width: 0; padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--bg); color: var(--text); font-size: 13px; }
+.u.steer { margin: 10px 0; }
+.u.steer div { background: none; border: 1px dashed var(--line); font-size: 14px; }
+.u.steer div::before { content: "插话 · "; color: var(--muted); }
 /* Day 11 浏览器：卡片缩略图 + 侧栏实时画面 */
 .web-card .av { overflow: hidden; width: 64px; height: 40px; border-radius: 6px; background: var(--soft); }
 .web-card .av img { width: 100%; height: 100%; object-fit: cover; object-position: top; }

@@ -34,9 +34,11 @@
 | --- | --- | --- |
 | UserPromptSubmit | [secret-guard.sh](../../hooks/secret-guard.sh) | 问题里像有 API 密钥或私钥时退出码 2 拦下 |
 | PreToolUse（edit_file、write_file） | [protect-generated.sh](../../hooks/protect-generated.sh) | 目标文件开头有 `// Code generated … DO NOT EDIT.` 时返回 `permissionDecision: deny` |
-| PostToolUse（edit_file、write_file） | [gofmt.sh](../../hooks/gofmt.sh) | 改过的 `.go` 文件 `gofmt -d` 有差异时 `decision: block`，把差异交给模型 |
+| PostToolUse（edit_file、write_file） | [gofmt.sh](../../hooks/gofmt.sh) | 改过的 `.go` 文件没格式化就直接 `gofmt -w`；`gofmt` 报错（语法错误）时 `decision: block` 把错误交给模型 |
 | PostToolUse（edit_file、write_file） | [js-check.sh](../../hooks/js-check.sh) | 改过的 `.js`，或 `.html` 里的内联脚本有语法错误时 `decision: block`，把报错位置交给模型；页面 embed 进 Go 程序，`go build` 查不出脚本错误。宿主机没有 node 时跳过（10-19 补） |
 | Stop | [go-check.sh](../../hooks/go-check.sh) | 工作区有未提交的 `.go` 改动时跑 `go build` 与 `go vet`，不过就退出码 2 |
+
+不正常结束（预算用完、模型报错、超时、熔断，不含人按停止）时，harness 把 Stop hook 当作收尾检查再跑一次（10-21 起，`finalCheck`）：不再请求模型，结论（通过，或 hook 给出的原因）写进检查点的 `final_check` 和 `turn/completed`，页面的停止卡片上显示。实测：临时 clone 里放一处编译不过的改动，`-max-steps 1` 用完预算后，`final_check` 记下了 `go build` 的语法错误。
 
 ```bash
 go run . -provider deepseek -workspace ../some-repo -bash -hooks hooks/hooks.json -question "/review 关注错误处理"

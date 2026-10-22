@@ -48,8 +48,9 @@ func Add(effect, text string) error {
 	return nil
 }
 
-// 工具分类：规则里写的类别名对应哪些工具，以及这个调用要拿来匹配的值（命令、路径或域名）。
-func subject(name, arguments string) (category, value string) {
+// 这个调用要拿来匹配的值（命令、路径、域名或搜索词）。类别由调用方从工具声明里取（agent 的 toolspec.go），
+// 规则里既可以写类别（Bash、Edit、Read、WebFetch、WebSearch、Write），也可以写工具名。
+func subject(name, category, arguments string) (string, string) {
 	var args struct {
 		Command string `json:"command"`
 		Path    string `json:"path"`
@@ -57,19 +58,19 @@ func subject(name, arguments string) (category, value string) {
 		Query   string `json:"query"`
 	}
 	_ = json.Unmarshal([]byte(arguments), &args)
-	switch name {
-	case "bash":
-		return "Bash", args.Command
-	case "edit_file", "write_file":
-		return "Edit", clean(args.Path)
-	case "read_file", "glob", "grep", "view_image":
-		return "Read", clean(args.Path)
-	case "open_page", "ds_fetch":
-		return "WebFetch", "domain:" + host(args.URL)
-	case "web_search", "ds_search":
-		return "WebSearch", args.Query
+	switch category {
+	case "Bash":
+		return category, args.Command
+	case "Edit", "Read":
+		return category, clean(args.Path)
+	case "WebFetch":
+		return category, "domain:" + host(args.URL)
+	case "WebSearch":
+		return category, args.Query
+	case "":
+		return name, ""
 	}
-	return name, ""
+	return category, ""
 }
 
 func clean(p string) string { return strings.TrimPrefix(path.Clean("/"+strings.TrimSpace(p)), "/") }
@@ -131,9 +132,9 @@ func (r rule) matches(category, name, value string) bool {
 	return len(parts) > 0
 }
 
-// Decide 返回这次调用的决定（allow、ask、deny）和原因。
-func Decide(name, arguments string) (string, string) {
-	category, value := subject(name, arguments)
+// Decide 返回这次调用的决定（allow、ask、deny）和原因。category 是工具声明里的权限类别，空表示按工具名。
+func Decide(name, category, arguments string) (string, string) {
+	category, value := subject(name, category, arguments)
 	for _, effect := range []string{"deny", "ask", "allow"} {
 		for _, r := range rules {
 			if r.effect == effect && r.matches(category, name, value) {
@@ -157,7 +158,7 @@ func modeDefault(category, name, value string) string {
 		}
 		return map[string]string{"plan": "allow", "ask": "ask", "edit": "allow", "full": "allow"}[Mode]
 	}
-	if strings.HasPrefix(name, "mcp_") || name == "remember_memory" {
+	if category == "Write" { // 会改别处状态的工具：MCP 工具、长期记忆的写入与删除
 		return map[string]string{"plan": "ask", "ask": "ask", "edit": "allow", "full": "allow"}[Mode]
 	}
 	return "allow"

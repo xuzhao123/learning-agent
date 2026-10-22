@@ -333,6 +333,19 @@ func (r *Runner) execute(ctx context.Context, t *Trial, common []string) {
 	if t.Arm == "replay" {
 		args = nil // 回放的检查点已存好启动参数，RunChild 用 -resume 接着跑
 	}
+	// D36：编码题每个试次一份新的仓库拷贝，作为工作区；bash 用来构建、运行和检查。
+	var work string
+	if c.Repo != nil && t.Arm != "replay" {
+		work = workDir(t.TaskID)
+		if err := prepareRepo(c.Repo, work); err != nil {
+			done(false)
+			r.finish(t, "failed", "准备仓库失败："+err.Error())
+			return
+		}
+		defer os.RemoveAll(work)
+		abs, _ := filepath.Abs(work)
+		args = append(slices.Clone(args), "-workspace", abs, "-bash")
+	}
 	result := queue.RunTask(ctx, queue.Task{ID: t.TaskID, Question: c.Question}, append(slices.Clone(args), common...), 2, child)
 	cp, err := agent.LoadCheckpoint(t.TaskID)
 	r.mu.Lock()
@@ -350,6 +363,15 @@ func (r *Runner) execute(ctx context.Context, t *Trial, common []string) {
 		}
 	}
 	r.mu.Unlock()
+	if work != "" && result.Status != "interrupted" {
+		// 校验与存 diff 不持锁：编译、跑命令要几十秒。只改这个试次自己的字段。
+		snapshot := Trial{Commands: nil}
+		runChecks(c, &snapshot, work)
+		diff := saveDiff(r.rec.ID, t.TaskID, work)
+		r.mu.Lock()
+		t.Claimed, t.Commands, t.Diff = t.Outcome == "no_tool_calls", snapshot.Commands, diff
+		r.mu.Unlock()
+	}
 	status := "done"
 	switch result.Status {
 	case "done", "replayed":

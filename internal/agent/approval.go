@@ -74,20 +74,15 @@ func grantScope(call llm.ToolCall) string {
 	return name + " · " + strings.ToLower(u.Hostname())
 }
 
-// 外发类工具：调用参数会离开本机（请求 URL 与搜索词发给网站；MCP 参数发给 server 进程或远程服务）。
-func outbound(name string) bool {
-	return name == "web_search" || name == "open_page" || name == "ds_search" || name == "ds_fetch" || strings.HasPrefix(name, "mcp_")
-}
-
 // risk 返回这次调用需要确认的原因；空串表示不需要确认。
 func risk(call llm.ToolCall) (kind, reason string) {
 	name := call.Function.Name
 	switch {
-	case name == "forget_memory":
-		return "irreversible", "删除一条长期记忆，删除后无法恢复"
+	case specOf(name).Irreversible:
+		return "irreversible", "这项操作做了就撤不回（如删除一条长期记忆）"
 	case strings.HasPrefix(name, "mcp_") && mcp.Destructive(name):
 		return "destructive", "MCP server 声明这个工具会做破坏性修改"
-	case outbound(name) && len(privateSources) > 0:
+	case specOf(name).Outbound && len(privateSources) > 0: // 外发：调用参数会离开本机（URL、搜索词发给网站；MCP 参数发给 server）
 		return "outbound", "本任务已读入私有数据（" + strings.Join(privateSources, "、") + "），这次调用会把参数发到外部"
 	}
 	return "", ""

@@ -1,10 +1,11 @@
 import { agentCard, renderSubPanel } from "./agents.js";
 import { analyze, endLabel, tokenParts, toolResult } from "./analysis.js";
 import { WEB_TOOLS, webCard } from "./browser.js";
+import { start } from "./composer.js";
 import { claimViz, md, parkViz } from "./md.js";
 import { openMCP, openMemory, openSkills } from "./pages.js";
 import { render } from "./render.js";
-import { approvalCard, bashCard, netCard } from "./sandbox.js";
+import { approvalCard, askCard, bashCard, netCard } from "./sandbox.js";
 import { loadRuns, rewindTurn, syncComposer, toolOn } from "./shell.js";
 import { $, AUX_LABEL, LAB_TITLE, MEM_KIND, MEM_STATUS, MEM_TYPE, RAG_LAB_TITLE, callPosition, clip, compact, el, fold, ico, idleText, kfmt, parse, pretty, rawIO, sec, textOf, ui, userPictures } from "./util.js";
 // agent 终端行形如 "Memory recall: id=M1 kind=semantic score=0.48 content=…"；content 放在最后，可含空格。
@@ -95,6 +96,7 @@ function chatFlow(r) {
     if (c.aux) { if (shown.has(c.turn)) flow.push({ kind: "aux", call: c }); return; } // 开场的辅助调用在记忆卡片里显示
     if (c.caseStart) flow.push({ kind: "case", text: c.caseLabel });
     if (c.userMessage) { flow.push({ kind: "user", text: textOf(c.userMessage), turn: c.turn }, { kind: "caps", turn: c.turn }, { kind: "memory", turn: c.turn, phase: "start" }); shown.add(c.turn); }
+    for (const s of r.steers) if (s.call === c.i) flow.push({ kind: "steer", text: s.text, turn: c.turn });
     if (c.compact) flow.push({ kind: "compact", call: c });
     else flow.push({ kind: "call", call: c });
     const next = r.calls.find((x) => x.n > c.n);
@@ -152,7 +154,9 @@ export function renderCall(box, r, c, last) {
     // 只知道整次请求的耗时：思考与写回答各占多少，各家流式的顺序不同，算不出来。
     box.append(step("r" + c.n, [ico("", "think"), el("span", "", "思考" + (p.reasoning ? ` ${kfmt(p.reasoning)} tokens` : "") + ` · 整次请求 ${sec(c.ms)}`)], [el("div", "reason", m.reasoning_content)]));
   }
-  if (m.content && c.tools.length) { const mid = md(m.content, true); mid.classList.add("mid"); box.append(mid); }
+  // 过程说明：和工具调用一起出现的文字，或 agent 标明是 commentary 的（如被 Stop hook 拦下的“想结束”）。
+  const commentary = m.content && (c.tools.length || c.phase === "commentary");
+  if (commentary) { const mid = md(m.content, true); mid.classList.add("mid"); if (!c.tools.length) mid.title = "过程说明：还没有结束（比如被 Stop hook 拦下，接着做）"; box.append(mid); }
   for (const t of c.tools) {
     if (r.hookCalls[t.id]) box.append(hookCard(`h${c.n}-${t.index}`, r.hookCalls[t.id]));
     if (ui.run.approvals[t.id]) box.append(approvalCard(ui.run, t.id));
@@ -160,6 +164,7 @@ export function renderCall(box, r, c, last) {
     if (WEB_TOOLS.includes(t.name)) { box.append(webCard(r, t)); continue; }
     if (t.name === "bash") { box.append(bashCard(r, c, t)); continue; }
     if (t.name === "request_network_access") { box.append(netCard(r, t)); continue; }
+    if (t.name === "ask_user") { box.append(askCard(ui.run, t)); continue; }
     const icon = t.state === "running" ? el("span", "ico") : ico(t.detour ? "bad" : "ok", t.detour ? "bad" : "ok");
     if (t.state === "running") icon.append(el("span", "spin"));
     const head = [icon, el("span", "tname", t.name), el("span", "targs", clip(compact(t.args), 90))];
@@ -168,7 +173,7 @@ export function renderCall(box, r, c, last) {
     const result = t.done ? toolResult(t) : el("div", "meta", t.state === "lost" ? "进程已结束，没有结果" : "执行中…");
     box.append(step(`t${c.n}-${t.index}`, head, [el("div", "label", "参数"), el("pre", "", pretty(t.args)), el("div", "label", "结果" + (t.reason ? " · " + t.reason : "")), result]));
   }
-  if (!c.tools.length && m.content) {
+  if (!commentary && m.content) {
     const answer = md(m.content, true);
     // 只把本题实际取回且过阈值的编号变成可点击引用；其他 [Dxx] 标红，提示它不是有效来源。
     const caseStart = r.calls.filter((x) => x.caseStart && x.n <= c.n).at(-1)?.n || 1;
@@ -292,6 +297,12 @@ function drawChat() {
       if (tools.childNodes.length) box.append(tools);
       return;
     }
+    if (f.kind === "steer") {
+      const u = el("div", "u steer"), bubble = el("div", "", f.text);
+      u.title = "运行中插话：排进了这一次模型请求";
+      u.append(bubble); box.append(u); group = null;
+      return;
+    }
     const fresh = () => { group = el("div", turn?.rewound ? "a rewound" : "a"); box.append(group); return group; };
     if (f.kind === "compact") return box.append(renderCompact(f.call));
     if (f.kind === "aux") { if (!group) fresh(); group.append(auxCard(r, f.call)); return; }
@@ -313,6 +324,8 @@ function drawChat() {
   if (r.exit && (r.exit !== "exit 0" || !answered)) {
     const card = el("div", "stopcard");
     card.append(el("div", "err", r.source && r.exit === "exit 0" ? "记录在这里结束：最后一次请求之后没有回答" : (r.stopRequested ? "已按停止按钮中断：" : "agent 已停止：") + endLabel(r)));
+    // O12：不正常结束时 harness 自己跑的收尾检查（Stop hook 的命令），告诉人留下的状态能不能用。
+    if (r.finalCheck) card.append(r.finalCheck.passed ? el("div", "meta", "收尾检查通过（Stop hook）") : fold("收尾检查没通过（Stop hook）", r.finalCheck.detail || "", true));
     if (r.checkpoint) card.append(el("div", "meta", "检查点已保存，可以直接继续提问"));
     const tail = r.logs.filter((l) => !(l.text || "").startsWith("用户续聊：")).slice(-6);
     if (tail.length) card.append(fold("最后几行输出", tail.map((l) => l.text).join("\n")));
@@ -320,6 +333,15 @@ function drawChat() {
     link.onclick = () => { observeAt("end"); };
     card.append(link);
     box.append(card);
+  }
+  // D34：计划模式下的一轮正常结束：一键批准，切到 edit 并让 agent 按计划执行（D27 的“下一轮切到 edit”）。
+  if (r.exit === "exit 0" && answered && r.permission === "plan" && !r.source && !ui.replay) {
+    const bar = el("div", "utools"), b = el("button", "", "批准计划并切到 edit");
+    b.type = "button";
+    b.title = "下一轮用 edit 权限，告诉 agent 计划已批准、按计划开始执行";
+    b.onclick = () => { ui.chatFollow = true; start(`/runs/${encodeURIComponent(r.id)}/messages`, { query: "计划已批准，切到 edit 模式，按计划开始执行。", permission: "edit" }); };
+    bar.append(b, el("span", "meta", "或者在输入框里提修改意见，继续在 plan 模式下讨论"));
+    box.append(bar);
   }
   for (const [key, pos] of reasons) {
     const x = box.querySelector(`details.step[open][data-key="${key}"] > .body > .reason`);

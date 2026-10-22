@@ -42,6 +42,7 @@ go build -o bin/learning-agent .
 | --- | --- | --- |
 | 方舟聊天模型 | `ARK_API_KEY`（兼容 `LLM_API_KEY`）、`LLM_API_URL`、`LLM_MODEL` | `-provider ark`；`https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions`；`doubao-seed-2.1-pro` |
 | DeepSeek 聊天模型 | `DEEPSEEK_API_KEY`、`DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` | `-provider deepseek`；`https://api.deepseek.com/chat/completions`；`deepseek-flash` |
+| DeepSeek（Anthropic 接口） | 与 DeepSeek 共用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`；`DEEPSEEK_ANTHROPIC_URL` 可改地址 | `-provider deepseekanthropic`；`https://api.deepseek.com/anthropic/v1/messages`；`deepseek-flash`；Anthropic Messages 协议，见 [Day 33 实践](docs/day-33/day-33-lab.md) |
 | Coconut 聊天模型 | `COCONUT_API_URL`（必填，指向本机 Codex 兼容服务的 `.../v1/responses`）、`COCONUT_MODEL`；不要密钥 | `-provider coconut`；没有默认地址；`coconut-gpt-6-1-sol-max`；走 Responses 协议，见 [模型路由实践](docs/bonus-routing/routing-lab.md#5-coconutresponses-协议) |
 | 线上向量模型 | 与方舟共用 `ARK_API_KEY` | `-embedding ark` |
 | 本地向量模型 | 不需要 embedding API 密钥；首次使用会下载模型 | `-embedding local`；聊天请求仍使用选定的线上模型 |
@@ -95,6 +96,15 @@ go build -o bin/learning-agent .
 | Day 28 | 第四周复盘 | [笔记](docs/day-28/day-28-notes.md) · [复盘](docs/week-04-review.md) | [实践](docs/day-28/day-28-lab.md) | — |
 | Day 29 | 文件快照与回退 | [笔记](docs/day-29/day-29-notes.md) | [实践](docs/day-29/day-29-lab.md) | — |
 | Day 30 | 上下文预算 | [笔记](docs/day-30/day-30-notes.md) | [实践](docs/day-30/day-30-lab.md) | — |
+| Day 31 | 长任务接力与独立验证 | [笔记](docs/day-31/day-31-notes.md) | [实践](docs/day-31/day-31-lab.md) | — |
+| Day 32 | 工具声明与后台命令 | [笔记](docs/day-32/day-32-notes.md) | [实践](docs/day-32/day-32-lab.md) | — |
+| Day 33 | 模型适配层 | [笔记](docs/day-33/day-33-notes.md) | [实践](docs/day-33/day-33-lab.md) | — |
+| Day 34 | 终端客户端与会话交互 | [笔记](docs/day-34/day-34-notes.md) | [实践](docs/day-34/day-34-lab.md) | — |
+| Day 36 | 编码任务评测集 | [笔记](docs/day-36/day-36-notes.md) | [实践](docs/day-36/day-36-lab.md) | — |
+| Day 37 | 基线与消融 | [笔记](docs/day-37/day-37-notes.md) | [实践](docs/day-37/day-37-lab.md) | — |
+| Day 38 | 影响下一步的状态收在一处 | [笔记](docs/day-38/day-38-notes.md) | [实践](docs/day-38/day-38-lab.md) | — |
+| Day 39 | 子 agent 的控制面 | [笔记](docs/day-39/day-39-notes.md) | [实践](docs/day-39/day-39-lab.md) | — |
+| Day 40 | 只追加的会话记录 | [笔记](docs/day-40/day-40-notes.md) | [实践](docs/day-40/day-40-lab.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -155,7 +165,7 @@ go build -o bin/learning-agent .
 | `-image` | 空 | 图片输入：随问题附带的图片路径，可写多次。按文件头只收 PNG、JPEG、GIF、WebP；长边超过 2048 或 32×32 块超过 2500 时等比缩小；按内容寻址存进 `.data/[tenants/<租户>/]attachments/`，消息与检查点里只放 `attachment://` 引用；处理不了的图以提醒说明，不让这一轮失败；每条消息最多 8 张；所选模型不能看图时发请求前换成说明文字。能看图的模型在有工作区或 bash 时另有 `view_image`，看工作区或沙箱里的图片 |
 | `-history-stdin` | false | 从stdin接收上次上下文JSON，配合-question续聊（命令行用；观测台改经 `turn/start` 传入） |
 | `-continues` | 空 | 续聊时上一轮的检查点ID：本轮用新ID并记下续接关系，子 agent 可按 task_id 引用之前各轮的子任务；观测台自动处理 |
-| `-app-server` | false | B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；观测台与父 agent 启动子进程时使用 |
+| `-app-server` | false | B0：以结构化协议与界面通信（JSON-RPC，一行一条）：stdout 只走协议，日志改走 stderr；观测台与父 agent 启动子进程时使用。观测台另给环境变量 `AGENT_APP_SOCKET`，协议与日志改走这个 Unix socket，观测台重启后能接管（见 [B0 实践 3.6](docs/bonus-protocol/protocol-lab.md#36-观测台重启后接管10-21)） |
 | `-parallel` | 4 | 工具执行并发，1到16 |
 | `-max-steps` | 10 | 模型请求总预算，包含最终回答与上下文摘要；0 表示不限 |
 | `-retries` | 2 | 工具额外重试次数，0到5 |
@@ -199,7 +209,7 @@ go build -o bin/learning-agent .
 | `-tenant` | 空 | 多租户：本任务所属的租户，数据都在 `.data/tenants/<租户>/` 下；观测台和带 `tenant` 的队列任务自动加上；可与 `-resume` 一起用 |
 | `-private-input` | false | D20：任务输入已含私有数据，外发类工具执行前要确认；父 agent 派出子任务时自动加上，一般不手动使用 |
 | `-subagent-steps` | 6 | 每个子 agent 的模型请求预算，1到20 |
-| `-provider` | ark | 模型路由：`ark`（豆包，方舟 Coding Plan）、`deepseek` 或 `coconut`（本机 Responses 服务）；子 agent 继承，续跑沿用 |
+| `-provider` | ark | 模型路由：`ark`（豆包，方舟 Coding Plan）、`deepseek`、`deepseekanthropic`（DeepSeek 的 Anthropic 接口）或 `coconut`（本机 Responses 服务）；子 agent 继承，续跑沿用 |
 | `-model` | 空 | 这家供应商下的具体模型，优先于 `LLM_MODEL` / `DEEPSEEK_MODEL`；写进检查点的启动参数，子 agent 继承，续跑与回放沿用 |
 | `-bash` | false | Day 12：增加 bash 与 request_network_access，命令在 bubblewrap 沙箱里执行（仅 Linux）；工作目录按对话保留，续聊各轮共用，观测台可上传、下载 |
 | `-workspace` | 空 | D23：增加 read_file、glob、grep、edit_file、write_file，只在这个仓库目录里读写；子 agent 继承。D25 起配合 `-bash` 时 bash 的 `/workspace` 就是这个仓库（`.git` 只读，`.env`、`.data` 看不到），本对话目录改挂 `/scratch` |
@@ -210,7 +220,10 @@ go build -o bin/learning-agent .
 | `-net-allow` | 空 | 配合 `-bash`：沙箱可经代理访问的域名（含子域名，可重复），由用户批准后添加 |
 | `-browser` | false | Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料；环境变量 `CHROME_PATH` 指定浏览器，系统不支持 Chrome 沙箱时设 `CHROME_NO_SANDBOX=1` |
 | `-ds-search` | false | 增加 ds_search 与 ds_fetch，调用 DeepSeek 的 Search/Fetch API（服务端执行，没有画面）；子 agent 继承。说明见 [Day 11 实践 §5](docs/day-11/day-11-lab.md#5-补充deepseek-搜索-api) |
+| `-tool-format` / `-coding-prompt` / `-todo` / `-clear-old-results` | json / default / false / false | D37 消融开关，默认值就是现在的做法：工具结果发给模型时用纯文本、编码提示词的 minimal 或 extended 写法、上下文内的 todo 清单、续聊时清理之前各轮的工具结果；见 [Day 37 实践](docs/day-37/day-37-lab.md) |
+| `-check` | 空 | D36：不请求模型，只在工作区只读挂载的沙箱里跑这条命令，最后一行输出 JSON 的退出码与输出（编码评测的校验命令用它），须配合 `-workspace` 与 `-bash` |
+| `-ask-user` | false | D34：增加 ask_user，模型可以在运行中向人提问（经协议的 `user/requestInput`）；只在界面上有人能当场回答时打开，终端客户端与观测台自动加上，子 agent 不继承 |
 
 </details>
 
-观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-tenant 租户] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“评测与归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-tenant 租户] [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。`go run . rewind [-tenant 租户] [-dry-run] <轮次ID>` 撤销这一轮及之后各轮用编码工具改过的文件，对话退回上一轮；观测台对话里每条消息下的“撤销到这一轮之前”是同一功能，见 [Day 29 实践](docs/day-29/day-29-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。
+终端客户端：`go run . chat [-continue 检查点ID] [agent 参数…]`，每一轮启动一个 `-app-server` 的 agent，过程流式显示在终端，运行中输入的话作为插话，`/help` 列出恢复、分叉、压缩、撤销（`/rewind <轮> [both|files|chat]`）、切权限与批准计划等命令，agent 的终端日志写在 `.data/[tenants/<租户>/]chat.log`，见 [Day 34 实践](docs/day-34/day-34-lab.md)。观测台参数见 [启动说明](docs/observer/observer-notes.md#1-启动)，队列参数与用法见 [Day 10 实践](docs/day-10/day-10-lab.md)。`go run . metrics [-since 168h] [-prefix ID前缀] [-tenant 租户] [-json]` 统计 D15 的 5 个核心指标，见 [Day 15 实践](docs/day-15/day-15-lab.md)。`go run . eval -cases eval/coding-cases.jsonl` 跑 D36 编码任务评测（每个试次一份新的仓库拷贝，校验命令在沙箱里只读运行，见 [Day 36 实践](docs/day-36/day-36-lab.md)）；`go run . eval` 跑 D16 评测集（每题 k 次、DeepSeek 评审，需要 `.env` 里的 `DEEPSEEK_API_KEY`），`go run . eval triage / replay` 做 D17 归因与回放；观测台左侧“评测与归因”是同一功能的页面，见 [Day 16 实践](docs/day-16/day-16-lab.md)。`go run . audit [-tenant 租户] [-task ID] [-verify]` 列出并校验 D21 审计日志，观测台左侧“审计日志”是只读页面，见 [Day 21 实践](docs/day-21/day-21-lab.md)。`go run . rewind [-tenant 租户] [-dry-run] [-mode both|files|chat] <轮次ID>` 撤销这一轮及之后各轮用编码工具改过的文件，对话退回上一轮（D34 起 `-mode files` 只退文件、`chat` 只退对话）；观测台对话里每条消息下的“撤销到这一轮之前”是同一功能，见 [Day 29 实践](docs/day-29/day-29-lab.md)。协作与文档维护规则见 [AGENTS.md](AGENTS.md)。

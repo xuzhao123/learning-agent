@@ -6,7 +6,7 @@ export const MAX_IMAGES = 8; // 每条消息最多几张附图，与 agent 的 l
 export const MEM_KIND = { semantic: "事实", episodic: "经历", procedural: "流程" }, MEM_SOURCE = { user: "用户原话", tool_failure: "工具失败" };
 export const MEM_TYPE = { load: "读取", recall: "调入", write: "新增", refresh: "刷新", expire: "过期删除", evict: "容量淘汰", skip: "未保存", error: "错误", index: "索引", contextualize: "背景", retrieve: "检索", drop: "过滤", request: "登记", hint: "未登记" };
 export const MEM_STATUS = { contextual: "已补背景", no_source: "旧记忆无来源·原文检索", pending: "背景待处理·原文检索", too_long: "背景超出向量输入上限·原文检索", ok: "已生成", failed: "生成失败·原文检索", budget: "预算不足·原文检索" };
-export const AUX_LABEL = { memory_contextualize: "记忆背景生成", memory_rerank: "记忆重排" };
+export const AUX_LABEL = { memory_contextualize: "记忆背景生成", memory_rerank: "记忆重排", verify: "独立验证（D31）" };
 export const ui = {
   page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, follow: true, chatFollow: true, open: new Set(),
   collapsed: new Set(), expanded: false, search: "", zoom: null, checked: new Set(), compare: [], compareSel: null,

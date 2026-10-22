@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -35,9 +36,15 @@ import (
 // 多租户：child.Tenant 决定任务在哪个空间里（检查点、记忆、沙箱目录都在那里），子进程带 -tenant 启动。
 func RunChild(ctx context.Context, id, question string, args []string, child ChildIO) (cp *Checkpoint, replayed bool, err error) {
 	cp, err = LoadCheckpointIn(child.Tenant, id)
+	fresh := false
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		args = append([]string{"-task-id", id, "-question", question}, args...)
+		fresh = true
+		if child.History != nil {
+			args = append([]string{"-task-id", id}, args...) // D39 分叉：问题和父对话经 turn/start 交给它
+		} else {
+			args = append([]string{"-task-id", id, "-question", question}, args...)
+		}
 	case err != nil:
 		return nil, false, llm.Permanent(err)
 	case cp.Question != question:
@@ -90,10 +97,13 @@ func RunChild(ctx context.Context, id, question string, args []string, child Chi
 	// 子进程的 invoke_agent 就挂在它下面。同名变量以后面的为准，覆盖从父进程继承来的那个。
 	cmd.Env = append(append(os.Environ(), child.Env...), telemetry.Env(ctx)...)
 	// 子进程放进自己的进程组：终端的 Ctrl+C 只发给调度方，再由调度方通过 ctx 把取消传下去，每个子进程只收到一次。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// 调度方自己死了（kill -9）时，Linux 上由内核给子进程发 SIGINT（见 childAttr）。
+	cmd.SysProcAttr = childAttr()
 	// 取消时先发 SIGINT，让子进程回填工具结果、写好检查点再退出；10 秒还没退出才强制结束。
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
+	runtime.LockOSThread() // Pdeathsig 跟创建子进程的线程走：Wait 返回之前这个线程不能被回收
+	defer runtime.UnlockOSThread()
 	if err := cmd.Start(); err != nil {
 		childOut.Close()
 		childIn.Close()
@@ -101,6 +111,12 @@ func RunChild(ctx context.Context, id, question string, args []string, child Chi
 	}
 	childOut.Close() // 父进程这一侧不再需要子进程那一端；子进程退出后读到 EOF
 	childIn.Close()
+	if child.Started != nil {
+		child.Started(conn)
+	}
+	if fresh && child.History != nil {
+		go conn.Call(ctx, "turn/start", map[string]any{"question": question, "history": child.History}, nil)
+	}
 	runErr := cmd.Wait()
 	select { // 读完子进程退出前写出的最后几条通知（turn/completed 等）
 	case <-conn.Closed():
@@ -125,12 +141,20 @@ func RunChild(ctx context.Context, id, question string, args []string, child Chi
 	return cp, false, err
 }
 
+// ChildAttr 是启动 agent 子进程用的进程属性：自己的进程组；Linux 上父进程死了内核给它发 SIGINT（见 childAttr）。
+// 终端客户端（D34）每一轮也这样启动 agent，调用方要在 Start 到 Wait 之间锁住线程。
+func ChildAttr() *syscall.SysProcAttr { return childAttr() }
+
 // ChildIO 是调用方给子进程接的“界面”。
 type ChildIO struct {
 	Out    io.Writer              // 子进程 stderr：给人看的日志
 	Notify func(protocol.Message) // 子进程发来的通知；nil 表示不要
 	Env    []string               // 额外的环境变量，如观测台的代理地址（D16 评测在观测台里运行时）
 	Tenant string                 // 任务所属的租户；空表示平台空间
+	// D39：分叉的子 agent 从父对话接着做（新任务时经 turn/start 交给它；续跑用自己的检查点）；
+	// Started 在子进程启动后拿到它的协议连接，后台子 agent 经它插话、停止。
+	History *HistoryInput
+	Started func(*protocol.Conn)
 }
 
 func firstLine(s string) string {

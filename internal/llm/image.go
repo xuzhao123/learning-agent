@@ -342,6 +342,9 @@ type imageURL struct {
 func prepareHistory(history []Message, vision bool) []Message {
 	out := make([]Message, len(history))
 	for i, m := range history {
+		if m.Role == "tool" && ToolFormat == "text" {
+			m.Content = ToolText(m.Content)
+		}
 		if len(m.Images) == 0 {
 			out[i] = m
 			continue

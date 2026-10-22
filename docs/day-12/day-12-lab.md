@@ -156,7 +156,7 @@ Sandbox net: deny host=example.com port=443 reason=域名不在白名单
                                                   → curl: (7) CONNECT tunnel failed, response 403
 ```
 
-工具结果里带着 `network_denied: ["example.com"]` 和提示，模型据此知道该请求批准，而不是去猜网络出了什么问题。
+工具结果里带着 `network_denied: ["example.com"]` 和提示，模型据此知道该请求批准，而不是去猜网络出了什么问题。10-21 起提示按每个主机被拒的原因写：只有“不在白名单”建议申请批准；端口不对、解析到内网或解析失败的，写明批准了也打不开。之前一律写“不在白名单”，模型会为一个 8787 端口的内网地址去申请联网，人批准了也没用。
 
 ### 3.5 在观测台审批
 
@@ -196,7 +196,7 @@ No retry […]: reason=permanent attempts=1 error=页面请求了本机或内网
 | 模型写一个含脚本的 HTML，观测台按网页返回就会在登录后的页面源里执行 | 一律 `Content-Disposition: attachment`、`application/octet-stream`、`nosniff`；页面预览文本只用 `textContent`，图片经 blob 地址放进 `<img>` |
 | 上传覆盖模型的文件、写到目录外 | 只放顶层、不以点开头、不覆盖（`O_EXCL`），单个不超过 10 MB；运行中不接受 |
 
-上传是人对工作目录的改动，先写审计（`user_upload`，文件名和内容哈希），写不进就不上传；下载是只读操作，不记。
+上传是人对工作目录的改动，先写审计（`user_upload`，文件名和内容哈希），写不进就不上传；下载是只读操作，不记。10-21 起面板可以删除（`DELETE /runs/{id}/files/{path}`）：同样只在这一轮结束后、只经 `os.Root`（路径穿越、经指向沙箱外的链接都出不去，删链接只删链接本身），目录连同内容一起删，先写审计 `user_delete`。验证：删文件、链接、目录都成功；`../`、经 `up -> /` 链接的路径返回 404；租户账号对平台对话的文件返回 404。
 
 **验证**（2026-10-15，DeepSeek，观测台接口，临时测试账号验证后已删除）：
 

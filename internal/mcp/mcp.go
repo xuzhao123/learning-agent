@@ -30,6 +30,21 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// stdio server 是第三方程序，只给它最小的环境（照 Codex 的 DEFAULT_ENV_VARS），再加 go run 起 server 要用的工具链变量。
+// 模型密钥、观测台的代理令牌都在本进程的环境里，mcp-go 默认把整个 os.Environ() 传下去，所以命令由这里自己建。
+var serverEnvNames = []string{"HOME", "LOGNAME", "PATH", "SHELL", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ",
+	"GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE", "GOPROXY", "GOSUMDB", "GOFLAGS", "GOTOOLCHAIN", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOINSECURE"}
+
+func serverEnv() []string {
+	var env []string
+	for _, name := range serverEnvNames {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
+}
+
 // Day 6：-mcp-server 启动的 MCP 连接，每个 server 一个；空表示未启用。
 var Conns []*Connection
 
@@ -40,6 +55,20 @@ type Connection struct {
 	// D20：server 明确声明 destructiveHint=true 的工具，执行前要用户确认。
 	// 注解是 server 自己说的，只用来收紧：声明了破坏性就确认；没声明或自称只读不因此免检（外发检查照常）。
 	destructive map[string]bool
+	hints       map[string]Hints // D32：server 声明的只读、幂等，用于调度和续跑
+}
+
+// Hints 是 server 对一个工具的标注里调度要用的两项；没有标注时都是 false（按规范的默认值：可能写、不幂等）。
+type Hints struct{ ReadOnly, Idempotent bool }
+
+// HintsOf 取 agent 侧这个工具的标注。
+func HintsOf(name string) Hints {
+	for _, conn := range Conns {
+		if h, ok := conn.hints[name]; ok {
+			return h
+		}
+	}
+	return Hints{}
 }
 
 // Destructive 报告 agent 侧的这个工具是否被 server 声明为破坏性操作。
@@ -90,7 +119,12 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 		}
 		protocol.Event("capability/event", "mcp_connect", "MCP connect: command="+command)
 		// server 的 stderr 是它的日志通道，原样转到本进程 stderr；stdout 只承载协议消息。
-		c, err = client.NewStdioMCPClientWithOptions(fields[0], nil, fields[1:], transport.WithCommandStderrWriter(os.Stderr))
+		spawn := func(ctx context.Context, command string, _ []string, args []string) (*exec.Cmd, error) {
+			cmd := exec.CommandContext(ctx, command, args...)
+			cmd.Env = serverEnv()
+			return cmd, nil
+		}
+		c, err = client.NewStdioMCPClientWithOptions(fields[0], nil, fields[1:], transport.WithCommandFunc(spawn), transport.WithCommandStderrWriter(os.Stderr))
 		if err != nil {
 			return nil, nil, fmt.Errorf("无法启动 MCP server：%w", err)
 		}
@@ -118,7 +152,7 @@ func Connect(ctx context.Context, command string) (conn *Connection, listed []sd
 		return nil, nil, fmt.Errorf("tools/list 失败：%w", err)
 	}
 	protocol.Event("capability/event", "mcp_tools_list", fmt.Sprintf("MCP tools/list: count=%d", len(result.Tools)), "count", len(result.Tools))
-	return &Connection{client: c, tools: map[string]string{}, transport: transportName, destructive: map[string]bool{}}, result.Tools, nil
+	return &Connection{client: c, tools: map[string]string{}, transport: transportName, destructive: map[string]bool{}, hints: map[string]Hints{}}, result.Tools, nil
 }
 
 var invalidToolChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
@@ -151,6 +185,8 @@ func (m *Connection) Definitions(tools []sdk.Tool) []map[string]any {
 		if hint := tool.Annotations.DestructiveHint; hint != nil && *hint {
 			m.destructive[name] = true
 		}
+		hints := tool.Annotations
+		m.hints[name] = Hints{ReadOnly: hints.ReadOnlyHint != nil && *hints.ReadOnlyHint, Idempotent: hints.IdempotentHint != nil && *hints.IdempotentHint}
 		definitions = append(definitions, map[string]any{"name": name, "description": tool.Description, "parameters": decoded.InputSchema})
 		protocol.Event("capability/event", "mcp_register", "MCP register: "+tool.Name+" → "+name, "tool", name)
 	}
@@ -255,6 +291,7 @@ func Raw(ctx context.Context, command, era, callName, callArgs string) error {
 		return errors.New("mcp-args 需要是有效 JSON（可以故意传错类型，观察 server 端校验）")
 	}
 	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
+	cmd.Env = serverEnv()
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -376,7 +413,7 @@ func newServer(logger *log.Logger) *server.MCPServer {
 		server.WithRecovery(),
 	)
 	tool := sdk.NewTool("calculator",
-		sdk.WithDescription("计算四则运算、括号、sqrt 和 floor，返回 result 数值。"),
+		sdk.WithDescription(tools.Definitions[0]["description"].(string)), // 和内置 calculator 同一份描述
 		// D20：如实声明只读、无破坏性、不访问外部（mcp-go 的默认值按规范是“可能破坏、会访问外部”）。
 		sdk.WithReadOnlyHintAnnotation(true), sdk.WithDestructiveHintAnnotation(false), sdk.WithIdempotentHintAnnotation(true), sdk.WithOpenWorldHintAnnotation(false),
 		sdk.WithString("expression", sdk.Required(), sdk.MaxLength(1024), sdk.Description("数学表达式，例如 (1234*5678) 或 floor(sqrt(2))")),

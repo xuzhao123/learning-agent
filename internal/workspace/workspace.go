@@ -105,8 +105,25 @@ func Open(dir string) error {
 
 // Rules 写进系统提示词：告诉模型工作区在哪、文件工具怎么配合使用。
 func Rules() string {
-	return "\n工作区：" + Dir + "。read_file、glob、grep、edit_file、write_file 的 path 都相对这个目录。先用 glob、grep 找到位置，用 read_file 看清内容再改；局部修改用 edit_file，old_string 从 read_file 的输出原样复制（不含行号前缀）并保证唯一；新建文件或整体重写才用 write_file。改完说明改了哪些文件、哪几处。"
+	base := "\n工作区：" + Dir + "。read_file、glob、grep、edit_file、write_file 的 path 都相对这个目录。"
+	guide := "先用 glob、grep 找到位置，用 read_file 看清内容再改；局部修改用 edit_file，old_string 从 read_file 的输出原样复制（不含行号前缀）并保证唯一；新建文件或整体重写才用 write_file。改完说明改了哪些文件、哪几处。"
+	switch PromptVariant {
+	case "minimal":
+		return base
+	case "extended":
+		return base + guide + extendedRules
+	}
+	return base + guide
 }
+
+// D37 消融：编码提示词的三种写法。minimal 只说工作区在哪（减法：去掉用法指引）；default 是现在的；
+// extended 再加架构评估与复查里的候选（O14 的三句、R3 的“该问就问”、R12 的“没验证的不写成结论”）。
+var PromptVariant = "default"
+
+const extendedRules = "互不依赖的读取（read_file、grep、glob）放在同一次回复里一起发出；找代码用 grep、glob，看代码用 read_file，可以一次读一大段。" +
+	"工作区文件只用 edit_file、write_file 改，bash 用来构建、运行和检查。" +
+	"需求有歧义、几种理解都说得通时，先少量查看确认范围，仍不清楚就向用户问一句（有 ask_user 时用它），不要猜着做很多步。" +
+	"没有验证过的推断不要写成结论；用户给出原文时照原文用。"
 
 // Run 按工具名执行；参数或路径有问题都是永久错误（重试也一样），交给模型修正。
 func Run(ctx context.Context, name, arguments string) (any, error) {
@@ -473,6 +490,9 @@ func editFile(p, oldString, newString string, replaceAll bool) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if why, ok := Protected[path]; ok {
+		return nil, llm.Permanent(errors.New(why))
+	}
 	if oldString == "" {
 		return nil, llm.Permanent(errors.New("old_string 不能为空；新建文件或整体重写请用 write_file"))
 	}
@@ -548,6 +568,9 @@ func writeFile(p, content string) (any, error) {
 	path, err := clean(p)
 	if err != nil {
 		return nil, err
+	}
+	if why, ok := Protected[path]; ok {
+		return nil, llm.Permanent(errors.New(why))
 	}
 	mu.Lock()
 	defer mu.Unlock()

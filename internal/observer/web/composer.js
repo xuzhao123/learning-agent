@@ -83,7 +83,9 @@ dropZone.addEventListener("drop", (ev) => {
 $("composer").onsubmit = (ev) => {
   ev.preventDefault();
   const query = $("query").value.trim();
-  if ($("send").disabled || $("send").classList.contains("stop") || !query) return;
+  // D34：运行中按回车是插话：排进 agent 的下一次模型请求，不打断正在进行的请求或工具。
+  if ($("send").classList.contains("stop")) { if (query) steer(query); return; }
+  if ($("send").disabled || !query) return;
   // 附了图又换到不能看图的模型：说明原因、保留图，换回能看图的模型就能发。
   const vis = ui.run ? modelVision(ui.run.provider || "ark", ui.run.model || "") : modelVision($("provider").value, $("model").value);
   if (attached.length && !vis.vision) {
@@ -96,6 +98,14 @@ $("composer").onsubmit = (ev) => {
   const body = ui.run ? { query, permission: $("perm").value } : { query, provider: $("provider").value, model: $("model").hidden ? "" : $("model").value, workspace: $("workspace").disabled ? "" : $("workspace").value, permission: $("perm").value };
   start(ui.run ? `/runs/${ui.run.id}/messages` : "/runs", images.length ? { ...body, images } : body);
 };
+async function steer(text) {
+  try {
+    const res = await fetch(`/runs/${encodeURIComponent(ui.run.id)}/steer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    if (!res.ok) throw new Error(await res.text());
+    $("query").value = "";
+    autosize();
+  } catch (err) { alert("插话没有送到：" + err.message); }
+}
 $("send").onclick = async (ev) => {
   if (!$("send").classList.contains("stop")) return; // 发送仍走表单提交
   ev.preventDefault();

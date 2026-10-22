@@ -29,8 +29,8 @@ import (
 
 // 工具开关：设置键 → 租户策略里的功能名。DeepSeek 搜索和浏览器一样是上网查资料，共用 browser 功能。编码工具要求租户明确开通 workspace（工作区是本机目录，不随“全部功能”默认放行）。
 // 内置工具不归租户策略管，功能名留空。
-var toolFeatures = map[string]string{"calculator": "", "get_current_datetime": "", "search_notes": "", "rag": "rag", "memory": "memory", "skills": "skills", "mcp": "mcp", "subagents": "subagents", "bash": "bash", "web_search": "browser", "open_page": "browser", "ds_search": "browser", "coding": "workspace"}
-var toolOrder = []string{"calculator", "get_current_datetime", "search_notes", "rag", "memory", "skills", "mcp", "subagents", "bash", "web_search", "open_page", "ds_search", "coding"}
+var toolFeatures = map[string]string{"calculator": "", "get_current_datetime": "", "search_notes": "", "rag": "rag", "memory": "memory", "skills": "skills", "mcp": "mcp", "subagents": "subagents", "ask_user": "", "bash": "bash", "web_search": "browser", "open_page": "browser", "ds_search": "browser", "coding": "workspace"}
+var toolOrder = []string{"calculator", "get_current_datetime", "search_notes", "rag", "memory", "skills", "mcp", "subagents", "ask_user", "bash", "web_search", "open_page", "ds_search", "coding"}
 
 // singleTools 的开关只管一个工具，键名就是工具名：关掉的写进快照的 disallowed_tools，agent 用 -disallowed-tools 去掉。
 var singleTools = []string{"calculator", "get_current_datetime", "search_notes", "web_search", "open_page"}
@@ -40,9 +40,9 @@ var singleTools = []string{"calculator", "get_current_datetime", "search_notes",
 // 搜索交给 ds_search，浏览器只留 open_page 打开要渲染的页面。
 var builtin = map[string]string{
 	"calculator": "on", "get_current_datetime": "on", "search_notes": "off",
-	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "bash": "on", "web_search": "off", "open_page": "on", "ds_search": "on", "coding": "on",
+	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "ask_user": "on", "bash": "on", "web_search": "off", "open_page": "on", "ds_search": "on", "coding": "on",
 	"embedding": "ark", "memory_ttl": "", "provider": "ark", "workspace": "",
-	"max_steps": "0", "context_window": "262144", "tool_output": "4000",
+	"max_steps": "0", "context_window": "0", "tool_output": "4000",
 	"permission_mode": "edit", "permission_rules": "",
 	"hooks": "",
 }
@@ -166,7 +166,8 @@ func valid(key, value string, f settingsFile) error {
 		}
 	case "max_steps", "context_window", "tool_output":
 		limits := map[string][2]int{"max_steps": {0, 1000}, "context_window": {4096, 1048576}, "tool_output": {64, 32768}}[key]
-		if n, err := strconv.Atoi(value); err != nil || n < limits[0] || n > limits[1] {
+		// context_window 为 0 表示按模型（R5）：开对话时取路由表里这个模型的窗口。
+		if n, err := strconv.Atoi(value); err != nil || (n < limits[0] && !(key == "context_window" && n == 0)) || n > limits[1] {
 			return fmt.Errorf("%s 范围为 %d 到 %d", key, limits[0], limits[1])
 		}
 	default:

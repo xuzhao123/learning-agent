@@ -80,6 +80,8 @@ Agent：不执行，把“用户拒绝”回填给模型
 
 停止也是一个请求（`turn/interrupt`）：和 Ctrl+C 走同一条“先收尾、写好检查点、再退出”的路，而且能拿到“已收到”的确认；拿不到再退回发信号。
 
+同一条反向通道还能承载别的“问人”（D34）：模型调用提问工具时，Agent 发 `user/requestInput`，界面显示问题和选项，人回答的文字作为这次工具调用的结果交回模型。方向反过来，界面也可以在一轮进行中发 `turn/steer` 插话：Agent 不打断正在执行的请求或工具，把这句话作为用户消息排进下一次模型请求；这一轮在用上之前就结束了，没用上的随 `turn/completed` 交回界面，作为下一轮的问题。写第二个界面（终端客户端）只用这些消息就能做到网页界面能做的所有事，是检验协议够不够用的办法。
+
 ## 嵌套：父 Agent 是子 Agent 的界面
 
 ```text
@@ -188,8 +190,8 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 
 | 情况 | 现在的处理 | 更强的做法 |
 | --- | --- | --- |
-| 界面进程退出 | Agent 读到 EOF，按中断收尾，写好检查点 | 独立于界面存活的守护进程，界面重启后重新接管 |
-| 界面重启后想看历史 | 读观测台保存的事件记录 | 事件先落盘、带序号，界面按序号补读 |
+| 界面进程退出 | 命令行、队列、子 Agent 用 stdio：读到 EOF，按中断收尾，写好检查点。观测台启动的 Agent 用本地 socket（10-21 起）：照常运行，等界面连回，超过 10 分钟才中断 | 独立于界面存活的守护进程 |
+| 界面重启后接着看 | Agent 发出的消息带序号、留在内存里；界面连回时说出已经收到第几条，Agent 补发之后的与还在等答复的请求；退出前的 `process/exit` 是请求，界面记下才答复 | 事件先落盘，Agent 进程没了也能补读 |
 | 协议上线前的旧存档 | 兼容层把旧日志行换算成同样的通知，只对没有协议标记的存档使用 | 迁移后删除兼容层 |
 | 字段变更 | 新增字段、新通知向后兼容 | 改含义时用新方法名或版本号 |
 
@@ -199,6 +201,8 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 | --- | --- | --- |
 | 连接、等待表、通知与请求 | [protocol.go](../internal/protocol/protocol.go) | [B0 实践](../docs/bonus-protocol/protocol-lab.md) |
 | `-app-server`、stdout/stderr 分流、`turn/start`、`turn/interrupt` | [main.go](../main.go) | 同上 |
+| 插话 `turn/steer`、提问 `user/requestInput`；终端客户端 | [interact.go](../internal/agent/interact.go)、[chat.go](../internal/chat/chat.go) | [Day 34 实践](../docs/day-34/day-34-lab.md) |
+| 可以脱离的连接：`session/attach`、序号与补发、`log`、`process/exit` | [session.go](../internal/protocol/session.go)；观测台一侧 [live.go](../internal/observer/live.go) 的 `adopt` | [B0 实践 3.6](../docs/bonus-protocol/protocol-lab.md#36-观测台重启后接管10-21) |
 | 子 Agent 的事件与请求转发 | [RunChild、relayRequest](../internal/agent/child.go) | 同上 |
 | 界面一侧：保存通知、记下等待项、答复 | [server.go](../internal/observer/server.go) 的 `handle`、`decideNetwork`、`decideTool`；页面 [runs.js](../internal/observer/web/runs.js) 的 `applyNotify` | 同上、[Day 20 实践](../docs/day-20/day-20-lab.md) |
 | 联网审批与高风险确认 | [sandbox.go](../internal/sandbox/sandbox.go)、[approval.go](../internal/agent/approval.go) | [Day 20 实践](../docs/day-20/day-20-lab.md) |
@@ -207,7 +211,7 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 
 B1 之后，模型调用进行中多了 `item/delta`（正文与推理的增量），只用于实时显示、不写进运行记录，权威结果仍是 completed 与存档的完整响应，见 [B1 实践](../docs/bonus-streaming/streaming-lab.md)。
 
-当前边界：增量不落盘，观测台在生成中途重启看不到半段；观测台重启后不能接管正在运行的 Agent；给人看的日志仍是文本；等待表按调用 ID 区分，依赖模型供应商给出的调用 ID 在一个对话里不重复。
+当前边界：增量不落盘，观测台在生成中途重启看不到半段；观测台重启后能接管正在运行的 Agent，但补发的消息只在 Agent 进程的内存里；给人看的日志仍是文本；等待表按调用 ID 区分，依赖模型供应商给出的调用 ID 在一个对话里不重复。
 
 ### 进阶推演
 

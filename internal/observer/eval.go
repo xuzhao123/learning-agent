@@ -379,37 +379,39 @@ func (r *run) trajectory(task string) eval.Source {
 	}
 	var b strings.Builder
 	header := false
-	for _, e := range r.events[from:] {
+	bodies := requestBodies(r.events) // O20：存档里的请求可能是增量，先还原成整份
+	for k, e := range r.events[from:] {
 		main := !e.Sub && (e.Purpose == "" || e.Purpose == "main")
+		body := bodies[from+k]
 		if e.Kind == "request" && !e.Sub {
 			requests++
-			var body struct {
+			var full struct {
 				Messages []llm.Message `json:"messages"`
 			}
-			if main && json.Unmarshal(e.Body, &body) == nil {
-				snapshot = body.Messages
+			if main && json.Unmarshal(body, &full) == nil {
+				snapshot = full.Messages
 			}
 		}
 		switch {
 		case e.Kind == "request" && main && !header:
 			// 第一次主任务请求里有系统提示、用户问题和可用工具。
-			var body struct {
+			var first struct {
 				Messages []message `json:"messages"`
 				Tools    []struct {
 					Function struct{ Name, Description string } `json:"function"`
 				} `json:"tools"`
 			}
-			if json.Unmarshal(e.Body, &body) != nil {
+			if json.Unmarshal(body, &first) != nil {
 				continue
 			}
 			header = true
-			for _, t := range body.Tools {
+			for _, t := range first.Tools {
 				src.Tools += "- " + t.Function.Name + "：" + t.Function.Description + "\n"
 			}
 			if src.Tools == "" {
 				src.Tools = "（没有提供任何工具）\n"
 			}
-			for _, m := range body.Messages {
+			for _, m := range first.Messages {
 				fmt.Fprintf(&b, "\n[%s] %s\n", map[string]string{"system": "系统提示", "user": "用户", "assistant": "之前的回复", "tool": "之前的工具结果"}[m.Role], eval.Clip(m.Content, 800))
 			}
 		case e.Kind == "response" && !e.Sub && e.Purpose == "compact":

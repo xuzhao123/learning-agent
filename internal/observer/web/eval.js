@@ -179,6 +179,11 @@ async function evalDetail(panel, id) {
     for (const [label, ids, cls] of [["回归（基线全对，这次没有全对）", c.regressed, "err"], ["修复（基线全错，这次全对）", c.fixed, "meta"], ["其他变化", c.changed, "meta"]])
       body.append(el("div", cls, `${label}：${ids.length ? ids.join("、") : "无"}`));
   }
+  // D36：编码题里“模型自称完成”和“校验命令通过”的对照。
+  if (sum.coding) {
+    const cd = sum.coding;
+    body.append(el("h3", "", "编码题：自评与校验"), el("div", "sub", `${cd.trials} 个试次：模型自称完成 ${cd.claimed} 次，校验全部通过 ${cd.verified} 次；自称完成但校验没过（误报）${cd.false_claims} 次，没正常结束但校验通过 ${cd.silent_success} 次`));
+  }
   if (sum.ablation?.length) {
     body.append(el("h3", "", "消融：有 / 无这个能力的分差"), el("div", "sub", "不计只有实验组可能通过的检查（如“调用了 search_docs”“带引用”），否则分差虚高"));
     const t = el("table", "eval-table");

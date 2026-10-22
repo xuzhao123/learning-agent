@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -30,8 +31,9 @@ var (
 
 // Changes 是一个进程在一轮里改过的文件。
 type Changes struct {
-	Workspace string             `json:"workspace"` // 工作区的绝对路径：撤销时在这里恢复
-	Files     map[string]*Change `json:"files"`     // 相对路径 → 改动
+	Workspace     string             `json:"workspace"`               // 工作区的绝对路径：撤销时在这里恢复
+	Files         map[string]*Change `json:"files"`                   // 相对路径 → 改动
+	Unsnapshotted []string           `json:"unsnapshotted,omitempty"` // O15：这一轮里 bash 改过的文件，没有快照，撤销时不会还原
 }
 
 // Change 记录一个文件在这一轮里的第一次改动之前和最后一次改动之后。中间改了几次不重要：撤销只需要“之前”，核对只需要“之后”。
@@ -133,13 +135,205 @@ func written(path string, content []byte) {
 	}
 }
 
+// O15：沙箱里的 bash 也能改工作区，但它的改动没有快照。每条 bash 前后各记一次文件的大小与修改时间，比出改了哪些文件：
+// 结果里告诉模型，再记进本轮清单的 Unsnapshotted，撤销时单独列出。只比大小和时间、不读内容：工作区可能很大。
+type Stamp struct {
+	size int64
+	mod  time.Time
+}
+
+const maxStamps = 20000 // 文件太多时只比前这么多个（.git、.data、node_modules 不进）
+
+// Stamps 记下工作区当前每个普通文件的大小与修改时间；没有工作区时为空。
+func Stamps() map[string]Stamp {
+	out := map[string]Stamp{}
+	if root == nil {
+		return out
+	}
+	fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if len(out) >= maxStamps {
+			return fs.SkipAll
+		}
+		if info, err := d.Info(); err == nil && info.Mode().IsRegular() {
+			out[p] = Stamp{info.Size(), info.ModTime()}
+		}
+		return nil
+	})
+	return out
+}
+
+// Changed 比较两次 Stamps：新建、删除、大小或时间变了的文件，按路径排序。
+func Changed(before, after map[string]Stamp) []string {
+	var paths []string
+	for p, a := range after {
+		if b, ok := before[p]; !ok || b != a {
+			paths = append(paths, p)
+		}
+	}
+	for p := range before {
+		if _, ok := after[p]; !ok {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// Protected 是编辑工具不能改的文件（相对路径 → 拒绝时的说明）：由 harness 自己维护的文件，比如 D31 的进度文件。
+// bash 仍然改得到它们，所以用的地方还要自己核对（见 agent 的 progress.go）。
+var Protected = map[string]string{}
+
+// WriteManaged 由 harness 写工作区里的一个文件：和 write_file 一样先存快照（撤销这一轮时一起退），再写入。
+func WriteManaged(p string, data []byte) error {
+	path, err := clean(p)
+	if err != nil || root == nil {
+		return errors.New("没有工作区")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	current, err := root.ReadFile(path)
+	exists := err == nil
+	if err := snapshot(path, current, exists); err != nil {
+		return fmt.Errorf("写入前的快照没存下来，%s 没有改：%w", path, err)
+	}
+	if dir := filepath.Dir(path); dir != "." {
+		if err := root.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	if err := root.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	written(path, data)
+	seen[path] = hash(data)
+	return nil
+}
+
+// Content 读出工作区里一个文件现在的内容（编辑工具刚写完、hook 还没跑时用）；读不到返回 nil。
+func Content(p string) []byte {
+	path, err := clean(p)
+	if err != nil || root == nil {
+		return nil
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	data, err := root.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// Rewritten 在 PostToolUse hook 跑完后调用：文件和工具写进去的内容不一样了，就是 hook 改写的（如 gofmt -w）。
+// 改写算进这次写入：快照的“写后”状态、读取账本都换成现在的内容，撤销时不会当成冲突，模型下次编辑也不用先重读。
+// 返回给模型看的改动片段；没改写返回空。
+func Rewritten(p string, before []byte) string {
+	path, err := clean(p)
+	if err != nil || root == nil {
+		return ""
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	after, err := root.ReadFile(path)
+	if err != nil || string(after) == string(before) {
+		return ""
+	}
+	written(path, after)
+	seen[path] = hash(after)
+	return changedLines(string(before), string(after))
+}
+
+// changedLines 去掉前后相同的行，给出中间变了的一段（-旧 +新），最多 maxDiffLines 行。不是完整 diff，够模型核对。
+func changedLines(before, after string) string {
+	a, b := strings.Split(before, "\n"), strings.Split(after, "\n")
+	start := 0
+	for start < len(a) && start < len(b) && a[start] == b[start] {
+		start++
+	}
+	endA, endB := len(a), len(b)
+	for endA > start && endB > start && a[endA-1] == b[endB-1] {
+		endA, endB = endA-1, endB-1
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "@@ 第 %d 行\n", start+1)
+	n := 0
+	for _, part := range []struct {
+		sign  string
+		lines []string
+	}{{"-", a[start:endA]}, {"+", b[start:endB]}} {
+		for _, l := range part.lines {
+			if n == maxDiffLines {
+				out.WriteString("…（片段过长，已截断）\n")
+				return out.String()
+			}
+			out.WriteString(part.sign + l + "\n")
+			n++
+		}
+	}
+	return out.String()
+}
+
+// Relative 把文字里工作区的绝对路径换成相对路径：hook 在宿主机上跑，报的是宿主机路径，模型在沙箱里看到的是 /workspace。
+func Relative(text string) string {
+	if Dir == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, Dir+"/", "")
+}
+
+// NoteBash 记下一条 bash 改过的文件。读过的文件不再另发“被改过”的提醒（bash 的结果里已经说了是它改的），
+// 清单里记一笔，撤销时列出来。读取账本不更新：模型要用编码工具改它，仍然得先重新读。
+func NoteBash(paths []string) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range paths {
+		if _, ok := seen[p]; ok {
+			current := "deleted"
+			if data, err := root.ReadFile(p); err == nil {
+				current = hash(data)
+			}
+			warned[p] = current
+		}
+	}
+	if SnapshotDir == "" {
+		return
+	}
+	if changes == nil {
+		loaded, err := loadChanges(changesPath())
+		if err != nil {
+			fmt.Printf("Snapshot error: %v\n", err)
+			return
+		}
+		loaded.Workspace, changes = Dir, loaded
+	}
+	for _, p := range paths {
+		if !slices.Contains(changes.Unsnapshotted, p) {
+			changes.Unsnapshotted = append(changes.Unsnapshotted, p)
+		}
+	}
+	sort.Strings(changes.Unsnapshotted)
+	if err := changes.save(changesPath()); err != nil {
+		fmt.Printf("Snapshot error: %v\n", err)
+	}
+}
+
 // Plan 是撤销一段轮次要做的事：每个文件放回这一段开始之前的样子。
 type Plan struct {
-	Workspace string   `json:"workspace"`
-	Restore   []string `json:"restore"`   // 写回原来的内容
-	Delete    []string `json:"delete"`    // 这一段里新建的，删除
-	Unchanged []string `json:"unchanged"` // 已经是原来的样子（比如上次撤销做到一半）：跳过
-	Conflicts []string `json:"conflicts"` // 最后一次写入之后又被改过（bash、人或别的程序）：整次撤销都不做
+	Workspace     string   `json:"workspace"`
+	Restore       []string `json:"restore"`       // 写回原来的内容
+	Delete        []string `json:"delete"`        // 这一段里新建的，删除
+	Unchanged     []string `json:"unchanged"`     // 已经是原来的样子（比如上次撤销做到一半）：跳过
+	Conflicts     []string `json:"conflicts"`     // 最后一次写入之后又被改过（bash、人或别的程序）：整次撤销都不做
+	Unsnapshotted []string `json:"unsnapshotted"` // 这几轮里 bash 改过的文件：没有快照，不会还原，单独列给人看
 
 	root *os.Root
 	from map[string]string // 要写回的文件 → 它的“之前”所在的 blob 路径
@@ -154,6 +348,7 @@ type merged struct {
 // 再和磁盘上的当前内容比对：对得上“之后”才恢复，已经是“之前”就跳过，两个都对不上算冲突。
 func PlanRewind(dirs []string) (*Plan, error) {
 	files := map[string]*merged{}
+	var bashPaths []string
 	workspace := ""
 	for _, dir := range dirs {
 		lists, _ := filepath.Glob(filepath.Join(dir, "changes", "*.json"))
@@ -161,6 +356,11 @@ func PlanRewind(dirs []string) (*Plan, error) {
 			c, err := loadChanges(list)
 			if err != nil {
 				return nil, err
+			}
+			for _, path := range c.Unsnapshotted {
+				if !slices.Contains(bashPaths, path) {
+					bashPaths = append(bashPaths, path)
+				}
 			}
 			if len(c.Files) == 0 {
 				continue
@@ -184,7 +384,8 @@ func PlanRewind(dirs []string) (*Plan, error) {
 			}
 		}
 	}
-	plan := &Plan{Workspace: workspace, Restore: []string{}, Delete: []string{}, Unchanged: []string{}, Conflicts: []string{}, from: map[string]string{}}
+	sort.Strings(bashPaths)
+	plan := &Plan{Workspace: workspace, Restore: []string{}, Delete: []string{}, Unchanged: []string{}, Conflicts: []string{}, Unsnapshotted: append([]string{}, bashPaths...), from: map[string]string{}}
 	if len(files) == 0 {
 		return plan, nil
 	}

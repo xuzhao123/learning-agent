@@ -23,13 +23,19 @@ import (
 // 只撤销文件、保留对话，模型会以为自己改过的东西还在；只退对话、不动文件，模型会对着一份它没见过的代码继续改。
 //
 // 被撤销的轮次不删除，在快照目录里留一个 rewound.json：检查点、调用链、审计都还在，只是不能再续跑或接着聊。
+//
+// D34 加了两种只退一半的做法（终端客户端的 /rewind … files|chat，命令行的 -mode）：
+//   - files：只把文件放回去，对话不退；这几轮照常可以接着聊，不留 rewound.json。
+//   - chat：只退对话，文件不动；这几轮标成已撤销，对话接回上一轮。
+// 上面说的两种错位都由界面在下一轮用提醒告诉模型（turn/start 的 notes），模型不会对着一份它以为不是这样的代码继续改。
 
 // SnapshotDir 是某一轮的快照目录，和检查点放在一起。
 func SnapshotDir(id string) string { return filepath.Join(checkpointDir(tenant.Current), id+".files") }
 
 type rewindMark struct {
 	At     time.Time `json:"at"`
-	Target string    `json:"target"` // 撤销从哪一轮开始（这一轮及之后都撤销了）
+	Target string    `json:"target"`         // 撤销从哪一轮开始（这一轮及之后都撤销了）
+	Mode   string    `json:"mode,omitempty"` // chat：只退了对话，文件没动；空表示文件与对话一起退
 }
 
 // Rewound 判断这一轮是否已经被撤销。
@@ -43,6 +49,7 @@ type RewindResult struct {
 	Turns     []string `json:"turns"`     // 撤销的各轮，从新到旧
 	Continues string   `json:"continues"` // 撤销后对话接着的那一轮；空表示连第一轮也撤销了
 	DryRun    bool     `json:"dry_run"`
+	Mode      string   `json:"mode"` // both、files 或 chat
 	*workspace.Plan
 }
 
@@ -68,7 +75,10 @@ func successors(id string) []string {
 
 // Rewind 撤销 target 这一轮和它之后的各轮。之后的轮次沿续接链往后找，不用调用方给出；
 // 同一轮被接着聊过两次（命令行上分了叉）时不知道磁盘上是哪一支的结果，拒绝。
-func Rewind(target string, dryRun bool) (*RewindResult, error) {
+func Rewind(target string, dryRun bool, mode string) (*RewindResult, error) {
+	if mode != "both" && mode != "files" && mode != "chat" {
+		return nil, errors.New("mode 取 both、files 或 chat")
+	}
 	cp, err := LoadCheckpoint(target)
 	if err != nil {
 		return nil, fmt.Errorf("找不到这一轮的检查点 %s：%w", target, err)
@@ -107,26 +117,45 @@ func Rewind(target string, dryRun bool) (*RewindResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := &RewindResult{Turns: turns, Continues: cp.Continues, DryRun: dryRun, Plan: plan}
+	result := &RewindResult{Turns: turns, Continues: cp.Continues, DryRun: dryRun, Plan: plan, Mode: mode}
+	if mode == "files" {
+		result.Continues = turns[0] // 对话不退：接着最新的一轮
+	}
 	if dryRun {
 		return result, nil
 	}
-	if len(plan.Conflicts) > 0 {
+	if len(plan.Conflicts) > 0 && mode != "chat" {
 		return result, plan.Apply()
 	}
 	// D21：撤销改的是用户的仓库，先记下谁要求的，写不进审计就不做；结局另记一条。
 	ctx := context.Background()
-	request := audit.Record{Actor: "user", Event: "rewind_request", Task: target, Target: target,
-		Detail: fmt.Sprintf("撤销 %d 轮：恢复 %d 个文件，删除 %d 个新建文件", len(turns), len(plan.Restore), len(plan.Delete))}
+	detail := fmt.Sprintf("撤销 %d 轮：恢复 %d 个文件，删除 %d 个新建文件", len(turns), len(plan.Restore), len(plan.Delete))
+	switch mode {
+	case "files":
+		detail = fmt.Sprintf("只撤销文件（对话不退）：%d 轮，恢复 %d 个文件，删除 %d 个新建文件", len(turns), len(plan.Restore), len(plan.Delete))
+	case "chat":
+		detail = fmt.Sprintf("只退对话（文件不动）：%d 轮", len(turns))
+	}
+	request := audit.Record{Actor: "user", Event: "rewind_request", Task: target, Target: target, Detail: detail}
 	if err := audit.Write(ctx, request); err != nil {
 		return nil, fmt.Errorf("审计日志写入失败，没有撤销：%w", err)
 	}
-	if err := plan.Apply(); err != nil {
-		audit.Log(ctx, audit.Record{Actor: "program", Event: "rewind", Task: target, Target: target, Status: "error", Detail: err.Error()})
-		return result, err
+	if mode != "chat" {
+		if err := plan.Apply(); err != nil {
+			audit.Log(ctx, audit.Record{Actor: "program", Event: "rewind", Task: target, Target: target, Status: "error", Detail: err.Error()})
+			return result, err
+		}
+	}
+	if mode == "files" {
+		audit.Log(ctx, audit.Record{Actor: "program", Event: "rewind", Task: target, Target: target, Status: "ok", Detail: detail})
+		return result, nil
 	}
 	// 文件都恢复了才标记：中途失败时这几轮仍是未撤销，可以再执行一次，已恢复的文件会跳过。
-	mark, _ := json.Marshal(rewindMark{At: time.Now().UTC(), Target: target})
+	markMode := ""
+	if mode == "chat" {
+		markMode = "chat"
+	}
+	mark, _ := json.Marshal(rewindMark{At: time.Now().UTC(), Target: target, Mode: markMode})
 	for _, id := range turns {
 		if err := os.MkdirAll(SnapshotDir(id), 0o700); err != nil {
 			return result, err
@@ -145,17 +174,18 @@ func RewindCommand(args []string) error {
 	flags := flag.NewFlagSet("rewind", flag.ContinueOnError)
 	flags.StringVar(&tenant.Current, "tenant", "", "这一轮所属的租户；不给时是平台空间 .data/")
 	dryRun := flags.Bool("dry-run", false, "只列出会恢复、删除哪些文件以及冲突，不改动")
+	mode := flags.String("mode", "both", "D34：both 文件与对话一起退；files 只退文件、对话不退；chat 只退对话、文件不动")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 || !ValidID(flags.Arg(0)) {
-		return errors.New("用法：go run . rewind [-tenant 租户] [-dry-run] <轮次的检查点ID>")
+		return errors.New("用法：go run . rewind [-tenant 租户] [-dry-run] [-mode both|files|chat] <轮次的检查点ID>")
 	}
 	if tenant.Current != "" && !tenant.Valid(tenant.Current) {
 		return errors.New("tenant 只能是小写字母、数字和连字符")
 	}
 	audit.Task, audit.Conversation = flags.Arg(0), os.Getenv("AGENT_CONVERSATION_ID")
-	result, err := Rewind(flags.Arg(0), *dryRun)
+	result, err := Rewind(flags.Arg(0), *dryRun, *mode)
 	if result != nil {
 		data, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(data))

@@ -255,6 +255,7 @@ type Trial struct {
 | --- | --- | --- |
 | 五类指标（完成率、异常与可续跑、延迟、成本、工具可靠性） | [metrics.go](../internal/metrics/metrics.go)，`go run . metrics` | [Day 15 实践](../docs/day-15/day-15-lab.md) |
 | 评测集、确定性打分、DeepSeek 三票评审、pass@1 聚类标准误、pass^k、消融 Δ、基线逐题对比 | [internal/eval](../internal/eval/)、[eval/cases.jsonl](../eval/cases.jsonl)，`go run . eval` | [Day 16 实践](../docs/day-16/day-16-lab.md) |
+| 编码任务评测：仓库快照、校验命令在沙箱里只读运行、自评与校验分开；消融开关 | [coding.go](../internal/eval/coding.go)、[eval/coding-cases.jsonl](../eval/coding-cases.jsonl)、`-check`；`-tool-format`、`-coding-prompt`、`-todo`、`-clear-old-results` | [Day 36](../docs/day-36/day-36-lab.md)、[Day 37 实践](../docs/day-37/day-37-lab.md) |
 | 归因卡片、开放编码、检查点与请求快照分叉回放 | [internal/eval](../internal/eval/)、[ForkCheckpoint、ForkSnapshot](../internal/agent/checkpoint.go)、观测台“归因”按钮 | [Day 17 实践](../docs/day-17/day-17-lab.md) |
 
 每个试次经 `agent.RunChild` 作为一个新任务执行，工具过程取自协议事件（见 [第 19 篇](19-agent-client-protocol.md)），结局与用量以检查点为准。

@@ -46,6 +46,13 @@ async function uploadFiles(r, list) {
   f.notice = errors.length ? errors.join("\n") : `已上传 ${list.length} 个文件：下一条消息里告诉 agent 文件名，它在 /workspace 里能读到`;
   await loadFiles();
 }
+async function deleteFile(r, file) {
+  if (!confirm(`删除沙箱里的 ${file.path}${file.kind === "dir" ? " 及其全部内容" : ""}？删除不能撤销。`)) return;
+  const f = ui.files, res = await fetch(fileURL(r, file.path), { method: "DELETE" });
+  f.notice = res.ok ? `已删除 ${file.path}` : `删除失败：${(await res.text()).trim()}`;
+  if (res.ok) { f.sel = null; f.preview = null; }
+  await loadFiles();
+}
 export function renderFilesPanel() {
   const panel = $("subpanel"), r = ui.run, f = ui.files;
   if (!r?.sandbox || ui.page !== "chat") { ui.filesOpen = false; panel.hidden = true; panel.replaceChildren(); return; }
@@ -84,6 +91,11 @@ export function renderFilesPanel() {
   if (sel) {
     const bar = el("div", "label", sel.path + " ");
     if (sel.kind === "file") { const a = el("a", "", "下载"); a.href = fileURL(r, sel.path); a.download = sel.path.split("/").pop(); bar.append(a); }
+    const del = el("button", "link", "删除");
+    del.type = "button"; del.disabled = !r.exit;
+    del.title = r.exit ? (sel.kind === "dir" ? "删除这个目录和里面的全部内容" : "删除") + "（写审计）" : "运行中不能删除，等这一轮结束";
+    del.onclick = () => deleteFile(r, sel);
+    bar.append(" ", del);
     body.append(bar);
     const p = f.preview || {};
     if (p.image) { const img = el("img", "fp-img"); img.src = p.image; img.alt = sel.path; body.append(img); }

@@ -147,7 +147,7 @@ Termination: no_tool_calls
 ## 5. 已知边界
 
 - 只支持一个 MCP server、只支持 stdio；没有处理工具列表变化通知，启动后的工具列表不再更新。
-- SDK 启动子进程时会把本进程的**全部环境变量**传给 server（mcp-go 的实现是 `os.Environ()` 加上额外变量）。如果 `ARK_API_KEY` 设在环境变量里，第三方 server 也能读到。这违反最小权限原则；`.env` 里的密钥只在本进程内读取，不会进入环境变量。
+- SDK 默认把本进程的**全部环境变量**传给 server（mcp-go 的实现是 `os.Environ()` 加上额外变量），设在环境变量里的密钥、观测台给 agent 的代理令牌，第三方 server 都能读到。10-21 起改用 `transport.WithCommandFunc` 自己建命令，只给最小环境：照 Codex 的默认白名单（`HOME`、`PATH`、`USER`、`LANG`、`TMPDIR` 等）加上 `go run` 起 server 要用的 Go 工具链变量；`-mcp-raw` 同样处理。验证：写一个列出环境变量名的 stdio server，改之前能看到本进程的令牌，改之后只剩白名单里的几项。
 - 工具执行错误会走原有的重试逻辑（默认额外重试 2 次）。参数错误是确定性的，重试不会成功，属于 Day 2 提到的“错误分类后再决定是否重试”的缺口。
 - 工具结果直接进入模型上下文，只受原有的工具输出长度上限约束，没有专门防范结果里的提示注入。
 - 观测台没有接入 `-mcp-server`。

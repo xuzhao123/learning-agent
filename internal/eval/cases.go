@@ -17,7 +17,7 @@ import (
 // D16：一道评测题。固定的是题目、参考答案和判定标准，不是模型的回答或工具调用顺序。
 type Case struct {
 	ID        string   `json:"id"`
-	Suite     string   `json:"suite"`   // regression：D15 用过、调试时看过的题；capability：新写的题
+	Suite     string   `json:"suite"`   // regression：D15 用过、调试时看过的题；capability：新写的题；coding：D36 编码任务
 	Holdout   bool     `json:"holdout"` // 留出：调试时不跑，只在最后报告时运行（-set holdout|all）
 	Group     string   `json:"group"`
 	Tags      []string `json:"tags"` // env:network：依赖外网，单独统计，不计入主分
@@ -25,6 +25,7 @@ type Case struct {
 	Args      []string `json:"args"`
 	Reference string   `json:"reference"` // 参考答案：证明题目可解、打分器配对，也给评审模型参照
 	Ablation  string   `json:"ablation"`  // 消融：再跑一组去掉这个参数的对照，如 -rag
+	Repo      *Repo    `json:"repo"`      // D36：编码任务的仓库快照，见 coding.go
 	Graders   []Grader `json:"graders"`
 }
 
@@ -43,6 +44,8 @@ type Grader struct {
 	Outcomes []string `json:"outcomes,omitempty"`
 	Rubric   string   `json:"rubric,omitempty"` // judge：写成具体的 PASS / FAIL 条件
 	WithOnly bool     `json:"with_only,omitempty"`
+	Run      string   `json:"run,omitempty"`   // command：在只读挂载工作区的沙箱里跑的校验命令，退出码 0 为通过（D36）
+	Label    string   `json:"label,omitempty"` // command：给人看的一句话，说明这条命令检查什么
 }
 
 func (g Grader) Process() bool { return g.Type == "tool_used" || g.Type == "outcome" }
@@ -87,6 +90,8 @@ func (g Grader) Name() string {
 		return "结局为 " + strings.Join(g.outcomes(), " 或 ")
 	case "judge":
 		return "评审：" + g.Rubric
+	case "command":
+		return "校验命令：" + g.Label
 	}
 	return g.Type
 }
@@ -157,15 +162,23 @@ func LoadCases(path string) ([]Case, string, error) {
 	return cases, hex.EncodeToString(sum[:6]), scanner.Err()
 }
 
-var knownTypes = []string{"number", "contains", "regex", "weekday", "minutes_left", "judge", "tool_used", "outcome"}
+var knownTypes = []string{"number", "contains", "regex", "weekday", "minutes_left", "judge", "tool_used", "outcome", "command"}
 
 func (c Case) check() error {
 	// 用例ID会拼进任务ID：eval-<评测ID>-<用例>-<组>-<序号>。
 	if !agent.ValidID(c.ID) || len(c.ID) > 40 || strings.Contains(c.ID, "-sub-") {
 		return fmt.Errorf("用例ID只能包含字母、数字和 ._-，最长40")
 	}
-	if c.Suite != "regression" && c.Suite != "capability" {
-		return fmt.Errorf("suite 须为 regression 或 capability")
+	if c.Suite != "regression" && c.Suite != "capability" && c.Suite != "coding" {
+		return fmt.Errorf("suite 须为 regression、capability 或 coding")
+	}
+	if (c.Suite == "coding") != (c.Repo != nil) {
+		return fmt.Errorf("coding 题须带 repo，其他题不带")
+	}
+	if c.Repo != nil {
+		if err := c.Repo.check(); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(c.Question) == "" || strings.TrimSpace(c.Reference) == "" {
 		return fmt.Errorf("需要 question 和 reference")
@@ -182,6 +195,9 @@ func (c Case) check() error {
 			if _, err := regexp.Compile(g.Pattern); err != nil {
 				return err
 			}
+		}
+		if g.Type == "command" && (c.Repo == nil || strings.TrimSpace(g.Run) == "" || g.Label == "") {
+			return fmt.Errorf("command 打分器只用于带 repo 的题，需要 run 和 label")
 		}
 		if (g.Type == "judge" && strings.TrimSpace(g.Rubric) == "") || (g.Type == "tool_used" && g.Tool == "") || (g.Type == "contains" && len(g.All)+len(g.Any) == 0) {
 			return fmt.Errorf("打分器 %s 缺少参数", g.Type)

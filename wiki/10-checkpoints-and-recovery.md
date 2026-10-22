@@ -220,11 +220,11 @@ func atomicWrite(path string, data []byte) error {
 
 [Checkpoint.write、LockCheckpoint、resumeContext](../internal/agent/checkpoint.go)提供临时文件替换、flock 和未确认调用恢复；[Run 与 replayBatch](../internal/agent/react.go)以执行边界保存消息，恢复可重复调用或回填未知。
 
-当前写入没有文件/目录 fsync、状态版本迁移或分布式 fencing；模型请求计费也不是独立耐久账本。上述更强写入和状态结构是学习用设计，不作为当前实现保证。
+D38 起检查点有格式版本（读旧版本时迁移），影响下一步、要带进下一轮的状态（私有来源、外发授权、读后才写账本、上次告诉模型的环境、用量提醒档位）收在一个 `state` 里；D40 起另有只追加的会话记录（[journal.go](../internal/agent/journal.go)），检查点记下写这份快照时记录到了第几条（`log_seq`），观测台在 agent 已经结束时从记录补读，见 [Day 38](../docs/day-38/day-38-lab.md)、[Day 40 实践](../docs/day-40/day-40-lab.md)。当前写入没有文件/目录 fsync 或分布式 fencing；模型请求计费也不是独立耐久账本。上述更强写入和状态结构是学习用设计，不作为当前实现保证。
 
 D20 起缩小了“结果未知”的范围：每项调用一结束就写 `.calls/` 下的结果日志（[writeJournal](../internal/agent/approval.go)），续跑时 [replayBatch](../internal/agent/react.go) 按“日志里有 → 取回；可重复 → 重做；其余 → 问人要不要重做，拒绝或没人答就回填未知”处理。私有数据来源、动作窗口与无进展计数也存进检查点，换进程不清零。多租户补充后检查点放在租户目录下（[checkpointDir](../internal/agent/checkpoint.go)），别的租户用同一个任务ID续跑找不到它。细节见 [17 · 权限、确认与审计](17-permissions-approval-audit.md#结果日志与做完没有)。
 
-D29 的文件快照按轮放在检查点旁边（[snapshot](../internal/workspace/snapshot.go)），只覆盖 `edit_file`、`write_file`；[Rewind](../internal/agent/rewind.go) 沿续接链找到之后各轮、加锁、核对冲突、先写审计再恢复，被撤销的轮次留作记录，不能续跑或接着聊。子 agent 的改动记在派出它的那一轮。bash 的改动、单独退文件或对话、快照的保留期限都还没有做。
+D29 的文件快照按轮放在检查点旁边（[snapshot](../internal/workspace/snapshot.go)），只覆盖 `edit_file`、`write_file`；[Rewind](../internal/agent/rewind.go) 沿续接链找到之后各轮、加锁、核对冲突、先写审计再恢复，被撤销的轮次留作记录，不能续跑或接着聊。子 agent 的改动记在派出它的那一轮。bash 的改动不还原（D32 起会列出来）；D34 起可以只退文件或只退对话（终端客户端与命令行，错位由下一轮的提醒说明）；快照的保留期限还没有做。
 
 ### 进阶推演
 

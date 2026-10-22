@@ -40,6 +40,7 @@ export const TOOL_INFO = {
   skills: ["Skills", "Skills 中心里启用的 skill：常驻名字和用途，用到时再加载正文"],
   mcp: ["MCP", "MCP 中心里启用的 server，工具注册为 mcp_<名字>"],
   subagents: ["子 agent", "spawn_agent：独立上下文的子进程，继承这里的工具，不继承长期记忆"],
+  ask_user: ["向你提问", "ask_user：模型在运行中向你提一个问题（可带选项），等你在对话里回答再继续"],
   bash: ["Bash 沙箱", "bash：bubblewrap 沙箱，默认断网，联网逐次审批"],
   web_search: ["必应搜索", "web_search：无头 Chrome 打开必应搜索。必应多半不给自动化浏览器结果，搜索交给 DeepSeek，所以默认关"],
   open_page: ["打开网页", "open_page：无头 Chrome 打开网页读正文，会执行页面脚本，适合要渲染后才有内容的页面；只读"],
@@ -51,7 +52,7 @@ function runTools(r) {
   const sent = r.calls.at(-1)?.req.tools;
   const has = (name, group = true) => sent ? sent.some((t) => t.function?.name === name) : group && !r.source && !r.disallowedTools.includes(name);
   return { calculator: has("calculator"), get_current_datetime: has("get_current_datetime"), search_notes: has("search_notes"), web_search: has("web_search", r.browser), open_page: has("open_page", r.browser),
-    rag: r.rag || (sent || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, bash: r.bash, ds_search: r.dsSearch, coding: !!r.workspace };
+    rag: r.rag || (sent || []).some((t) => t.function?.name === "search_docs"), memory: r.memory, skills: r.skills.length > 0, mcp: r.mcp.length > 0, subagents: r.subagents, ask_user: has("ask_user", r.askUser), bash: r.bash, ds_search: r.dsSearch, coding: !!r.workspace };
 }
 export function toolOn(key) {
   if (ui.run) return !!runTools(ui.run)[key];
@@ -198,7 +199,7 @@ export function syncComposer() {
   if (imported) $("model").hidden = $("workspace").hidden = true;
   $("query").disabled = !!imported;
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !!imported || !$("query").value.trim();
-  $("query").placeholder = imported ? "导入的对话只能查看" : r ? "继续提问" : "给 agent 布置一个任务，/ 选命令";
+  $("query").placeholder = imported ? "导入的对话只能查看" : running ? "运行中：输入的话会排进 agent 的下一次请求（插话）" : r ? "继续提问" : "给 agent 布置一个任务，/ 选命令";
   const steps = r ? r.maxSteps : Number(s?.values.max_steps || 0);
   $("mode-chip").textContent = imported ? `${imported} · ${r.calls.find((c) => c.res?.model)?.res.model || ""}` : r && ui.toolsOpen ? $("tools-link").title : steps > 0 ? `预算 ${steps} 次请求` : "";
   // 只在需要人注意时提示；常规操作说明不放在输入框下面。
@@ -301,6 +302,7 @@ export async function rewindTurn(r, t) {
   const n = plan.turns.length, none = !plan.restore.length && !plan.delete.length;
   const text = `撤销第 ${t.n} 轮${n > 1 ? `及之后，共 ${n} 轮` : ""}：文件放回这一轮开始之前，对话${plan.continues ? "退回上一轮" : "也全部撤销，之后需要新建对话"}。`
     + list("恢复", plan.restore) + list("删除（这几轮新建的）", plan.delete) + (none ? "\n这几轮没有用编码工具改过文件。" : "")
+    + list("bash 改过、不会还原（没有快照）", plan.unsnapshotted)
     + "\n\n只撤销 edit_file、write_file 的改动；bash 改的文件没有快照。确定？";
   if (!confirm(text)) return;
   try { await call(false); } catch (err) { return alert(err.message); }

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>对话</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <div id="thread"><div class="msg">你好，我能帮你做什么？</div></div>
+  <form id="composer">
+    <textarea id="query" rows="2" placeholder="给 agent 布置一个任务"></textarea>
+    <div class="row">
+      <span id="mode-chip">edit</span>
+      <button id="send" type="submit" aria-label="发送">↑</button>
+    </div>
+  </form>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

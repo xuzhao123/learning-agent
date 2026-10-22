@@ -15,7 +15,7 @@ import (
 //	usage         请求里带 stream_options.include_usage 时，[DONE] 前多一个 choices 为空、只有 usage 的 chunk
 //
 // agent 用它边收边拼出完整回答，观测台的代理用同一份逻辑把转发过的流还原成完整响应留档。
-// Responses 协议的流（每行 data 带 type）也由它接收，拼回同样的 Message，见 responses.go。
+// Responses 与 Anthropic Messages 协议的流（每行 data 带 type）也由它接收，拼回同样的 Message，见 responses.go、messages.go。
 type Stream struct {
 	ID, Model    string
 	Message      Message
@@ -24,6 +24,8 @@ type Stream struct {
 	RawUsage     json.RawMessage // 原样保留供应商的 usage（含 total_tokens、推理 token 等），观测台显示用
 	Chunks       int
 	Done         bool // 读到了 [DONE]
+
+	toolAt map[int]int // Messages 协议：内容块 index → Message.ToolCalls 里的下标
 }
 
 type streamChunk struct {
@@ -68,6 +70,9 @@ func (s *Stream) Add(line string) (content, reasoning string, err error) {
 		Type string `json:"type"`
 	}
 	if json.Unmarshal([]byte(data), &kind) == nil && kind.Type != "" {
+		if messagesEventType(kind.Type) {
+			return s.addMessages(data)
+		}
 		return s.addResponses(data)
 	}
 	var c streamChunk

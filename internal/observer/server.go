@@ -3,6 +3,7 @@ package observer
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"embed"
@@ -26,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"learning-agent/internal/agent"
 	"learning-agent/internal/audit"
 	"learning-agent/internal/llm"
 	"learning-agent/internal/protocol"
@@ -64,6 +66,7 @@ type event struct {
 	Skills     []string        `json:"skills,omitempty"` // 本对话启用的 skill 与 MCP server 快照，续聊沿用
 	MCP        []mcpServer     `json:"mcp,omitempty"`
 	Subagents  bool            `json:"subagents,omitempty"`        // 本对话允许 spawn_agent，续聊沿用
+	AskUser    bool            `json:"ask_user,omitempty"`         // D34：本对话提供 ask_user，模型可以在运行中向人提问，续聊沿用
 	Browser    bool            `json:"browser,omitempty"`          // 本对话启用浏览器工具，续聊沿用
 	DSSearch   bool            `json:"ds_search,omitempty"`        // 本对话启用 DeepSeek 搜索工具，续聊沿用
 	Disallowed []string        `json:"disallowed_tools,omitempty"` // 设置快照：关掉的单个工具（内置工具、web_search、open_page），续聊沿用；旧存档没有，表示都开
@@ -86,6 +89,7 @@ type event struct {
 	Span       string          `json:"span,omitempty"`           // D13：request 上记 agent 的 chat span ID（来自 traceparent 头）
 	Method     string          `json:"method,omitempty"`         // B0：notify / approval 事件的协议方法名，参数在 Body
 	RPC        int64           `json:"rpc,omitempty"`            // B0：agent 发来的请求ID（approval），回复时带回
+	ASeq       int64           `json:"aseq,omitempty"`           // B0 接管：这条事件对应的协议消息在 agent 一侧的序号；重启后从最大的序号之后补齐
 	Chunks     int             `json:"chunks,omitempty"`         // B1：流式响应的 chunk 数；Body 是按 chunk 拼回的完整响应
 	FirstToken int64           `json:"first_token_ms,omitempty"` // B1：从转发请求到收到第一段正文或推理的毫秒数
 	Protocol   bool            `json:"protocol,omitempty"`       // B0：start/continue 上标记这一轮经协议运行；之前的存档没有，页面据此启用旧存档兼容
@@ -100,20 +104,24 @@ type run struct {
 	Source    string // 从 Codex / Claude Code 导入的对话，见 event.Source
 	Done      bool
 
-	mu       sync.Mutex
-	calls    int
-	seq      int // 最后一个事件的序号：只增不减。delta 只在内存里也占序号，所以重启后要从存档里最大的序号接着编
-	events   []event
-	changed  chan struct{}
-	file     *os.File
-	proc     *os.Process // 正在运行的 agent 进程；强制结束时向它的进程组发 SIGKILL
-	stopping bool        // 已请求过一次停止；再按一次强制结束
-	rootTask string      // 本次启动的父 agent 任务ID：启动后第一个带任务ID的请求一定来自父 agent
-	token    string      // 本次启动的 agent 进程访问模型代理用的令牌（AGENT_PROXY_TOKEN），每次启动重新生成
+	mu         sync.Mutex
+	chains     map[string]*chain // O20：每个任务最近一次主请求，代理据此把存档写成增量
+	calls      int
+	seq        int // 最后一个事件的序号：只增不减。delta 只在内存里也占序号，所以重启后要从存档里最大的序号接着编
+	events     []event
+	changed    chan struct{}
+	file       *os.File
+	proc       *os.Process // 正在运行的 agent 进程；强制结束时向它的进程组发 SIGKILL
+	stopping   bool        // 已请求过一次停止；再按一次强制结束
+	rootTask   string      // 本次启动的父 agent 任务ID：启动后第一个带任务ID的请求一定来自父 agent
+	token      string      // 本次启动的 agent 进程访问模型代理用的令牌（AGENT_PROXY_TOKEN），每次启动重新生成
+	after      int64       // 接管时已经存下的最后一条协议消息的序号：补发里不超过它的不再记一遍（见 live.go）
+	exitStatus string      // agent 退出前用 process/exit 报的状态；接管的进程拿不到退出码，靠它
 	// B0：与正在运行的 agent 之间的协议连接，以及它在等待答复的联网审批（域名 → 请求ID）。
 	conn      *protocol.Conn
 	approvals map[string][]int64
 	toolWaits map[string]toolWait // D20：等待确认的高风险操作（调用ID → 请求）
+	asks      map[string]int64    // D34：模型在等人回答的提问（ask_user 的调用ID → 请求ID）
 }
 
 type toolWait struct {
@@ -205,9 +213,12 @@ func Run(args []string, mcpHandler http.Handler) error {
 	mux.HandleFunc("POST /runs/{id}/stop", s.stopRun)
 	mux.HandleFunc("POST /runs/{id}/network", s.decideNetwork)
 	mux.HandleFunc("POST /runs/{id}/approval", s.decideTool)
+	mux.HandleFunc("POST /runs/{id}/answer", s.answerQuestion)
+	mux.HandleFunc("POST /runs/{id}/steer", s.steerRun)
 	mux.HandleFunc("POST /runs/{id}/rewind", s.rewindRun)
 	mux.HandleFunc("GET /runs/{id}/files", s.listFiles)
 	mux.HandleFunc("GET /runs/{id}/files/{path...}", s.downloadFile)
+	mux.HandleFunc("DELETE /runs/{id}/files/{path...}", s.deleteFile)
 	mux.HandleFunc("POST /runs/{id}/files", s.uploadFile)
 	mux.HandleFunc("GET /audit", s.listAudit)
 	mux.HandleFunc("POST /llm/{id}", s.proxy)
@@ -376,7 +387,7 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// 设置快照：这一刻打开的工具，写进 start 事件，续聊沿用。
-	snap := event{Kind: "start", RAG: settings.on("rag"), Memory: settings.on("memory"), MemoryTTL: settings.Values["memory_ttl"], Subagents: settings.on("subagents"),
+	snap := event{Kind: "start", RAG: settings.on("rag"), Memory: settings.on("memory"), MemoryTTL: settings.Values["memory_ttl"], Subagents: settings.on("subagents"), AskUser: settings.on("ask_user") && !lab,
 		Browser: settings.on("web_search") || settings.on("open_page"), DSSearch: settings.on("ds_search"), Provider: input.Provider, Model: input.Model, Bash: settings.on("bash"), Workspace: workspace, WorkDir: workDir,
 		Permission: settings.Values["permission_mode"], Rules: ruleLines(settings.Values["permission_rules"])}
 	for _, name := range singleTools {
@@ -400,6 +411,10 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 		snap.MaxSteps = -1 // 设置里 0 表示不限；快照里 0 留给“旧存档没有这项、按 agent 默认值”
 	}
 	snap.Window, _ = strconv.Atoi(settings.Values["context_window"])
+	if snap.Window == 0 {
+		// R5：设置里是“按模型”，取路由表里这个模型核对过的输入上限；不知道时用 262144（改成按模型之前的默认值）。
+		snap.Window = cmp.Or(llm.WindowOf(input.Provider, input.Model), 262144)
+	}
 	snap.ToolOutput, _ = strconv.Atoi(settings.Values["tool_output"])
 	if settings.on("skills") {
 		snap.Skills = settings.Skills
@@ -646,11 +661,11 @@ func (r *run) beginTurn(query string) (context.Context, trace.Span) {
 	return ctx, span
 }
 
-// B0：agent 以 -app-server 启动，stdout 是协议，stderr 是给人看的终端输出。
-// turn 为 nil 时（上下文、检索实验）由命令行参数决定要做什么，不发 turn/start。
+// B0：agent 以 -app-server 启动，协议走 .data/[tenants/<租户>/]live/ 下的 Unix socket（见 live.go），给人看的终端输出也经协议的 log 通知送来。
+// 观测台退出时 agent 照常运行，观测台重启后重新接管（adopt）。turn 为 nil 时（上下文、检索实验）由命令行参数决定要做什么，不发 turn/start。
 //
 // 多租户：租户对话的 agent 带 -tenant 启动，读写都落在租户目录下；发起人的用户名经 AGENT_USER 进审计。
-// 每次启动生成一个代理令牌：模型代理只接受带着本对话当前令牌的请求，别的进程不能往这条对话里塞记录。
+// 每次启动生成一个代理令牌：模型代理只接受带着本对话当前令牌的请求，别的进程不能往这条对话里塞记录；重新接管时 agent 也要出示它。
 func (s *server) launch(ctx context.Context, r *run, args []string, turn map[string]any, userName string) {
 	span := trace.SpanFromContext(ctx)
 	if r.Tenant != "" {
@@ -658,52 +673,62 @@ func (s *server) launch(ctx context.Context, r *run, args []string, turn map[str
 	}
 	token := newToken()
 	cmd := s.agentCommand(context.Background(), append([]string{"-app-server"}, args...)...)
-	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID, "AGENT_USER="+userName, "AGENT_PROXY_TOKEN="+token)
+	cmd.Env = append(os.Environ(), "LLM_API_URL=http://"+s.addr+"/llm/"+r.ID, "AGENT_CONVERSATION_ID="+r.ID, "AGENT_USER="+userName, "AGENT_PROXY_TOKEN="+token, "AGENT_APP_SOCKET="+livePath(r, ".sock"))
 	cmd.Env = append(cmd.Env, telemetry.Env(ctx)...)
-	stdin, _ := cmd.StdinPipe()
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-	conn := protocol.NewConn(stdout, stdin, r.handle)
-	r.mu.Lock()
-	r.conn, r.approvals, r.toolWaits, r.token = conn, map[string][]int64{}, map[string]toolWait{}, token
-	r.mu.Unlock()
-	// 自己的进程组：停止时向整组发信号。-dev 模式下组里是 go run 和它编译出的 agent，两者都能收到。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
+	os.MkdirAll(s.abs(filepath.Dir(livePath(r, ".sock"))), 0o700)
+	s.cleanLive(r)
+	// 文件描述符 2 接到文件上：观测台退出后 agent 往这里写也不会出错；正常日志走协议，这里只会有崩溃一类的输出。
+	errFile, err := os.OpenFile(s.abs(livePath(r, ".err")), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
 		r.add(event{Kind: "exit", Text: err.Error()})
 		telemetry.End(span, err, "launch_error")
-	} else {
-		r.mu.Lock()
-		r.proc, r.stopping, r.rootTask = cmd.Process, false, ""
-		r.mu.Unlock()
-		if turn != nil {
-			go func() {
-				if err := conn.Call(context.Background(), "turn/start", turn, nil); err != nil {
-					r.add(event{Kind: "stdout", Text: "turn/start 失败：" + err.Error()})
-				}
-			}()
-		}
-		var wg sync.WaitGroup
-		wg.Add(1)
-		// 终端输出只有人读；页面需要的结构化信息都来自协议通知。
-		go r.copyLines(&wg, "stdout", stderr)
-		go func() {
-			wg.Wait()
-			<-conn.Closed()
-			err := cmd.Wait()
-			r.mu.Lock()
-			r.proc, r.conn, r.approvals, r.toolWaits = nil, nil, nil, nil
-			r.mu.Unlock()
-			text := "exit 0"
-			if err != nil {
-				text = err.Error()
-			}
-			// 先结束根 span 再记 exit：页面看到 exit 时，interaction 已经写进 trace 文件。
-			span.SetAttributes(attribute.String("process.exit", text))
-			telemetry.End(span, err, "agent_exit")
-			r.add(event{Kind: "exit", Text: text})
-		}()
+		return
 	}
+	cmd.Stderr = errFile
+	r.mu.Lock()
+	r.approvals, r.toolWaits, r.asks, r.token, r.exitStatus = map[string][]int64{}, map[string]toolWait{}, map[string]int64{}, token, ""
+	r.mu.Unlock()
+	// 自己的进程组：停止时向整组发信号；观测台所在终端的 Ctrl-C 也不会传到 agent。-dev 模式下组里是 go run 和它编译出的 agent。
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	err = cmd.Start()
+	errFile.Close()
+	if err != nil {
+		r.add(event{Kind: "exit", Text: err.Error()})
+		telemetry.End(span, err, "launch_error")
+		return
+	}
+	if info, err := json.Marshal(liveInfo{PID: cmd.Process.Pid, Token: token}); err == nil {
+		os.WriteFile(s.abs(livePath(r, ".json")), info, 0o600)
+	}
+	r.mu.Lock()
+	r.proc, r.stopping, r.rootTask = cmd.Process, false, ""
+	r.mu.Unlock()
+	exited := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(exited)
+	}()
+	go func() {
+		conn := s.connect(r, token, 0, exited, "")
+		if conn != nil && turn != nil {
+			if err := conn.Call(context.Background(), "turn/start", turn, nil); err != nil {
+				r.add(event{Kind: "stdout", Text: "turn/start 失败：" + err.Error()})
+			}
+		}
+		if conn != nil {
+			<-conn.Closed()
+		}
+		<-exited
+		text := "exit 0"
+		if waitErr != nil {
+			text = waitErr.Error()
+		}
+		// 先结束根 span 再记 exit：页面看到 exit 时，interaction 已经写进 trace 文件。
+		span.SetAttributes(attribute.String("process.exit", text))
+		telemetry.End(span, waitErr, "agent_exit")
+		s.finish(r, text)
+	}()
 }
 
 // snapshotArgs 把设置快照还原成 agent 的启动参数；首问和续聊共用，保证同一条对话每一轮的工具一致。
@@ -719,6 +744,9 @@ func snapshotArgs(e event, netAllow []string) []string {
 	args = appendCapabilityArgs(args, e.Skills, e.MCP)
 	if e.Subagents {
 		args = append(args, "-subagents")
+	}
+	if e.AskUser {
+		args = append(args, "-ask-user")
 	}
 	if e.Browser {
 		args = append(args, "-browser")
@@ -952,15 +980,16 @@ func (r *run) resumeHistory() (*resumeInput, error) {
 	}
 	call, compact := 0, false
 	var result *resumeInput
-	for _, e := range r.events[start:end] {
-		// 记忆背景生成与重排是辅助调用：它们的输入不是对话，输出也不是 assistant 的回答，续聊不能从它们恢复。
+	bodies := requestBodies(r.events) // O20：存档里的请求可能是增量，先还原成整份
+	for i, e := range r.events[start:end] {
+		// 记忆背景生成、重排与独立验证是辅助调用：它们的输入不是对话，输出也不是 assistant 的回答，续聊不能从它们恢复。
 		// 子 agent 的请求属于另一个上下文，同样跳过。
-		if strings.HasPrefix(e.Purpose, "memory_") || e.Sub {
+		if auxPurpose(e.Purpose) || e.Sub {
 			continue
 		}
 		if e.Kind == "request" {
 			request.Messages, request.Tools = nil, nil
-			if json.Unmarshal(e.Body, &request) != nil || len(request.Messages) == 0 {
+			if json.Unmarshal(bodies[start+i], &request) != nil || len(request.Messages) == 0 {
 				return nil, errors.New("存档缺少有效的模型请求")
 			}
 			var last struct{ Content string }
@@ -1015,16 +1044,21 @@ func (r *run) checkpointHistory(id string) (*resumeInput, error) {
 		return nil, errors.New("找不到这次运行的检查点，无法接着聊：" + id)
 	}
 	var cp struct {
+		Version  int               `json:"version"`
 		Messages []json.RawMessage `json:"messages"`
 	}
 	if json.Unmarshal(data, &cp) != nil || len(cp.Messages) == 0 {
 		return nil, errors.New("检查点无效：" + id)
 	}
+	if err := agent.CheckVersion(id, cp.Version); err != nil {
+		return nil, err
+	}
 	result := &resumeInput{Messages: cp.Messages, WithTools: true}
 	// 模型、推理强度与是否检索沿用这条对话最近一次主任务请求。
+	bodies := requestBodies(r.events)
 	for i := len(r.events) - 1; i >= 0; i-- {
 		e := r.events[i]
-		if e.Kind != "request" || e.Sub || strings.HasPrefix(e.Purpose, "memory_") {
+		if e.Kind != "request" || e.Sub || auxPurpose(e.Purpose) {
 			continue
 		}
 		var request struct {
@@ -1032,7 +1066,7 @@ func (r *run) checkpointHistory(id string) (*resumeInput, error) {
 			Model  string                                     `json:"model"`
 			Effort string                                     `json:"reasoning_effort"`
 		}
-		if json.Unmarshal(e.Body, &request) == nil {
+		if json.Unmarshal(bodies[i], &request) == nil {
 			result.Model, result.Effort = request.Model, request.Effort
 			for _, tool := range request.Tools {
 				result.RAG = result.RAG || tool.Function.Name == "search_docs"
@@ -1168,6 +1202,7 @@ func (s *server) loadSpace(space string) {
 			}
 		}
 		s.runs = append(s.runs, r)
+		s.adopt(r)
 	}
 }
 
@@ -1204,15 +1239,6 @@ func (r *run) updated() time.Time {
 		return time.Time{}
 	}
 	return r.events[len(r.events)-1].Time
-}
-
-func (r *run) copyLines(wg *sync.WaitGroup, kind string, pipe io.Reader) {
-	defer wg.Done()
-	scanner := bufio.NewScanner(pipe)
-	scanner.Buffer(make([]byte, 64*1024), 4<<20)
-	for scanner.Scan() {
-		r.add(event{Kind: kind, Text: scanner.Text()})
-	}
 }
 
 // 转发请求与响应原文；Authorization 只转发，不记录。
@@ -1257,7 +1283,7 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	if parts := strings.Split(req.Header.Get("traceparent"), "-"); len(parts) == 4 && spanPattern.MatchString(parts[2]) {
 		spanID = parts[2]
 	}
-	r.add(event{Kind: "request", Call: call, Body: raw(s.archiveImages(r.Tenant, body)), Purpose: purpose, Task: task, Sub: sub, Span: spanID})
+	r.add(event{Kind: "request", Call: call, Body: raw(r.compactRequest(task, purpose, s.archiveImages(r.Tenant, body))), Purpose: purpose, Task: task, Sub: sub, Span: spanID})
 
 	start := time.Now()
 	// 模型路由在 agent 里：它在 X-Agent-Upstream 里声明这次请求的真实地址（方舟、DeepSeek 或 Coconut），代理照此转发。
@@ -1268,10 +1294,10 @@ func (s *server) proxy(w http.ResponseWriter, req *http.Request) {
 	if err == nil && ((target.Scheme != "https" && (target.Scheme != "http" || key != "")) || target.Host == "" || target.User != nil) {
 		err = errors.New("X-Agent-Upstream 需要是 https 地址（不带密钥的请求可以是 http）")
 	}
-	// 上游说 Responses 协议时，转发前把 chat 形式的请求体换过去；存档留的仍是 chat 形式，页面、续聊和归因不用分协议。
+	// 上游说 Responses、Messages 协议时，转发前把 chat 形式的请求体换过去；存档留的仍是 chat 形式，页面、续聊和归因不用分协议。
 	forward := body
-	if err == nil && req.Header.Get("X-Agent-Protocol") == "responses" {
-		forward, err = llm.ResponsesBody(body)
+	if err == nil {
+		forward, err = llm.ConvertBody(req.Header.Get("X-Agent-Protocol"), body)
 	}
 	if err != nil {
 		r.add(event{Kind: "response", Call: call, Status: http.StatusBadRequest, Text: err.Error(), Purpose: purpose, Task: task, Sub: sub})
@@ -1469,6 +1495,63 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 // D20：高风险操作确认。agent 发来 tool/requestApproval 后暂停；用户在页面上点“允许 / 拒绝”，这里当场回复。
 // 只对正在等待的调用有效：下一项操作要重新确认。外发类的请求带范围时，用户可以选“本对话内都允许”（allow_session），
 // 由 agent 记下范围，之后同一范围不再询问。决定记进对话记录，页面重开后仍能看到。
+// D34：回答模型的提问（ask_user）。回答是人在对话里说的话，和续聊的问题一样记进存档，不写审计（不是授权）。
+func (s *server) answerQuestion(w http.ResponseWriter, req *http.Request) {
+	r := s.runOf(w, req)
+	if r == nil {
+		return
+	}
+	var input struct {
+		CallID string `json:"call_id"`
+		Answer string `json:"answer"`
+	}
+	if json.NewDecoder(io.LimitReader(req.Body, 64<<10)).Decode(&input) != nil || input.CallID == "" || strings.TrimSpace(input.Answer) == "" {
+		http.Error(w, "需要 call_id 和非空的 answer", http.StatusBadRequest)
+		return
+	}
+	r.mu.Lock()
+	conn := r.conn
+	rpc, waiting := r.asks[input.CallID]
+	delete(r.asks, input.CallID)
+	r.mu.Unlock()
+	if !waiting || conn == nil {
+		http.Error(w, "agent 没有在等这个问题的回答（已经回答过、已超时或这一轮已结束）", http.StatusConflict)
+		return
+	}
+	body, _ := json.Marshal(map[string]string{"answer": strings.TrimSpace(input.Answer)})
+	r.add(event{Kind: "answer", Text: input.CallID, Body: body})
+	conn.Reply(rpc, json.RawMessage(body), nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// D34：运行中插话。agent 把它排进下一次模型请求；这一轮已经结束时返回 409，页面提示用户在结束后照常发送。
+// 插话真正送进模型时 agent 会发 userMessage（steer=true）的通知，存档里以那条为准。
+func (s *server) steerRun(w http.ResponseWriter, req *http.Request) {
+	r := s.runOf(w, req)
+	if r == nil {
+		return
+	}
+	var input struct{ Text string }
+	if json.NewDecoder(io.LimitReader(req.Body, 64<<10)).Decode(&input) != nil || strings.TrimSpace(input.Text) == "" {
+		http.Error(w, "需要非空的 text", http.StatusBadRequest)
+		return
+	}
+	r.mu.Lock()
+	conn := r.conn
+	r.mu.Unlock()
+	if conn == nil {
+		http.Error(w, "这条对话没有在运行", http.StatusConflict)
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+	defer cancel()
+	if err := conn.Call(ctx, "turn/steer", map[string]string{"text": strings.TrimSpace(input.Text)}, nil); err != nil {
+		http.Error(w, "没有送到：这一轮已经结束（"+err.Error()+"），结束后照常发送即可", http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) decideTool(w http.ResponseWriter, req *http.Request) {
 	// 确认请求只能由同一租户的账号回答：别的租户连这条对话都找不到。
 	r := s.runOf(w, req)
@@ -1760,7 +1843,41 @@ func (s *server) traceMetrics(w http.ResponseWriter, req *http.Request) {
 // B0：agent 发来的协议消息。通知原样存成 notify 事件（页面按方法名还原过程）；
 // 联网审批请求存成 approval 事件，并记下请求ID，等用户在页面上点“允许 / 拒绝”时回复。
 func (r *run) handle(m protocol.Message) {
+	// 接管时补发的消息里，序号不超过 after 的已经存过：请求只重新登记等待，不再记一遍。
+	r.mu.Lock()
+	seen := m.Seq > 0 && m.Seq <= r.after
+	r.mu.Unlock()
 	if m.IsRequest() {
+		// agent 退出前报告状态：按顺序处理到这里，说明之前的消息都已记下，答复后它才断开退出。
+		if m.Method == "process/exit" {
+			var p struct{ Status string }
+			json.Unmarshal(m.Params, &p)
+			r.mu.Lock()
+			r.exitStatus = p.Status
+			conn := r.conn
+			r.mu.Unlock()
+			if conn != nil {
+				conn.Reply(*m.ID, nil, nil)
+			}
+			return
+		}
+		// D34：模型的提问（ask_user）：记下等待，页面上的人回答后经 answerQuestion 答复。
+		if m.Method == "user/requestInput" {
+			var p struct {
+				CallID string `json:"call_id"`
+			}
+			json.Unmarshal(m.Params, &p)
+			r.mu.Lock()
+			if r.asks == nil {
+				r.asks = map[string]int64{}
+			}
+			r.asks[p.CallID] = *m.ID
+			r.mu.Unlock()
+			if !seen {
+				r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params, ASeq: m.Seq})
+			}
+			return
+		}
 		if m.Method == "tool/requestApproval" {
 			var params struct {
 				CallID    string `json:"call_id"`
@@ -1779,7 +1896,9 @@ func (r *run) handle(m protocol.Message) {
 				r.toolWaits[params.CallID] = toolWait{*m.ID, params.Task, params.Tool, params.Risk, params.Arguments, params.Scope}
 			}
 			r.mu.Unlock()
-			r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})
+			if !seen {
+				r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params, ASeq: m.Seq})
+			}
 			return
 		}
 		if m.Method != "network/requestApproval" {
@@ -1800,25 +1919,25 @@ func (r *run) handle(m protocol.Message) {
 			r.approvals[params.Domain] = append(r.approvals[params.Domain], *m.ID)
 		}
 		r.mu.Unlock()
-		r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params})
+		if !seen {
+			r.add(event{Kind: "approval", Method: m.Method, RPC: *m.ID, Body: m.Params, ASeq: m.Seq})
+		}
 		return
 	}
+	if seen {
+		return
+	}
+	switch m.Method {
+	case "log": // 终端日志：和以前从 stderr 读到的一样记成 stdout
+		var p struct{ Text string }
+		json.Unmarshal(m.Params, &p)
+		r.add(event{Kind: "stdout", Text: p.Text, ASeq: m.Seq})
+		return
+	}
+	// B1：item/delta 只给正在看的页面实时显示，不写进运行记录：一次回答会有成百上千条，完整内容已在 response 事件里。
 	kind := "notify"
-	if isDelta(m) {
+	if protocol.IsDelta(m) {
 		kind = "delta"
 	}
-	r.add(event{Kind: kind, Method: m.Method, Body: m.Params})
-}
-
-// B1：item/delta（子 agent 的经 subagent/message 包一层）只给正在看的页面实时显示，不写进运行记录：
-// 一次回答会有成百上千条，完整内容已在 response 事件里。重新打开已结束的对话时直接显示完整回答。
-func isDelta(m protocol.Message) bool {
-	for m.Method == "subagent/message" {
-		var p struct{ Message protocol.Message }
-		if json.Unmarshal(m.Params, &p) != nil {
-			return false
-		}
-		m = p.Message
-	}
-	return m.Method == "item/delta"
+	r.add(event{Kind: kind, Method: m.Method, Body: m.Params, ASeq: m.Seq})
 }

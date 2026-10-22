@@ -15,6 +15,7 @@ go run . observe                                          # 新对话在输入�
 | --- | --- | --- | --- | --- |
 | `ark` | `https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions`（Coding Plan 订阅入口） | `doubao-seed-2.1-pro`（另有 `doubao-seed-2.1-lite`、`kimi-k3`、`glm-5.3`、`deepseek-v4-pro`、`minimax-m3`、`ark-code-latest` 等，共 14 个） | `ARK_API_KEY`（兼容 `LLM_API_KEY`） | `LLM_API_URL`、`LLM_MODEL` |
 | `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-flash`（只有这一个） | `DEEPSEEK_API_KEY` | `DEEPSEEK_API_URL`、`DEEPSEEK_MODEL` |
+| `deepseekanthropic` | `https://api.deepseek.com/anthropic/v1/messages`（Anthropic Messages 协议，D33） | `deepseek-flash`（另有 `deepseek-v4-pro`，只收文字） | `DEEPSEEK_API_KEY` | `DEEPSEEK_ANTHROPIC_URL`、`DEEPSEEK_MODEL` |
 | `coconut` | 没有默认值，必须配 `COCONUT_API_URL`（本机服务的 `.../v1/responses`） | `coconut-gpt-6-1-sol-max`（共 12 个） | 不要密钥 | `COCONUT_API_URL`、`COCONUT_MODEL` |
 
 密钥写在 `.env`（权限 0600、不提交）或环境变量里。

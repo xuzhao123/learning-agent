@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"learning-agent/internal/protocol"
@@ -41,6 +42,40 @@ type Reply struct {
 }
 
 var ErrContextLength = errors.New("模型服务报告上下文过长")
+
+// transient 标记可以退避重试的失败：限流（429）、服务端错误（5xx）、连接失败、流在中途断开。
+// after 是服务端在 Retry-After 里要求的等待；0 表示按退避表。参数错误、鉴权失败、额度用完、上下文过长、输出被截断都不算。
+type transient struct {
+	error
+	after     time.Duration
+	proxyDown bool // 连不上观测台的模型代理（观测台在重启）：请求根本没发出去
+}
+
+func (t *transient) Unwrap() error { return t.error }
+
+// 重试最多几次、单次最多等多久：Retry-After 要求等得更久（比如额度按小时重置）就不重试，直接报错。
+const (
+	modelRetries = 3
+	maxRetryWait = 60 * time.Second
+)
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
+}
+
+// retryAfter 解析 Retry-After：秒数或 HTTP 日期；没有或看不懂时为 0。
+func retryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return max(0, time.Until(at))
+	}
+	return 0
+}
+
 var ErrModelBudget = errors.New("模型请求次数预算已用完（包含摘要和超窗重试）")
 
 // Unlimited 是 -max-steps 0（不限请求次数）在内部的取值：足够大，预算的加减比较照常成立，不用到处判断“不限”。
@@ -84,9 +119,9 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 	if err != nil {
 		return Reply{}, err
 	}
-	// Responses 上游：直连时在这里换请求体；经观测台时发 chat 形式，由代理换（存档仍是 chat 形式）。
-	if config.Protocol == "responses" && !local {
-		if data, err = ResponsesBody(data); err != nil {
+	// Responses、Messages 上游：直连时在这里换请求体；经观测台时发 chat 形式，由代理换（存档仍是 chat 形式）。
+	if !local {
+		if data, err = ConvertBody(config.Protocol, data); err != nil {
 			return Reply{}, err
 		}
 	}
@@ -99,7 +134,7 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		request.Header.Set("Authorization", "Bearer "+config.APIKey)
 	}
 	if local {
-		// 上游说 Responses 协议时告诉代理，代理转发前换请求体。
+		// 上游说 Responses、Messages 协议时告诉代理，代理转发前换请求体。
 		if config.Protocol != "" {
 			request.Header.Set("X-Agent-Protocol", config.Protocol)
 		}
@@ -126,7 +161,8 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		if ctx.Err() != nil {
 			return Reply{}, ctx.Err()
 		}
-		return Reply{}, errors.New("模型请求失败，请检查网络与超时")
+		down := os.Getenv("AGENT_PROXY_TOKEN") != "" && errors.Is(err, syscall.ECONNREFUSED)
+		return Reply{}, &transient{error: errors.New("模型请求失败，请检查网络与超时"), proxyDown: down}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -144,10 +180,16 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		}
 		// 带上上游的错误码与说明（压成一行、截短）：额度用完、限流、鉴权失败光看状态码分不清，
 		// 额度的重置时间也在说明里。前缀不变，errorType 按它归类。
+		err := fmt.Errorf("模型API返回HTTP %d", response.StatusCode)
 		if reason := strings.Join(strings.Fields(failure.Error.Code+" "+failure.Error.Message), " "); reason != "" {
-			return Reply{}, fmt.Errorf("模型API返回HTTP %d：%s", response.StatusCode, telemetry.Clip(reason, 400))
+			err = fmt.Errorf("模型API返回HTTP %d：%s", response.StatusCode, telemetry.Clip(reason, 400))
 		}
-		return Reply{}, fmt.Errorf("模型API返回HTTP %d", response.StatusCode)
+		// O1：限流与服务端错误退避重试；额度用完也是 429，但要等到额度重置，重试没有用。
+		quota := strings.Contains(code, "quota") || strings.Contains(detail, "quota")
+		if (response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500) && !quota {
+			return Reply{}, &transient{error: err, after: retryAfter(response.Header.Get("Retry-After"))}
+		}
+		return Reply{}, err
 	}
 	// 上限按原始流算：每个 chunk 都带一层 JSON 外壳，同样的回答比非流式响应大很多。
 	scanner := bufio.NewScanner(io.LimitReader(response.Body, 32<<20))
@@ -157,7 +199,8 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 	for scanner.Scan() {
 		content, reasoning, err := stream.Add(scanner.Text())
 		if err != nil {
-			return Reply{Usage: stream.Usage}, err
+			// 供应商在流中途报错（此时 HTTP 状态早已是 200）：多是过载一类的暂时故障，按可重试处理。
+			return Reply{Usage: stream.Usage}, &transient{error: err}
 		}
 		if content == "" && reasoning == "" {
 			continue
@@ -174,12 +217,15 @@ func callModel(ctx context.Context, config Config, history []Message, withTools 
 		if ctx.Err() != nil {
 			return reply, ctx.Err()
 		}
-		return reply, errors.New("模型流式响应读取中断")
+		return reply, &transient{error: errors.New("模型流式响应读取中断")}
 	}
 	if stream.Chunks == 0 {
-		return reply, errors.New("模型没有返回流式数据")
+		return reply, &transient{error: errors.New("模型没有返回流式数据")}
 	}
-	// 流结束后再检查：finish_reason 只在最后出现，没出现说明流在中途断了。
+	// 流结束后再检查：finish_reason 只在最后出现，没出现说明流在中途断了（可以重试）；是 length 说明输出到了上限（重试也一样）。
+	if stream.FinishReason == "" {
+		return reply, &transient{error: errors.New("模型流式响应在中途结束，没有收到结束标记")}
+	}
 	if stream.FinishReason != "stop" && stream.FinishReason != "tool_calls" {
 		return reply, errors.New("模型响应被截断或未完成；请检查显式输出上限或服务端默认限制")
 	}
@@ -274,7 +320,53 @@ func (c *Client) CallKeeping(ctx context.Context, history []Message, withTools b
 			}
 		}
 	}
-	reply, err := callModel(ctx, config, history, withTools, c.Output, purpose, onDelta)
+	// O1：暂时故障退避重试（1、2、4 秒，或服务端 Retry-After 要求的时间）；重试不另占请求预算，在 span 上记一个 retry 事件。
+	// 流已经输出了一半再重试时，通知界面清掉这次请求已经显示的部分（item/delta 的 reset），免得同一段话出现两遍。
+	// 经观测台代理时，代理连不上说明观测台在重启：等它回来（最多 protocol.DetachGrace），不算重试次数。
+	var reply Reply
+	var err error
+	var down time.Time
+	for attempt := 0; ; attempt++ {
+		reply, err = callModel(ctx, config, history, withTools, c.Output, purpose, onDelta)
+		var t *transient
+		if errors.As(err, &t) && t.proxyDown && ctx.Err() == nil {
+			if down.IsZero() {
+				down = time.Now()
+				fmt.Printf("\nModel proxy unreachable: purpose=%s waiting for the observer (up to %s)\n", purpose, protocol.DetachGrace)
+			}
+			if time.Since(down) < protocol.DetachGrace {
+				attempt--
+				select {
+				case <-time.After(2 * time.Second):
+				case <-ctx.Done():
+				}
+				continue
+			}
+		}
+		if err == nil || !errors.As(err, &t) || attempt == modelRetries || ctx.Err() != nil {
+			break
+		}
+		wait := t.after
+		if wait == 0 {
+			wait = time.Second << attempt
+		}
+		if wait > maxRetryWait {
+			break
+		}
+		fmt.Printf("\nModel retry: purpose=%s attempt=%d wait=%s reason=%s\n", purpose, attempt+1, wait, firstLine(err.Error()))
+		span.AddEvent("retry", trace.WithAttributes(attribute.Int("agent.retry.attempt", attempt+1), attribute.String("agent.retry.reason", firstLine(err.Error())), attribute.Int64("agent.retry.wait_ms", wait.Milliseconds())))
+		if onDelta != nil {
+			protocol.Notify("item/delta", map[string]any{"turn_id": TaskID, "item_id": item.ID, "purpose": purpose, "field": "reset", "delta": ""})
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			break
+		}
+	}
 	if printed {
 		fmt.Println()
 	}

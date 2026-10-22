@@ -15,10 +15,20 @@ type Summary struct {
 	Ablation []Delta     `json:"ablation,omitempty"` // 消融：有 / 无某个能力的分差
 	Compare  *Compare    `json:"compare,omitempty"`  // 与基线逐题对比
 	Labels   []Count     `json:"labels,omitempty"`   // D17 人工归类的计数
+	Coding   *Coding     `json:"coding,omitempty"`   // D36：编码题的自评与校验
 	Progress struct {
 		Done  int `json:"done"`
 		Total int `json:"total"`
 	} `json:"progress"`
+}
+
+// Coding：编码题里模型“自称完成”（正常结束）与校验命令全部通过的对照。误报 = 自称完成但校验没过。
+type Coding struct {
+	Trials        int `json:"trials"`
+	Claimed       int `json:"claimed"`
+	Verified      int `json:"verified"`       // 校验全部通过
+	FalseClaims   int `json:"false_claims"`   // 自称完成，校验没过
+	SilentSuccess int `json:"silent_success"` // 没有正常结束（预算用完等），校验却通过了
 }
 
 // Score：pass@1 是逐题通过率的平均；SE 按题聚类（同一道题的几次尝试不独立，先在题内平均再算方差）；
@@ -102,9 +112,31 @@ func Summarize(rec *Record, cases []Case, baseline *Record) Summary {
 		{"回归集", func(c CaseScore) bool { return !c.Network && c.Suite == "regression" }},
 		{"能力集", func(c CaseScore) bool { return !c.Network && c.Suite == "capability" && !c.Holdout }},
 		{"留出题", func(c CaseScore) bool { return !c.Network && c.Holdout }},
+		{"编码题", func(c CaseScore) bool { return c.Suite == "coding" }},
 	} {
 		if sc := score(part.name, rec, s.Cases, part.keep); sc.Cases > 0 {
 			s.Suites = append(s.Suites, sc)
+		}
+	}
+	for _, t := range rec.Trials {
+		if c, ok := info[t.Case]; !ok || c.Repo == nil || !with(t) || len(t.Commands) == 0 {
+			continue
+		}
+		if s.Coding == nil {
+			s.Coding = &Coding{}
+		}
+		verified := !slices.ContainsFunc(t.Commands, func(r CommandResult) bool { return r.ExitCode != 0 })
+		s.Coding.Trials++
+		switch {
+		case t.Claimed && verified:
+			s.Coding.Claimed++
+			s.Coding.Verified++
+		case t.Claimed:
+			s.Coding.Claimed++
+			s.Coding.FalseClaims++
+		case verified:
+			s.Coding.Verified++
+			s.Coding.SilentSuccess++
 		}
 	}
 	s.Ablation = ablation(rec, info)

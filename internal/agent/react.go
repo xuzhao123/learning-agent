@@ -38,10 +38,6 @@ var (
 	LabelToolData   = true             // D19：正常运行开启；只有无害的 security-lab 对照组关闭标记
 )
 
-// 结果未知时可以直接再执行一次的工具：只读，或带幂等键（spawn_agent 按子任务ID续跑或取回存档）。
-// 其余工具（slow_job、全部 MCP 工具等）超时或中断后不自动重做，把“结果未知”交给模型核对。
-var repeatable = map[string]bool{"calculator": true, "get_current_datetime": true, "search_notes": true, "search_docs": true, "read_security_sample": true, "search_memory": true, "load_skill": true, "check_task_status": true, "spawn_agent": true, "web_search": true, "open_page": true, "ds_search": true, "ds_fetch": true, "request_network_access": true, "read_file": true, "glob": true, "grep": true, "read_output": true, "view_image": true} // bash、edit_file、write_file 不在里面：有副作用
-
 // RootAttributes 是 main 创建根 span 时就知道的属性；其余在 Run 里补。
 func RootAttributes() []attribute.KeyValue {
 	return []attribute.KeyValue{semconv.GenAIOperationNameInvokeAgent, semconv.GenAIAgentName("learning-agent")}
@@ -118,6 +114,11 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 			return err
 		}
 	}
+	conversation.forceCompact = CompactFirst // D34：界面要求先压缩（/compact）
+	// D39：后台子 agent 跟着这一轮走；分叉的子 agent 拿当前视图。这一轮结束时停掉还在跑的。
+	turnCtx, forkFrom = ctx, func() []llm.Message { return conversation.View }
+	defer stopBackground()
+	backgroundReminded := false
 	cp := &Checkpoint{ID: CheckpointID, Args: CheckpointArgs, Question: question, Continues: Continues, Status: "running", StartedAt: time.Now().UTC()}
 	// B0：一轮结束。先于下面写检查点的 defer 声明，所以在检查点写好之后才发出；界面据此显示结局，不再找终端里的 Termination 行。
 	defer func() {
@@ -131,6 +132,13 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 			completed["outcome"], completed["error"] = "error", firstLine(err.Error())
 		default:
 			completed["answer"] = cp.Answer
+		}
+		if cp.FinalCheck != nil {
+			completed["final_check"] = cp.FinalCheck
+		}
+		// D34：还没用上的插话交回界面，由它当作下一轮的问题。
+		if queued := closeSteers(); len(queued) > 0 {
+			completed["queued"] = queued
 		}
 		protocol.Notify("turn/completed", completed)
 	}()
@@ -150,19 +158,20 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 		cp.Status, cp.Reason, cp.Error = "running", "", ""
 		fmt.Printf("Resume: id=%s completed_rounds=%d model_calls=%d/%s pending_calls=%d\n", cp.ID, completed, client.Calls, llm.LimitText(maxSteps), pendingCount(pending))
 	}
-	// D20：私有数据的来源跨续跑、续聊延续：续跑取检查点，续聊取上一轮；父 agent 派出时带 -private-input。
-	privateSources, granted = slices.Clone(cp.Private), slices.Clone(cp.Granted)
-	// D23：读后才能改的账本同样跨进程接上——续跑用自己检查点里的，续聊用上一轮的；全新任务从空账本开始。
-	// 只搬“读过”这个事实和当时的哈希，编辑前照常比对当前内容（见 workspace.RestoreSeen）。
-	ledger := cp.Seen
+	// O7：影响下一步的状态（私有来源、外发授权、读后才写账本、上次告诉模型的环境、用量提醒档位）跨进程接上：
+	// 续跑取自己的检查点，续聊取上一轮的，全新任务从空开始；父 agent 派出时另带 -private-input。
+	state := cp.State
 	if resume == nil && Continues != "" {
 		if prev, err := LoadCheckpoint(Continues); err == nil {
-			privateSources, granted = slices.Clone(prev.Private), slices.Clone(prev.Granted)
-			ledger = prev.Seen
+			state = prev.State
 		}
 	}
+	privateSources, granted = slices.Clone(state.Private), slices.Clone(state.Granted)
 	if workspace.Dir != "" {
-		workspace.RestoreSeen(ledger)
+		workspace.RestoreSeen(state.Seen) // 只搬“读过”这个事实和当时的哈希，编辑前照常比对当前内容
+	}
+	if resume != nil || history != nil {
+		conversation.env, conversation.announced = state.Env, state.Announced
 	}
 	if PrivateInput {
 		markPrivate("parent")
@@ -206,13 +215,11 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 		if CheckpointID == "" {
 			return nil
 		}
-		cp.Step, cp.Calls, cp.Messages, cp.Summary, cp.Progress, cp.Private = completed, client.Calls, conversation.View, summary, loop, privateSources
+		cp.Step, cp.Calls, cp.Messages, cp.Summary, cp.Progress = completed, client.Calls, conversation.View, summary, loop
 		grantMu.Lock()
-		cp.Granted = slices.Clone(granted)
+		cp.State = State{Private: privateSources, Granted: slices.Clone(granted), Seen: workspace.Seen(), Env: conversation.env, Announced: conversation.announced}
 		grantMu.Unlock()
-		cp.Input, cp.Output, cp.Cached = client.Input, client.Completion, client.Cached
-		// D23：读后才能改的账本随检查点走：续聊是新进程，靠它接上上一轮读过哪些文件。没有工作区时为空，不写进文件。
-		cp.Seen = workspace.Seen()
+		cp.Input, cp.Output, cp.Cached, cp.LogSeq = client.Input, client.Completion, client.Cached, journalSeq()
 		return cp.write()
 	}
 	if CheckpointID != "" {
@@ -231,6 +238,16 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 			}
 		}()
 	}
+	// O12：不正常结束（预算用完、模型报错、超时、熔断……）时，harness 自己跑一次收尾检查，不再请求模型。
+	// 复用 Stop hook 的命令（如“有改动就要编译通过”），结论写进检查点和 turn/completed：人一眼看到留下的状态能不能用。
+	// 人按停止（cancelled）不跑：那是人自己决定停在这里。声明在写检查点的 defer 之后，所以先于它执行。
+	defer func() {
+		var stop *stopError
+		if err == nil || !hooks.Has("Stop") || (errors.As(err, &stop) && stop.reason == "cancelled") {
+			return
+		}
+		cp.FinalCheck = finalCheck(ctx)
+	}()
 	if memory.Active != nil && !submitted.Block {
 		// 本轮结束时写入（成功、失败或熔断都执行）；保存失败向上返回，不只打印。
 		defer func() {
@@ -286,6 +303,11 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 	if err := save(); err != nil {
 		return err
 	}
+	// Q15：续跑、续聊时把这条对话已经派出的子任务列给模型，放在第一次请求模型之前（续跑要先补齐中断的那批调用）。
+	var subtasks string
+	if resume != nil || history != nil {
+		subtasks = dispatchedNote()
+	}
 	for step := completed + 1; step <= maxSteps; step++ {
 		if err := ctx.Err(); err != nil {
 			return stopRun(ctxReason(ctx), err.Error(), summary)
@@ -304,10 +326,31 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 				break
 			}
 			fmt.Printf("\nRound %d\n", step)
+			if subtasks != "" {
+				conversation.Append(llm.Reminder(subtasks))
+				fmt.Printf("Reminder: %s\n", firstLine(subtasks))
+				subtasks = ""
+			}
 			// D24：上一批工具执行期间出现的新情况，作为提醒追加在末尾，再请求模型。
 			for _, text := range workspace.Reminders() {
 				conversation.Append(llm.Reminder(text))
 				fmt.Printf("Reminder: %s\n", firstLine(text))
+			}
+			// D34：用户在这一轮进行中说的话，作为用户消息排在最后，和首问一样先过 UserPromptSubmit hook。
+			for _, text := range takeSteers() {
+				if hooks.Has("UserPromptSubmit") {
+					if r := hooks.Run(ctx, "UserPromptSubmit", "", map[string]any{"prompt": text}); r.Block {
+						fmt.Printf("Steer blocked: %s\n", r.Reason)
+						protocol.ItemCompleted(CheckpointID, protocol.Item{ID: fmt.Sprintf("steer-%d", step), Type: "userMessage", Data: map[string]any{"text": "（这条插话被 UserPromptSubmit hook 拦下）", "steer": true}})
+						continue
+					}
+				}
+				conversation.Append(llm.Message{Role: "user", Content: text})
+				if memory.Active != nil {
+					memory.Active.UserTexts = append(memory.Active.UserTexts, text)
+				}
+				fmt.Printf("Steer: %s\n", firstLine(text))
+				protocol.ItemCompleted(CheckpointID, protocol.Item{ID: fmt.Sprintf("steer-%d", step), Type: "userMessage", Data: map[string]any{"text": text, "steer": true}})
 			}
 			response, err := conversation.Next(ctx, client)
 			if err != nil {
@@ -331,6 +374,7 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 				r := hooks.Run(ctx, "Stop", "", map[string]any{"stop_hook_active": stopHookActive, "last_assistant_message": reply.Content})
 				if r.Block {
 					stopHookActive, completed = true, step
+					announce(reply, "commentary") // 想结束但被 Stop hook 拦下：这段话不是最终回答
 					conversation.Append(llm.Reminder("[hook Stop] 还不能结束：" + r.Reason))
 					if err := save(); err != nil {
 						return stopRun("checkpoint_error", err.Error(), summary)
@@ -338,11 +382,24 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 					continue
 				}
 			}
+			// D39：模型想结束，但还有后台子 agent 在跑：提醒一次，让它先取回结论或停掉。
+			if running := runningBackground(); len(reply.ToolCalls) == 0 && len(running) > 0 && !backgroundReminded {
+				backgroundReminded, completed = true, step
+				announce(reply, "commentary")
+				conversation.Append(llm.Reminder("还有后台子任务在运行：" + strings.Join(running, "、") + "。先用 agent_wait 取回它们的结论（或用 agent_stop 停掉不需要的），再给最终回答；这一轮结束时还在跑的会被停下。"))
+				fmt.Printf("Reminder: background subagents running=%d\n", len(running))
+				if err := save(); err != nil {
+					return stopRun("checkpoint_error", err.Error(), summary)
+				}
+				continue
+			}
 			if len(reply.ToolCalls) == 0 {
 				completed, cp.Answer = step, reply.Content
+				announce(reply, "final_answer")
 				fmt.Println("Termination: no_tool_calls")
 				return nil
 			}
+			announce(reply, "commentary") // 和工具调用一起出现的文字：过程说明
 			if len(reply.ToolCalls) > 16 {
 				return stopRun("invalid_tool_calls", "每轮最多执行16项工具调用", summary)
 			}
@@ -427,9 +484,8 @@ func Run(ctx context.Context, config llm.Config, question string, images []llm.I
 }
 
 // 每个 goroutine 只写自己的结果；历史由主循环在整批结束后追加。
-// 有顺序依赖的工具在同一批里按调用顺序一个接一个执行：bash 的后一条命令常常要用前一条生成的文件，
-// 和 shell 里写 a; b 一样；D23 的编辑与写入也一样，后一处修改可能建立在前一处之上。其余工具照常并行。
-var sequential = map[string]bool{"bash": true, "edit_file": true, "write_file": true}
+// 声明了 Serial 的工具（toolspec.go）在同一批里按调用顺序一个接一个执行：bash 的后一条命令常常要用前一条生成的文件，
+// 和 shell 里写 a; b 一样；编辑与写入也一样，后一处修改可能建立在前一处之上；会写的 MCP 工具同理。其余工具照常并行。
 
 func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries int) []llm.Observation {
 	results := make([]llm.Observation, len(calls))
@@ -444,6 +500,11 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 		}()
 		result = llm.Observation{ID: call.ID, Tool: call.Function.Name}
 		defer func() { writeJournal(result) }()
+		// D19/O3：允许列表最先查。菜单外的工具（模型编的 mcp_xxx、旧检查点里的工具）不跑 hook、不问权限、不请人确认。
+		if !offered(call.Function.Name) {
+			result.Status, result.Error = "error", fmt.Sprintf("工具 %s 未列入本轮允许列表，已拒绝执行；请按用户任务使用本轮提供的工具", call.Function.Name)
+			return result
+		}
 		// D26：执行前 hook 最先运行。它可以拒绝、要求确认、放行模式默认的询问，或改写参数；改写后的参数照样要过下面的权限规则。
 		var hooked hooks.Result
 		if hooks.Has("PreToolUse") {
@@ -461,7 +522,7 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 			}
 		}
 		// D25：再按用户的权限规则和模式判断。拒绝就不执行；询问和 D20 的高风险确认走同一条确认路径。
-		effect, why := permission.Decide(call.Function.Name, call.Function.Arguments)
+		effect, why := permission.Decide(call.Function.Name, specOf(call.Function.Name).Permission, call.Function.Arguments)
 		// hook 的意见只能收紧规则、放开模式默认：用户写的 deny、ask 规则不会被 hook 的 allow 绕过。
 		switch {
 		case hooked.Decision == "ask" && effect != "deny":
@@ -484,7 +545,7 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 			kind, reason = "permission", why+"：这项操作需要你确认"
 		}
 		// D21：可能有副作用的调用（不在可重复名单里）和经过确认的调用，结束时写一条审计；只读调用不记，审计不变成第二份 trace。
-		if kind != "" || !repeatable[call.Function.Name] {
+		if kind != "" || !specOf(call.Function.Name).Repeatable {
 			defer func() {
 				record := audit.Record{Actor: "model", Event: "tool_call", CallID: call.ID, Tool: call.Function.Name, Risk: kind, Status: result.Status,
 					Detail: fmt.Sprintf("attempts=%d", result.Attempts)}
@@ -515,11 +576,23 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 		}
 		// D26：工具成功后运行 PostToolUse hook（如格式检查）。它撤销不了已经做完的事，只能把反馈附在结果上给模型看。
 		if result.Status == "ok" && hooks.Has("PostToolUse") {
+			// O16：hook 可以改写刚写入的文件（如 gofmt -w），改写算进这次写入：快照与读取账本跟着更新，改动片段告诉模型。
+			path, written := "", []byte(nil)
+			if call.Function.Name == "edit_file" || call.Function.Name == "write_file" {
+				var args struct{ Path string }
+				json.Unmarshal([]byte(call.Function.Arguments), &args)
+				path, written = args.Path, workspace.Content(args.Path)
+			}
 			r := hooks.Run(ctx, "PostToolUse", call.Function.Name, map[string]any{"tool_name": call.Function.Name, "tool_input": rawArgs(call), "tool_response": result.Result, "tool_use_id": call.ID})
+			feedback := r.Context
 			if r.Block {
-				result.Hook = strings.TrimSpace(r.Reason + "\n" + r.Context)
-			} else {
-				result.Hook = r.Context
+				feedback = strings.TrimSpace(r.Reason + "\n" + r.Context)
+			}
+			result.Hook = hookFeedback(path, workspace.Relative(feedback))
+			if written != nil {
+				if diff := workspace.Rewritten(path, written); diff != "" {
+					result.Hook = strings.TrimSpace(result.Hook + "\nhook 改写了 " + path + "（已算进这次写入，不用重新读）：\n" + diff)
+				}
 			}
 		}
 		return result
@@ -527,7 +600,7 @@ func ExecuteBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries i
 	var wg sync.WaitGroup
 	var ordered []int
 	for i, call := range calls {
-		if sequential[call.Function.Name] {
+		if specOf(call.Function.Name).Serial {
 			ordered = append(ordered, i)
 			continue
 		}
@@ -570,7 +643,7 @@ func replayBatch(ctx context.Context, calls []llm.ToolCall, parallel, retries in
 			protocol.ItemCompleted(CheckpointID, toolItem(call, &results[i]))
 			continue
 		}
-		if repeatable[call.Function.Name] {
+		if specOf(call.Function.Name).Repeatable {
 			again, index = append(again, call), append(index, i)
 			continue
 		}
@@ -632,7 +705,7 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 			return result // 整次运行被取消或到时，不再重试
 		case llm.IsPermanent(err):
 			reason = "permanent"
-		case result.Status == "unknown" && !repeatable[call.Function.Name]:
+		case result.Status == "unknown" && !specOf(call.Function.Name).Repeatable:
 			reason = "unknown_not_repeatable"
 			result.Error += unknownNext
 		}
@@ -666,11 +739,8 @@ func runWithRetry(ctx context.Context, call llm.ToolCall, retries int) llm.Obser
 // bash 例外：沙箱到时会把命令整个终止并交回终止前的输出，执行器等它返回，不记成未知。
 func runAttempt(ctx context.Context, call llm.ToolCall) (any, error) {
 	timeout := ToolTimeout
-	switch call.Function.Name {
-	case "spawn_agent":
-		timeout = SubagentTimeout
-	case "request_network_access":
-		timeout = sandbox.ApprovalWait + 30*time.Second // 等人点按钮，工具自己会在 ApprovalWait 到时返回 pending
+	if t := specOf(call.Function.Name).Timeout; t > 0 {
+		timeout = t
 	}
 	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -730,25 +800,23 @@ func describe(o llm.Observation) string {
 	return tried + "失败：" + o.Error
 }
 
-// D20：成功读到私有数据的工具。bash 能读到工作区、只读挂载的项目或本对话目录里的文件时才算（空沙箱里 echo 一下读不到任何东西），
-// 记忆是用户的私人信息，子 agent 的结论可能来自它自己的 bash 或记忆。网页、MCP 返回的是外部数据，不算私有。
+// D20：成功读到私有数据的工具，来源名在工具声明里（toolspec.go）。两个工具要看情况：
+// bash 只在沙箱能读到用户文件时才算（挂了工作区或项目，或对话目录里已有文件；空沙箱里 echo 一下读不到任何东西）；
+// spawn_agent 只在子 agent 自己读过私有数据时才算。网页、MCP 返回的是外部数据，不算私有。
 func trackPrivate(o llm.Observation) {
-	switch o.Tool {
-	case "bash":
-		if sandbox.SeesUserFiles() {
-			markPrivate("bash")
-		}
-	case "search_memory":
-		markPrivate("memory")
-	case "read_file", "grep", "view_image":
-		markPrivate("workspace") // D23：工作区里的代码与配置是用户的私有数据；view_image 读的也是工作区或沙箱里的文件
-	case "spawn_agent":
-		if result, ok := o.Result.(map[string]any); ok {
-			if sources, _ := result["private"].([]string); len(sources) > 0 {
-				markPrivate("subagent")
-			}
+	source := specOf(o.Tool).Private
+	switch {
+	case source == "":
+		return
+	case source == "bash" && !sandbox.SeesUserFiles():
+		return
+	case o.Tool == "spawn_agent" || o.Tool == "agent_wait":
+		result, _ := o.Result.(map[string]any)
+		if sources, _ := result["private"].([]string); len(sources) == 0 {
+			return
 		}
 	}
+	markPrivate(source)
 }
 
 // B0：一次工具调用是一个 toolCall Item；完成时带上和回填给模型的同一个 Observation。
@@ -767,7 +835,7 @@ func toolSpan(ctx context.Context, call llm.ToolCall) (context.Context, trace.Sp
 	}
 	ctx, span := telemetry.Begin(ctx, "execute_tool "+call.Function.Name, trace.SpanKindInternal, semconv.GenAIOperationNameExecuteTool,
 		semconv.GenAIToolName(call.Function.Name), semconv.GenAIToolCallID(call.ID), semconv.GenAIToolType(kind),
-		attribute.Bool("agent.tool.repeatable", repeatable[call.Function.Name]), attribute.Int("agent.tool.arguments_bytes", len(call.Function.Arguments)))
+		attribute.Bool("agent.tool.repeatable", specOf(call.Function.Name).Repeatable), attribute.Int("agent.tool.arguments_bytes", len(call.Function.Arguments)))
 	telemetry.Content(span, semconv.GenAIToolCallArgumentsKey, call.Function.Arguments)
 	return ctx, span
 }
@@ -801,6 +869,49 @@ func actionKey(call llm.ToolCall) string {
 		arguments = string(normalized)
 	}
 	return call.Function.Name + ":" + arguments
+}
+
+// D33 回复分段：模型的每段文字发一个 agentMessage，标明是过程说明（commentary）还是最终回答（final_answer）。
+// 只有 harness 知道答案：和工具调用一起出现的是过程说明；想结束却被 Stop hook 拦下的也是过程说明；真正结束这一轮的才是最终回答。
+// 界面据此显示，不再按“这次回复有没有工具调用”去猜（参考 Codex 消息上的 phase）。
+var messageSeq int
+
+func announce(reply llm.Message, phase string) {
+	if strings.TrimSpace(reply.Content) == "" {
+		return
+	}
+	messageSeq++
+	protocol.ItemCompleted(CheckpointID, protocol.Item{ID: fmt.Sprintf("message-%d", messageSeq), Type: "agentMessage", Data: map[string]any{"text": reply.Content, "phase": phase}})
+}
+
+// O16：同一个文件上 hook 的反馈和上次一字不差时只说“同上”：模型手头还有别的修改，同一段 diff 不必每次都塞进上下文。
+var (
+	hookMu   sync.Mutex
+	lastHook = map[string]string{}
+)
+
+func hookFeedback(path, text string) string {
+	if path == "" || text == "" {
+		return text
+	}
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	if lastHook[path] == text {
+		return "hook 对 " + path + " 的反馈和上次相同，仍未处理。"
+	}
+	lastHook[path] = text
+	return text
+}
+
+// finalCheck 跑一次 Stop hook 当作收尾检查。原来的 ctx 可能已经超时，换一个新的时限（hook 自己也有时限）。
+// 这里只要结论：hook 拦下就是“没通过”，原因原样记下，不再交给模型接着修。
+func finalCheck(ctx context.Context) *FinalCheck {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
+	r := hooks.Run(ctx, "Stop", "", map[string]any{"stop_hook_active": true, "last_assistant_message": "", "final_check": true})
+	check := &FinalCheck{Passed: !r.Block, Detail: r.Reason}
+	fmt.Printf("Final check: passed=%v %s\n", check.Passed, firstLine(check.Detail))
+	return check
 }
 
 // 停止原因随错误一起返回：检查点记下它，调度方据此判断能否续跑。
@@ -848,38 +959,50 @@ func SystemPrompt() string {
 	}
 	if workspace.Dir != "" {
 		prompt += workspace.Rules() + workspace.Instructions()
+		if offered("verify_feature") {
+			prompt += progressRules
+		}
 	}
 	if SubagentArgs != nil {
 		prompt += subagentRules
 	}
+	if Todo {
+		prompt += todoRules
+	}
 	return prompt
 }
 
-// D24：环境信息放在问题前面。新对话发一份；续聊对比上一份，变了才追加，并标记哪些子目录的项目指令已经在上下文里。
+// D24：环境信息放在问题前面。新对话发一份整的；续聊和上一轮告诉模型的那份（State.Env）按字段比，只发变了的字段。
+// 上一轮压缩过（那份已经并进摘要）或者没有记录时，重发整份。已经发出的提醒不改写。
 // 根目录项目指令写在首轮的系统提示词里；续聊沿用那份系统提示词，文件之后改过就追加新版本，而不是改写开头。
 func environment(c *Context, continued bool) {
-	env := workspace.Environment()
-	if !continued {
-		c.Append(llm.Reminder(env))
-		return
+	fields := workspace.EnvironmentFields()
+	current := map[string]string{}
+	for _, f := range fields {
+		current[f.Name] = f.Value
 	}
-	reminders := c.reminders()
-	last := ""
-	for _, text := range reminders {
-		if e := workspace.EnvironmentIn(text); e != "" {
-			last = e
+	if continued {
+		workspace.Prime(c.reminders())
+	}
+	switch {
+	case !continued || c.env == nil:
+		c.Append(llm.Reminder(workspace.FormatEnvironment(fields)))
+		if continued {
+			fmt.Println("Reminder: environment re-added")
+		}
+	default:
+		var changed []workspace.EnvField
+		for _, f := range fields {
+			if c.env[f.Name] != f.Value {
+				changed = append(changed, f)
+			}
+		}
+		if len(changed) > 0 {
+			c.Append(llm.Reminder("环境和上一轮相比有变化（没列出的照旧）：\n" + workspace.FormatEnvironment(changed)))
+			fmt.Printf("Reminder: environment changed fields=%d\n", len(changed))
 		}
 	}
-	workspace.Prime(reminders)
-	switch {
-	case last == "":
-		// 压缩会把旧提醒并进摘要，视图里没有可比的那份；重新给一份，不说成“变了”。
-		c.Append(llm.Reminder(env))
-		fmt.Println("Reminder: environment re-added")
-	case last != env:
-		c.Append(llm.Reminder("环境和上一轮不同，以这一份为准：\n" + env))
-		fmt.Println("Reminder: environment changed")
-	}
+	c.env = current
 	if inst := strings.TrimSpace(workspace.Instructions()); inst != "" && !strings.Contains(c.View[0].Content, inst) {
 		c.Append(llm.Reminder("根目录的项目指令在上一轮之后改过，以这一份为准：\n" + inst))
 		fmt.Println("Reminder: project instructions changed")

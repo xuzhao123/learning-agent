@@ -18,7 +18,7 @@ import (
 )
 
 var Definitions = []map[string]any{
-	{"name": "calculator", "description": "计算四则运算、括号、sqrt 和 floor，返回 result 数值。", "parameters": llm.Parameters("expression")},
+	{"name": "calculator", "description": "计算四则运算、括号、sqrt 和 floor，返回 result 数值。不支持乘方（^、**、pow 都不行），乘方请写成连乘，如 2*2*2。", "parameters": llm.Parameters("expression")},
 	{"name": "get_current_datetime", "description": "返回 Asia/Shanghai 当前日期、时间和中文星期，无需参数。", "parameters": llm.Parameters("")},
 	{"name": "search_notes", "description": "在项目实际学习笔记中检索关键词，返回最多5条匹配内容及来源。", "parameters": llm.Parameters("query")},
 }
@@ -207,7 +207,7 @@ func evaluate(node ast.Expr) (float64, error) {
 			return math.Floor(value), nil
 		}
 	}
-	return 0, errors.New("只支持数值、四则运算、括号、sqrt 和 floor")
+	return 0, errors.New("只支持数值、四则运算、括号、sqrt 和 floor；乘方请写成连乘")
 }
 
 // 与记忆模块相同的固定东八区；各自定义，工具包不依赖记忆包。

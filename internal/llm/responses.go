@@ -103,9 +103,12 @@ func responsesContent(m Message) any {
 // Responses 的流式事件：每行 data 是一个带 type 的事件。正文与推理摘要按 delta 边收边显示；
 // response.completed 带着完整的 output 与 usage，最终的回答以它为准（工具调用也从这里取，不拼参数片段）。
 type responsesEvent struct {
-	Type     string `json:"type"`
-	Delta    string `json:"delta"`
-	Message  string `json:"message"` // type 为 error 时的说明
+	Type    string `json:"type"`
+	Delta   string `json:"delta"`
+	Message string `json:"message"` // type 为 error 时的说明（Responses）
+	Error   *struct {
+		Message string `json:"message"`
+	} `json:"error"` // type 为 error 时的说明（Anthropic Messages 把它放在 error 对象里）
 	Response *struct {
 		ID     string `json:"id"`
 		Model  string `json:"model"`
@@ -163,6 +166,9 @@ func (s *Stream) addResponses(data string) (content, reasoning string, err error
 		s.Message.ReasoningContent += e.Delta
 		return "", e.Delta, nil
 	case "error":
+		if e.Message == "" && e.Error != nil {
+			e.Message = e.Error.Message
+		}
 		return "", "", errors.New("模型在流式响应中途报错：" + e.Message)
 	case "response.failed":
 		reason := "未知原因"
