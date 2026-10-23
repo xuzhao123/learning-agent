@@ -2,7 +2,7 @@ import { endLabel } from "./analysis.js";
 import { memFields } from "./chat.js";
 import { LAB_TITLE, RAG_LAB_TITLE, compact, incomingUsers, parse, textOf, toolText } from "./util.js";
 // ---------- 事件 → 运行模型：只依赖 Chat Completions 协议字段 ----------
-export function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, disallowedTools: [], provider: "", model: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false, userImages: [], asks: {}, steers: [], askUser: false }; }
+export function newRun(id) { return { id, query: "", t0: null, last: null, tEnd: null, exit: "", logs: [], calls: [], aux: [], turns: [], prevMessages: [], lastMainMessages: [], inputCapacity: 0, mem: [], memTurn: 0, memPhase: "start", skills: [], mcp: [], caps: [], hookCalls: {}, hookAfter: {}, subs: {}, subCalls: {}, subagents: false, browser: false, dsSearch: false, disallowedTools: [], provider: "", model: "", bash: false, sandbox: "", netDecision: {}, web: {}, stopRequested: false, traces: [], spanCalls: {}, protocol: false, netPending: {}, netAsks: {}, approvals: {}, source: "", lastBody: null, openTools: new Map(), rewindNotes: {}, rewoundAll: false, userImages: [], asks: {}, steers: [], askUser: false }; }
 export function apply(r, e) {
   const time = Date.parse(e.time);
   if (r.t0 === null) r.t0 = time;
@@ -95,11 +95,14 @@ export function apply(r, e) {
     const p = e.body || {};
     if (e.method === "tool/requestApproval") r.approvals[p.call_id] = { ...p, state: "waiting" };
     else if (e.method === "user/requestInput") r.asks[p.call_id] = { ...p, state: "waiting" }; // D34：模型的提问，等人回答
-    else if (p.domain) r.netPending[p.domain] = true;
+    else if (p.domain) {
+      r.netPending[p.domain] = true;
+      if (p.call_id) (r.netAsks[p.call_id] ||= {})[p.domain] = p.reason || ""; // 代理发起的挂在发起它的 bash 下面（见 proxyNetCards）
+    }
   }
   else if (e.kind === "answer") { const a = r.asks[e.text]; if (a) Object.assign(a, { state: "answered", answer: (e.body || {}).answer }); }
   else if (e.kind === "decision") { const a = r.approvals[e.text]; if (a) a.state = (e.body || {}).decision; }
-  else if (e.kind === "allow" || e.kind === "deny") { r.netDecision[e.text] = e.kind; delete r.netPending[e.text]; }
+  else if (e.kind === "allow" || e.kind === "deny") { r.netDecision[e.text] = e.kind === "allow" && e.body?.always ? "always" : e.kind; delete r.netPending[e.text]; }
   else if (e.kind === "rewind") {
     // D29：撤销了这一轮及之后各轮的文件改动；对话从撤销点的上一轮接着聊（它的检查点），这几轮留着、淡化显示。
     const b = e.body || {}, hit = r.turns.filter((t) => (b.turns || []).includes(t.checkpoint));

@@ -62,6 +62,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 #title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 #run-id { flex: none; padding: 1px 6px; border: 0; border-radius: 5px; background: none; color: var(--faint); font: 11.5px/1.6 var(--mono); white-space: nowrap; }
 #run-id:hover { background: var(--hover); color: var(--muted); }
+/* 对话 ID 只在悬停标题时出现，点一下复制；触屏没有悬停，一直显示。 */
+#run-id { opacity: 0; transition: opacity .15s; }
+#heading:hover #run-id, #run-id:focus-visible { opacity: 1; }
+@media (hover: none) { #run-id { opacity: 1; } }
 .seg { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--soft); }
 .seg button { border: 0; background: none; padding: 3px 12px; border-radius: 7px; color: var(--muted); font-size: 13px; }
 .seg button.on { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.06); }
@@ -122,6 +126,12 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .md th { font-weight: 600; }
 .md.mid { color: var(--muted); }
 .answer-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 2px 0 10px; font-size: 12px; color: var(--faint); }
+/* 同 claude.ai：问题下的信息与操作、之前各轮回答下的用时，悬停时才出现；最后一轮的用时常显。触屏没有悬停，一直显示。 */
+.net-line { margin: 4px 0 8px; font-size: 12.5px; color: var(--faint); }
+.net-line b { color: var(--muted); font-weight: 500; }
+.utools, .turn-sum { opacity: 0; transition: opacity .15s; }
+.u:hover + .utools, .utools:hover, .utools:focus-within, .a:hover .turn-sum, .a:last-child .turn-sum, .turn-sum:focus-within { opacity: 1; }
+@media (hover: none) { .utools, .turn-sum { opacity: 1; } }
 .link { border: 0; background: none; padding: 0; color: var(--muted); font-size: 12px; }
 .link:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 .divider { margin: 18px 0; font-size: 12px; color: var(--faint); }
@@ -219,8 +229,6 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 select.pick { appearance: none; -webkit-appearance: none; padding-right: 22px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%23999' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center; }
 select.pick:hover:not(:disabled) { background-color: var(--hover); }
 select.pick:disabled { background-image: none; padding-right: 8px; }
-#tools-link { flex: none; padding: 4px 8px; border-radius: 8px; color: var(--muted); font-size: 12.5px; }
-#tools-link:hover { background: var(--hover); color: var(--text); text-decoration: none; }
 .set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); }
 .set-row:first-child { border-top: 0; }
 .set-row .sub { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
@@ -380,9 +388,14 @@ select.pick:disabled { background-image: none; padding-right: 8px; }
 .raw-toggle::before { content: "{ }"; font: 500 11px var(--mono); }
 .raw-toggle:hover { background: var(--hover); color: var(--text); }
 .raw-toggle[aria-expanded="true"] { background: var(--sel); color: var(--text); }
-.raw-call { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; color: var(--faint); font-size: 11px; }
-#thread .raw-call .raw-toggle { opacity: 0; transition: opacity .15s; }
-#thread .raw-call:hover .raw-toggle, #thread .raw-call .raw-toggle[aria-expanded="true"], #thread .raw-toggle:focus-visible { opacity: 1; }
+.req { position: relative; }
+.req > .raw-toggle { position: absolute; z-index: 1; top: 0; right: -6px; background: var(--bg); opacity: 0; transition: opacity .15s; }
+.req > .raw-toggle:hover, .req > .raw-toggle[aria-expanded="true"] { background: var(--soft); }
+.req:hover > .raw-toggle, .req > .raw-toggle[aria-expanded="true"], .req > .raw-toggle:focus-visible { opacity: 1; }
+.req > .raw-io:not([hidden]) { margin: 4px 0 8px; }
+#subpanel .req > .raw-toggle { background: var(--side); }
+.step .xname { color: var(--text); }
+.step > summary > .xdesc { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .raw-io { padding: 12px; border-bottom: 1px solid var(--line); background: var(--side); }
 .raw-note { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--muted); font-size: 11px; }
 .raw-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }

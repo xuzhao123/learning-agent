@@ -13,7 +13,9 @@ import (
 )
 
 // D32：后台命令。bash 带 background=true 时不等它结束：在同样的沙箱里启动（同样的 cgroup 限制、断网与代理），
-// 立刻返回 job_id；之后用 bash_output 读新输出、看结束没有，用 bash_kill 停掉。适合起服务、监视文件、跑很久的构建。
+// 立刻返回 job_id；之后用 bash_output 读新输出、看结束没有，用 bash_kill 停掉。适合监视文件、跑很久的构建。
+// 每条命令都在自己的沙箱里（自己的进程与网络），后台起的服务，之后的命令看不到也连不上；同 Claude Code 在 Linux 上的沙箱，
+// 启动结果照它的说法告诉模型：要测服务，在同一条命令里起服务再访问；查看和停止只经 bash_output、bash_kill。
 // 后台命令只活到这一轮结束：进程退出前 Close 把还在跑的全部按 cgroup 杀掉，和前台命令被取消时一样，沙箱里不留进程。
 const (
 	maxJobs      = 4       // 同时在跑的后台命令最多几个
@@ -90,7 +92,8 @@ func startJob(ctx context.Context, callID, command string) (any, error) {
 	}()
 	fmt.Printf("Bash job [%s]: started call=%s\n", j.id, callID)
 	return map[string]any{"job_id": j.id, "status": "running",
-		"note": "命令在后台运行。用 bash_output 读输出、看结束没有（可以带 wait 等几秒），用 bash_kill 停掉；这一轮结束时还在跑的会被终止。"}, nil
+		"note": "命令在后台它自己的沙箱里运行：之后的命令看不到、也连不上它和它起的服务，所以不要用 ps、pgrep、pkill 或网络请求查它还在不在。" +
+			"用 bash_output 读输出、看结束没有（可以带 wait 等几秒），用 bash_kill 停掉；这一轮结束时还在跑的会被终止。要测一个服务，在同一条命令里起服务再访问。"}, nil
 }
 
 func findJob(id string) (*job, error) {

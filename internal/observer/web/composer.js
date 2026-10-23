@@ -121,7 +121,6 @@ $("provider").onchange = () => { ui.picked.provider = true; ui.picked.model = fa
 $("model").onchange = () => { ui.picked.model = true; syncComposer(); };
 $("workspace").onchange = () => { ui.picked.workspace = true; syncComposer(); };
 $("perm").onchange = () => { ui.picked.permission = true; syncComposer(); };
-$("tools-link").onclick = () => { if (ui.run) { ui.toolsOpen = !ui.toolsOpen; syncComposer(); } else openSettings(); };
 $("settings").onclick = () => openSettings();
 // 输入法组合输入时的 Enter 用于选词，不能发送。
 $("query").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); $("composer").requestSubmit(); } };

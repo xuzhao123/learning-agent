@@ -28,7 +28,9 @@ export function renderShell() {
   status.className = r && r.exit && r.exit !== "exit 0" ? "bad" : r && !r.exit ? "run" : "";
   const nSub = r ? Object.values(r.subs).reduce((n, s) => n + s.calls.length, 0) : 0;
   const calls = r ? `${r.calls.length + r.aux.length + nSub} 次请求` : "";
-  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? (r.stopRequested ? "正在停止…" : `运行中 · ${calls}`) : r.exit === "exit 0" ? `完成 · ${calls}` : r.stopRequested ? "已停止" : endLabel(r, true);
+  // 正常完成不显示状态（同 Claude Code）；请求次数放在悬停提示里。
+  status.textContent = !r ? "" : ui.replay ? "回放中" : !r.exit ? (r.stopRequested ? "正在停止…" : "运行中") : r.exit === "exit 0" ? "" : r.stopRequested ? "已停止" : endLabel(r, true);
+  status.title = calls;
 }
 // 工具在设置里常驻；新对话按设置显示，进行中的对话按它开始时的快照显示。
 export const TOOL_INFO = {
@@ -71,6 +73,11 @@ export async function loadModels() {
     if (res.ok) ui.models = new Map((await res.json()).map((p) => [p.name, p]));
   } catch {}
   syncComposer();
+}
+// 新对话没在输入框选具体模型时，agent 实际用的是设置里的默认模型（不属于这家供应商时退回供应商默认）。
+export function settingsModel(provider) {
+  const spec = ui.models?.get(provider || ""), model = ui.settings?.effective?.values.model || "";
+  return model && (spec?.models || []).some((m) => m.name === model) ? model : "";
 }
 // 当前（或这条对话的）模型能不能看图：清单来自 /models，与 agent 用的是同一份路由表。
 // model 为空表示用这家供应商的默认值；清单外的模型名（旧对话、.env 自填的）不知道就不拦。
@@ -146,8 +153,10 @@ export function syncComposer() {
   const prov = $("provider").value, spec = ui.models?.get(prov);
   const models = (spec?.models || []).map((m) => m.name);
   // 已有对话只显示它实际用的模型（agent 在 turn/started 里报的），它可以不在清单里：旧对话的带日期版本号的模型名、.env 里自填的名字；
-  // 没记录到就不显示，不拿现在的默认值冒充。新对话列出清单，“默认”标的是 agent 实际会用的那个（/models 按 .env 解析）。
-  const opts = r ? (r.model ? [[r.model, r.model]] : []) : [["", "默认（" + (spec?.default || "供应商默认") + "）"], ...models.map((m) => [m, m])];
+  // 没记录到就不显示，不拿现在的默认值冒充。新对话列出清单，第一项“默认”标的是不选时 agent 实际会用的那个：
+  // 设置里的默认具体模型，没设就用这家供应商的默认值（/models 按 .env 解析）。
+  const fallback = settingsModel(prov) || spec?.default || "供应商默认";
+  const opts = r ? (r.model ? [[r.model, r.model]] : []) : [["", "默认（" + fallback + "）"], ...models.map((m) => [m, m])];
   const pv = $("model"), msig = JSON.stringify(opts);
   if (pv.dataset.sig !== msig) {
     const keep = pv.value;
@@ -176,9 +185,6 @@ export function syncComposer() {
   // 权限模式每轮可以换：默认取这条对话上一轮的（新对话取设置）；用户改过就保持用户的选择，直到发送。
   if (!ui.picked.permission) $("perm").value = (r && r.permission) || s?.values.permission_mode || "edit";
   $("perm").disabled = !!busy || !!ui.replay;
-  const on = Object.keys(TOOL_INFO).filter(toolOn);
-  $("tools-link").textContent = `${on.length} 项工具`;
-  $("tools-link").title = on.map((k) => TOOL_INFO[k][0]).join("、") || "没有打开的工具";
   // 运行中发送键变成停止键（Codex 客户端的做法）：第一次优雅停止，第二次强制结束。
   const running = !!r && !r.exit && !ui.replay && (r.calls.length > 0 || r.logs.length > 0);
   $("send").classList.toggle("stop", running);
@@ -189,19 +195,19 @@ export function syncComposer() {
   const imported = SOURCE_LABEL[r?.source];
   // 附图：一条对话的模型固定，能不能看图也固定。不能看图的模型、实验、导入的对话与回放都不给附图；
   // 已经附了图又切到不能看图的模型时，发送前拦下，不自动删图。
-  const vis = modelVision(prov, r ? r.model || "" : pv.value);
+  const vis = modelVision(prov, r ? r.model || "" : pv.value || settingsModel(prov));
   $("attach").disabled = !vis.vision || lab || !!imported || !!ui.replay;
   $("attach").title = vis.vision ? `附图：PNG、JPEG、GIF、WebP，每条消息最多 ${MAX_IMAGES} 张；也可以粘贴或拖放`
     : `当前模型 ${vis.name} 不能看图，换一个能看图的模型再附图`;
   // 导入的对话只读：模型、工作区、权限与工具都是对方 agent 的，这里不给选择。
-  for (const id of ["provider", "perm", "tools-link"]) $(id).hidden = !!imported;
+  for (const id of ["provider", "perm"]) $(id).hidden = !!imported;
   // 模型与工作区上面已按清单和对话决定是否显示，这里只在导入的对话里再藏起来，不能把它们重新显示出来。
   if (imported) $("model").hidden = $("workspace").hidden = true;
   $("query").disabled = !!imported;
   $("send").disabled = running ? false : ui.sending || !!busy || !!broken || !!ui.replay || lab || !!imported || !$("query").value.trim();
   $("query").placeholder = imported ? "导入的对话只能查看" : running ? "运行中：输入的话会排进 agent 的下一次请求（插话）" : r ? "继续提问" : "给 agent 布置一个任务，/ 选命令";
-  const steps = r ? r.maxSteps : Number(s?.values.max_steps || 0);
-  $("mode-chip").textContent = imported ? `${imported} · ${r.calls.find((c) => c.res?.model)?.res.model || ""}` : r && ui.toolsOpen ? $("tools-link").title : steps > 0 ? `预算 ${steps} 次请求` : "";
+  // 输入框只放这一轮要选的（同 Claude Code）：工具、请求预算在设置页里看，这里只给导入的对话标出来源。
+  $("mode-chip").textContent = imported ? `${imported} · ${r.calls.find((c) => c.res?.model)?.res.model || ""}` : "";
   // 只在需要人注意时提示；常规操作说明不放在输入框下面。
   $("hint").textContent = !r ? "" : imported ? `从 ${imported} 导入的记录，只能查看；系统提示词、工具定义与耗时以记录里有的为准` : lab ? "对比实验使用独立问题；自行提问请新建对话" : ui.replay ? "回放中，结束后可继续提问" :
     busy ? (r.stopRequested ? "正在停止：agent 回填结果、保存检查点后退出；再点一次强制结束" : "") : broken ? "上次运行未正常结束、也没有检查点，请新建对话" : "";
@@ -319,7 +325,7 @@ export async function attribute(runID) {
 export function newChat(updateURL = true) {
   stopReplay();
   if (ui.source) ui.source.close();
-  Object.assign(ui, { chatFollow: true, unseen: false, page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false, picked: {}, toolsOpen: false });
+  Object.assign(ui, { chatFollow: true, unseen: false, page: "chat", tab: "trace", run: null, events: [], source: null, selected: null, loading: false, subOpen: null, webOpen: null, webClosed: false, picked: {} });
   if (updateURL) syncRunURL(null);
   document.body.classList.remove("nav-open");
   $("stats").hidden = true;

@@ -20,7 +20,8 @@ export function save(key, value) { try { localStorage.setItem(key, value); } cat
 // 对话流里的小图标：内联 SVG 线条图标，不依赖系统字体里有没有这个符号。
 const ICONS = { think: '<circle cx="12" cy="12" r="3.5"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
   caps: '<path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6-4.6-1.9 4.6-1.9Z"/>', hook: '<path d="M5 21V4h12l-2.5 4 2.5 4H5"/>', mem: '<path d="M6 3h12v18l-6-4-6 4Z"/>',
-  ok: '<path d="m5 12.5 4.5 4.5L19 7.5"/>', bad: '<path d="M7 7l10 10M17 7 7 17"/>', stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>', error: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/>', chev: '<path d="m9 6 6 6-6 6"/>' };
+  ok: '<path d="m5 12.5 4.5 4.5L19 7.5"/>', bad: '<path d="M7 7l10 10M17 7 7 17"/>', stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>', error: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/>', chev: '<path d="m9 6 6 6-6 6"/>',
+  explore: '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/>' };
 export function ico(cls, name) {
   const span = el("span", "ico " + cls);
   if (name) span.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;

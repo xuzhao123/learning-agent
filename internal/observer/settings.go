@@ -41,9 +41,9 @@ var singleTools = []string{"calculator", "get_current_datetime", "search_notes",
 var builtin = map[string]string{
 	"calculator": "on", "get_current_datetime": "on", "search_notes": "off",
 	"rag": "off", "memory": "off", "skills": "on", "mcp": "on", "subagents": "on", "ask_user": "on", "bash": "on", "web_search": "off", "open_page": "on", "ds_search": "on", "coding": "on",
-	"embedding": "ark", "memory_ttl": "", "provider": "ark", "workspace": "",
+	"embedding": "ark", "memory_ttl": "", "provider": "ark", "model": "", "workspace": "",
 	"max_steps": "0", "context_window": "0", "tool_output": "4000",
-	"permission_mode": "edit", "permission_rules": "",
+	"permission_mode": "edit", "permission_rules": "", "net_allow": "",
 	"hooks": "",
 }
 
@@ -73,6 +73,21 @@ func hooksConfig(value string) (string, error) {
 
 // 权限规则一行一条：allow: Bash(go build *)、ask: Edit(internal/agent/**)、deny: Bash(git push *)。语法由 agent 的 permission 包校验。
 var ruleLine = regexp.MustCompile(`^(allow|ask|deny):\s*([A-Za-z_][A-Za-z0-9_]*(\(.*\))?)$`)
+
+// 设置里的具体模型名：只挡怪字符；是否在这家供应商的清单里要看合并后的 provider，由 effectiveFor 归一（见 modelFor）。
+var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
+
+// 沙箱联网白名单：一行一个域名（含子域名），空白分隔也行。和 -net-allow 一样只收小写域名，不收 IP 与通配符。
+// 新对话开始时拍进快照作为 -net-allow；审批时点“始终允许”加到个人设置（见 alwaysAllow）。
+func netDomains(text string) []string {
+	var out []string
+	for _, domain := range strings.Fields(text) {
+		if !slices.Contains(out, domain) {
+			out = append(out, domain)
+		}
+	}
+	return out
+}
 
 func ruleLines(text string) []string {
 	var out []string
@@ -146,6 +161,12 @@ func valid(key, value string, f settingsFile) error {
 		if _, ok := llm.FindProvider(value); !ok {
 			return errors.New("provider 取 " + llm.ProviderNames())
 		}
+	// 具体模型：空表示用这家供应商的默认值。这里只挡住不像模型名的输入；
+	// 它属不属于当前供应商要看合并后的 provider，所以由 effectiveFor 归一。
+	case "model":
+		if !modelName.MatchString(value) {
+			return errors.New("model 是这家供应商清单里的模型名，空表示用供应商默认值")
+		}
 	case "workspace":
 		if value != "" && !slices.ContainsFunc(f.Workspaces, func(w workspaceDir) bool { return w.Name == value }) {
 			return fmt.Errorf("没有登记名为 %s 的工作区", value)
@@ -158,6 +179,12 @@ func valid(key, value string, f settingsFile) error {
 		for _, line := range ruleLines(value) {
 			if !ruleLine.MatchString(line) {
 				return fmt.Errorf("权限规则一行一条，格式如 allow: Bash(go build *)：%q", line)
+			}
+		}
+	case "net_allow":
+		for _, domain := range netDomains(value) {
+			if len(domain) > 253 || !domainPattern.MatchString(domain) {
+				return fmt.Errorf("沙箱联网白名单一行一个小写域名（不含协议、路径和 IP）：%q", domain)
 			}
 		}
 	case "hooks":
@@ -250,6 +277,11 @@ func (s *server) effectiveFor(u *user) (effective, settingsFile, error) {
 			}
 		}
 	}
+	// 具体模型同理：合并后不在当前供应商清单里就当没设（改了供应商、旧模型名留在个人设置里的情况），
+	// 否则新对话会按清单外的名字启动、被 startRun 拒绝。
+	if kept := modelFor(e.Values["provider"], e.Values["model"]); kept != e.Values["model"] {
+		e.Values["model"], e.Source["model"] = "", "builtin"
+	}
 	for _, key := range toolOrder {
 		if feature := toolFeatures[key]; feature != "" && !u.platform() && !s.auth.policy(u.Tenant).allowsTool(feature) {
 			e.Blocked[key] = "租户 " + u.Tenant + " 没有开通"
@@ -279,6 +311,20 @@ func (s *server) effectiveFor(u *user) (effective, settingsFile, error) {
 func (e effective) on(key string) bool {
 	_, blocked := e.Blocked[key]
 	return e.Values[key] == "on" && !blocked
+}
+
+// modelFor 回答“这个模型名在这家供应商的清单里算不算数”：空串（用供应商默认值）与清单里的名字原样返回，
+// 其余（改了供应商后留下的旧名字）返回空。清单只在 llm 包里，这里照它判断，不做第二份。
+func modelFor(provider, model string) string {
+	if model == "" {
+		return ""
+	}
+	if p, ok := llm.FindProvider(provider); ok {
+		if _, found := p.FindModel(model); found {
+			return model
+		}
+	}
+	return ""
 }
 
 func (s *server) getSettings(w http.ResponseWriter, req *http.Request) {
@@ -343,6 +389,33 @@ func (s *server) putSettings(layer string) http.HandlerFunc {
 		}
 		w.Write([]byte("ok"))
 	}
+}
+
+// alwaysAllow 把审批时点了“始终允许”的域名加进这个账号的个人设置：以此刻对这个账号生效的白名单为底（自己设过就是自己的，
+// 否则是平台的），追加后存成个人层的值，和在设置页里自己加一行是同一件事。只影响之后的新对话。
+func (s *server) alwaysAllow(u *user, domain string) error {
+	s.hubMu.Lock()
+	defer s.hubMu.Unlock()
+	f, err := s.readSettings()
+	if err != nil {
+		return err
+	}
+	value, own := f.Users[u.Name]["net_allow"]
+	if !own {
+		value = f.Platform["net_allow"]
+	}
+	list := netDomains(value)
+	if slices.Contains(list, domain) {
+		return nil
+	}
+	if f.Users == nil {
+		f.Users = map[string]map[string]string{}
+	}
+	if f.Users[u.Name] == nil {
+		f.Users[u.Name] = map[string]string{}
+	}
+	f.Users[u.Name]["net_allow"] = strings.Join(append(list, domain), "\n")
+	return s.writeSettings(f)
 }
 
 // 工作区由平台账号登记：本机上一个已存在的 git 仓库目录。对话只能从这个列表里选，网页不能直接给路径。

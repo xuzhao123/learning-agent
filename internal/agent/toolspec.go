@@ -70,6 +70,9 @@ func specOf(name string) Spec {
 	switch name {
 	case "spawn_agent":
 		spec.Timeout = SubagentTimeout
+	case "bash":
+		// 命令时限由沙箱按 -tool-timeout 自己判，不算命令停在代理里等人批准联网的时间；执行器多留出一次审批的等待。
+		spec.Timeout = ToolTimeout + sandbox.ApprovalWait + 30*time.Second
 	case "request_network_access":
 		spec.Timeout = sandbox.ApprovalWait + 30*time.Second // 等人点按钮，工具自己会在 ApprovalWait 到时返回 pending
 	case "ask_user":

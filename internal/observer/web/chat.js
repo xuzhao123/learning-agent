@@ -2,10 +2,11 @@ import { agentCard, renderSubPanel } from "./agents.js";
 import { analyze, endLabel, tokenParts, toolResult } from "./analysis.js";
 import { WEB_TOOLS, webCard } from "./browser.js";
 import { start } from "./composer.js";
+import { exploreCall, exploreLabel } from "./explore.js";
 import { claimViz, md, parkViz } from "./md.js";
 import { openMCP, openMemory, openSkills } from "./pages.js";
 import { render } from "./render.js";
-import { approvalCard, askCard, bashCard, netCard } from "./sandbox.js";
+import { approvalCard, askCard, bashCard, netCard, proxyNetCards } from "./sandbox.js";
 import { loadRuns, rewindTurn, syncComposer, toolOn } from "./shell.js";
 import { $, AUX_LABEL, LAB_TITLE, MEM_KIND, MEM_STATUS, MEM_TYPE, RAG_LAB_TITLE, callPosition, clip, compact, el, fold, ico, idleText, kfmt, parse, pretty, rawIO, sec, textOf, ui, userPictures } from "./util.js";
 // agent 终端行形如 "Memory recall: id=M1 kind=semantic score=0.48 content=…"；content 放在最后，可含空格。
@@ -50,9 +51,8 @@ function memoryCard(r, turn, phase) {
   return step(`mem-${phase}-${turn}`, [ico("mem", "mem"), el("span", "", label)], [...rows, all]);
 }
 // 本轮启用的 skill 与 MCP：快照来自观测台的 start/continue 事件，实际结果来自 agent 启动时的终端行。
-function capsCard(r, turn) {
+function capsSummary(r, turn) {
   const logs = r.caps.filter((l) => l.turn === turn);
-  if (!logs.length) return null;
   const loaded = logs.find((l) => l.kind === "skills_loaded");
   const tools = logs.filter((l) => l.kind === "mcp_register").length;
   const errors = logs.filter((l) => ["skill_error", "mcp_error", "mcp_skip"].includes(l.kind)).length;
@@ -61,8 +61,15 @@ function capsCard(r, turn) {
   if (r.skills.length) parts.push(`Skills ${loaded ? loaded.count : "?"}/${r.skills.length}`);
   if (r.mcp.length) parts.push(`MCP ${r.mcp.length} 个 · ${tools} 个工具`);
   if (errors) parts.push(`${errors} 条跳过`);
-  if (command) parts.push(command.text.replace(/^Command: /, "命令 "));
   if (hookRuns) parts.push(`hook ${hookRuns} 次`);
+  return { logs, errors, command, parts };
+}
+// 同 Claude Code 只在启动时报一次能力、出问题时再提：续聊各轮和上一轮一样（没有斜杠命令）就不再显示。
+function capsCard(r, turn) {
+  const { logs, errors, command, parts } = capsSummary(r, turn);
+  if (!logs.length) return null;
+  if (turn > 1 && !command && parts.join() === capsSummary(r, turn - 1).parts.join()) return null;
+  if (command) parts.push(command.text.replace(/^Command: /, "命令 "));
   const rows = [];
   if (r.skills.length) rows.push(el("div", "meta", "skill：" + r.skills.join("、") + " · 模型判断相关时调用 load_skill 读取全文"));
   for (const m of r.mcp) rows.push(el("div", "meta", `MCP ${m.name}：${m.command}`));
@@ -74,6 +81,8 @@ function capsCard(r, turn) {
 }
 // D26：hook 运行记录。结局 ok（放行或补充上下文）、block（拦截，原因交给模型或用户）、error（hook 自己出错，照常继续）。
 const HOOK_OUTCOME = { ok: "通过", block: "拦截", error: "出错（照常继续）" };
+// 同 Claude Code：hook 安静通过就不占一行，只有拦截、出错或者给了反馈（输出会交给模型）时才显示。
+const hooksWorthShowing = (hooks) => hooks?.some((h) => h.outcome !== "ok" || h.output);
 function hookCard(key, hooks) {
   const blocked = hooks.some((h) => h.outcome === "block");
   const head = [ico("cap" + (blocked ? " bad" : ""), "hook"), el("span", "hub-chip", "hook"), el("span", "", hooks.map((h) => `${h.event} ${HOOK_OUTCOME[h.outcome] || h.outcome}`).join(" · "))];
@@ -120,16 +129,40 @@ function observeAt(id) {
   Object.assign(ui, { page: "observe", tab: "trace", follow: false, selected: id, expanded: true, inspectorTab: "output" });
   render(); loadRuns();
 }
+const span = (ms) => ms < 60e3 ? sec(ms) : `${Math.floor(ms / 60e3)} 分 ${Math.round(ms % 60e3 / 1e3)} 秒`;
+// 连续的只读调用（读文件、搜索、列目录）并成一项；只有一次只读调用时照常显示。
+function exploreRuns(r, flow) {
+  const out = [];
+  for (const f of flow) {
+    if (f.kind === "call" && exploreCall(r, ui.run, f.call)) {
+      if (out.at(-1)?.kind === "explore") out.at(-1).calls.push(f.call);
+      else out.push({ kind: "explore", calls: [f.call] });
+    } else out.push(f);
+  }
+  return out.map((f) => f.kind === "explore" && f.calls.reduce((s, c) => s + c.tools.length, 0) < 2 ? { kind: "call", call: f.calls[0] } : f);
+}
+// 同 Codex 的 Explored：一行写读了哪些文件、搜了几次，点开是每次请求原来的思考与工具行，思考收在组里不打断这一行。
+function exploreGroup(r, calls) {
+  const running = calls.some((c) => c.tools.some((t) => t.state === "running"));
+  const icon = running ? el("span", "ico") : ico("", "explore");
+  if (running) icon.append(el("span", "spin"));
+  const n = calls.reduce((s, c) => s + c.tools.length, 0), inner = el("div");
+  for (const c of calls) renderCall(inner, r, c, false);
+  return step("x" + calls[0].n, [icon, el("span", "xname", running ? "探索中" : "已探索"), el("span", "xdesc", exploreLabel(calls)), el("span", "", `${n} 次调用`)], [inner]);
+}
 // 流式输出进行中的等待提示带上已等多久：思考时不发内容的供应商，前一两分钟页面上只有这一行。
 const liveWait = (c) => `${c.live?.content ? "生成中" : "思考中"}… ${Math.max(0, Math.floor((Date.now() - c.start) / 1000))} s`;
 setInterval(() => {
   const s = ui.live;
   if (s?.wait?.isConnected && !s.call.end) s.wait.textContent = liveWait(s.call);
 }, 1000);
-export function renderCall(box, r, c, last) {
+export function renderCall(outer, r, c, last) {
   const m = (c.choice && c.choice.message) || {};
-  const raw = rawIO(c, r.id), head = el("div", "raw-call");
-  head.append(el("span", "", `${callPosition(c)} · 请求 #${c.n}`), raw.button); box.append(head, raw.panel);
+  // 每次请求不再单独占一行编号（同 Codex、Claude Code 的主视图）：原始输入 / 输出的开关悬停时出现在右上角，
+  // Turn、Step 与请求号写在它的提示里；按 Step 展开的完整记录在轨迹页。
+  const raw = rawIO(c, r.id), box = el("div", "req");
+  raw.button.title = `${callPosition(c)} · 请求 #${c.n}`;
+  box.append(raw.button, raw.panel); outer.append(box);
   if (!c.end) {
     // B1：流式输出进行中：推理与正文边收边显示，完整响应到达后换成下面的正式渲染。
     const live = c.live || {}, slot = { box, call: c, reasoning: live.reasoning?.length || 0, content: live.content || "" };
@@ -152,17 +185,19 @@ export function renderCall(box, r, c, last) {
   if (m.reasoning_content) {
     const p = tokenParts(c.usage);
     // 只知道整次请求的耗时：思考与写回答各占多少，各家流式的顺序不同，算不出来。
-    box.append(step("r" + c.n, [ico("", "think"), el("span", "", "思考" + (p.reasoning ? ` ${kfmt(p.reasoning)} tokens` : "") + ` · 整次请求 ${sec(c.ms)}`)], [el("div", "reason", m.reasoning_content)]));
+    const label = el("span", "", "思考");
+    label.title = (p.reasoning ? `${kfmt(p.reasoning)} tokens · ` : "") + `整次请求 ${sec(c.ms)}`;
+    box.append(step("r" + c.n, [ico("", "think"), label], [el("div", "reason", m.reasoning_content)]));
   }
   // 过程说明：和工具调用一起出现的文字，或 agent 标明是 commentary 的（如被 Stop hook 拦下的“想结束”）。
   const commentary = m.content && (c.tools.length || c.phase === "commentary");
   if (commentary) { const mid = md(m.content, true); mid.classList.add("mid"); if (!c.tools.length) mid.title = "过程说明：还没有结束（比如被 Stop hook 拦下，接着做）"; box.append(mid); }
   for (const t of c.tools) {
-    if (r.hookCalls[t.id]) box.append(hookCard(`h${c.n}-${t.index}`, r.hookCalls[t.id]));
+    if (hooksWorthShowing(r.hookCalls[t.id])) box.append(hookCard(`h${c.n}-${t.index}`, r.hookCalls[t.id]));
     if (ui.run.approvals[t.id]) box.append(approvalCard(ui.run, t.id));
     if (t.name === "spawn_agent" && !r.isSub) { box.append(agentCard(r, t)); continue; }
     if (WEB_TOOLS.includes(t.name)) { box.append(webCard(r, t)); continue; }
-    if (t.name === "bash") { box.append(bashCard(r, c, t)); continue; }
+    if (t.name === "bash") { box.append(bashCard(r, c, t), ...proxyNetCards(t)); continue; }
     if (t.name === "request_network_access") { box.append(netCard(r, t)); continue; }
     if (t.name === "ask_user") { box.append(askCard(ui.run, t)); continue; }
     const icon = t.state === "running" ? el("span", "ico") : ico(t.detour ? "bad" : "ok", t.detour ? "bad" : "ok");
@@ -210,8 +245,12 @@ export function renderCall(box, r, c, last) {
       node.replaceWith(frag);
     }
     box.append(answer);
-    const meta = el("div", "answer-meta");
-    meta.append(el("span", "", `${c.res?.model || c.req.model || ""} · ${kfmt(c.usage.total_tokens || 0)} tokens · ${sec(c.ms)}`));
+    // 回答下面只写这一轮的用时（同 Claude Code 的 “Worked for …”）；模型、请求次数与 token 合计放在悬停提示里。
+    // 同 claude.ai 的消息操作：最后一轮常显，之前各轮悬停时才出现（见 app.css）。
+    const turn = r.calls.filter((x) => x.turn === c.turn), used = turn.reduce((s, x) => s + (x.usage?.total_tokens || 0), 0);
+    const meta = el("div", "answer-meta turn-sum"), took = el("span", "", "用时 " + span(c.end - turn[0].start));
+    took.title = `${c.res?.model || c.req.model || ""} · 本轮 ${turn.length} 次请求 · 累计 ${used >= 1e6 ? (used / 1e6).toFixed(1) + "M" : kfmt(used)} tokens`;
+    meta.append(took);
     if (!r.isSub) { // 子 agent 的请求不在父对话的观测视图里
       const link = el("button", "link", "观测");
       link.onclick = () => observeAt("m" + c.n);
@@ -219,7 +258,7 @@ export function renderCall(box, r, c, last) {
     }
     box.append(meta);
   }
-  if (r.hookAfter[c.n]) box.append(hookCard(`hs${c.n}`, r.hookAfter[c.n]));
+  if (hooksWorthShowing(r.hookAfter[c.n])) box.append(hookCard(`hs${c.n}`, r.hookAfter[c.n]));
   if (last && !r.exit && c.tools.length && c.tools.every((t) => t.done)) box.append(el("div", "shimmer", "思考中…"));
 }
 export function renderCompact(c) {
@@ -268,7 +307,7 @@ function drawChat() {
   if (r.query === LAB_TITLE) box.append(el("div", "banner", "Day 3 上下文实验：程序自动发出33轮真实对话，再触发一次大工具输出。下面的用户消息由实验程序发送。"));
   if (r.query === RAG_LAB_TITLE) box.append(el("div", "banner", "Day 4：10个问题，每题分别运行无检索与有检索。每组使用独立上下文；问题由实验程序发送。检索评分见终端，引用可点击核对。"));
   let group = null;
-  const flow = chatFlow(r);
+  const flow = exploreRuns(r, chatFlow(r));
   flow.forEach((f, i) => {
     if (f.kind === "case") { box.append(el("div", "banner", f.text)); group = null; return; }
     if (f.kind === "user" && r.interrupted?.[f.turn]) box.append(el("div", "banner", r.interrupted[f.turn]));
@@ -279,18 +318,19 @@ function drawChat() {
       if (turn?.images?.length) bubble.append(userPictures(turn.images));
       u.append(bubble); box.append(u); group = null;
       const tools = el("div", "utools");
-      // D30：续聊的代价：闲置时长与第一次请求的缓存命中。
+      // 问题下面的信息与操作悬停时才出现（同 claude.ai 用户消息下的操作，见 app.css）。
+      // D30：续聊的代价：闲置时长与第一次请求的缓存命中，未命中的 token 数在悬停提示里。
       const first = turn?.firstUsage;
       if (first && first.prompt_tokens && turn.idle) {
-        const cached = (first.prompt_tokens_details && first.prompt_tokens_details.cached_tokens) || 0;
-        const info = el("span", "meta", `闲置 ${idleText(turn.idle)} · 首次请求缓存命中 ${Math.round(100 * cached / first.prompt_tokens)}%（${kfmt(first.prompt_tokens - cached)} token 未命中）`);
-        info.title = "这一轮第一次请求的输入有多少命中了提示词缓存；没命中的部分按全价重新处理";
+        const cached = (first.prompt_tokens_details && first.prompt_tokens_details.cached_tokens) || 0, hit = Math.round(100 * cached / first.prompt_tokens);
+        const info = el("span", "meta", `闲置 ${idleText(turn.idle)} · 缓存命中 ${hit}%`);
+        info.title = `这一轮第一次请求的输入 ${hit}% 命中提示词缓存，${kfmt(first.prompt_tokens - cached)} token 没命中，按全价重新处理`;
         tools.append(info);
       }
       // D29：有工作区的对话，每一轮都可以撤销（连同之后各轮）；正在运行、回放中、导入的对话不行。
       if (turn?.checkpoint && !turn.rewound && r.workspace && r.exit && !r.source && !ui.replay && !ui.loading) {
-        const b = el("button", "link", "撤销到这一轮之前");
-        b.title = "把这一轮及之后用 edit_file / write_file 改过的文件放回去，对话退回上一轮";
+        const b = el("button", "link", "撤销");
+        b.title = "撤销到这一轮之前：把这一轮及之后用 edit_file / write_file 改过的文件放回去，对话退回上一轮";
         b.onclick = () => rewindTurn(r, turn);
         tools.append(b);
       }
@@ -309,6 +349,11 @@ function drawChat() {
     if (f.kind === "caps") { const card = capsCard(r, f.turn); if (card) { if (!group) fresh(); group.append(card); } return; }
     if (f.kind === "memory") { const card = memoryCard(r, f.turn, f.phase); if (card) { if (!group) fresh(); group.append(card); } return; }
     if (!group) fresh();
+    if (f.kind === "explore") {
+      group.append(exploreGroup(r, f.calls));
+      if (i === flow.length - 1 && !r.exit && f.calls.at(-1).tools.every((t) => t.done)) group.append(el("div", "shimmer", "思考中…"));
+      return;
+    }
     renderCall(group, r, f.call, i === flow.length - 1);
   });
   if (r.rewindNotes[r.turns.length + 1]) box.append(el("div", "banner", r.rewindNotes[r.turns.length + 1]));

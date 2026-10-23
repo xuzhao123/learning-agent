@@ -82,7 +82,7 @@ type event struct {
 	Permission string          `json:"permission,omitempty"`       // D25：本轮的权限模式（续聊可以换）与权限规则快照
 	Rules      []string        `json:"permission_rules,omitempty"`
 	Hooks      string          `json:"hooks,omitempty"`          // D26：平台设置里的 hooks 配置原文快照，续聊沿用
-	NetAllow   []string        `json:"net_allow,omitempty"`      // 本轮沙箱可访问的域名（用户批准过的），记在 start/continue 上
+	NetAllow   []string        `json:"net_allow,omitempty"`      // 本轮沙箱可访问的域名，记在 start/continue 上：start 上是设置里的白名单，continue 上再加上本对话批准过的
 	Task       string          `json:"task,omitempty"`           // 发出这次请求的 agent 任务ID（X-Agent-Task）
 	Sub        bool            `json:"sub,omitempty"`            // 请求来自子 agent：不进入父对话流、不参与续聊恢复
 	Trace      string          `json:"trace,omitempty"`          // D13：start/continue 上记这次交互的 trace_id
@@ -335,6 +335,12 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if input.Provider == "" {
 		input.Provider = settings.Values["provider"]
 	}
+	// 具体模型同样有默认值：设置里的“默认具体模型”，空表示用这家供应商的默认值。
+	// 页面传了就以页面为准；它跟其他启动参数一起写进检查点，续聊、续跑、回放与子 agent 沿用。
+	// 设置里的模型不属于这次选的供应商时（页面换了供应商）不带过去，免得被下面的清单校验拒绝。
+	if input.Model == "" {
+		input.Model = modelFor(input.Provider, settings.Values["model"])
+	}
 	// 供应商名由 agent 校验（路由表在 llm 包）；这里只挡住不像名字的输入。
 	if !providerPattern.MatchString(input.Provider) {
 		http.Error(w, "provider 只能是小写字母", http.StatusBadRequest)
@@ -425,10 +431,13 @@ func (s *server) startRun(w http.ResponseWriter, req *http.Request) {
 	if !snap.RAG && !snap.Memory {
 		input.Embedding = ""
 	}
+	if snap.Bash {
+		snap.NetAllow = netDomains(settings.Values["net_allow"])
+	}
 	var args []string
 	if !lab {
 		snap.Embedding = input.Embedding
-		args = snapshotArgs(snap, nil)
+		args = snapshotArgs(snap, snap.NetAllow)
 	}
 	if input.ContextLab {
 		// 使用同一个真实实验入口；所有模型请求仍经过本次运行的代理。
@@ -1438,8 +1447,9 @@ func (s *server) streamEvents(w http.ResponseWriter, req *http.Request) {
 
 // 停止按钮：第一次向 agent 进程组发 SIGINT，agent 回填结果、写好检查点再退出（Day 8 的优雅停止）；
 // 第二次发 SIGKILL 强制结束。子 agent 在各自的进程组里，由父 agent 收到 SIGINT 后转发。
-// Day 12：沙箱网络白名单由用户审批。agent 的 request_network_access 只打印一行请求；
+// Day 12：沙箱网络白名单由用户审批。请求来自 agent 的 request_network_access（模型发起）或沙箱代理（命令连到不在白名单的域名）；
 // 用户在页面上点“允许 / 拒绝”，这里记一条 allow/deny 事件（存进对话记录），下一轮续聊时作为 -net-allow 传给 agent。
+// “始终允许”另外把域名加进这个账号的个人设置（net_allow），之后新开的对话都带上（同 Claude Code 的“Yes, and don't ask again”）。
 // 模型自己无法调用这个接口：它在断网的沙箱里，也没有访问观测台的工具。
 var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
@@ -1451,6 +1461,7 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 	var input struct {
 		Domain string `json:"domain"`
 		Allow  bool   `json:"allow"`
+		Always bool   `json:"always"` // 只和 allow 一起用：同时写进个人设置
 	}
 	if json.NewDecoder(req.Body).Decode(&input) != nil || len(input.Domain) > 253 || !domainPattern.MatchString(input.Domain) {
 		http.Error(w, "domain 需要是小写域名", http.StatusBadRequest)
@@ -1473,12 +1484,25 @@ func (s *server) decideNetwork(w http.ResponseWriter, req *http.Request) {
 		defer file.Close()
 	}
 	r.mu.Unlock()
+	always := input.Allow && input.Always
+	detail := "观测台页面"
+	if always {
+		detail += "；始终允许：写入个人设置"
+	}
 	// D21：联网批准同样先写审计；之后的续聊会把它作为 -net-allow 传给 agent，agent 那边再记一条。
-	if err := audit.Write(req.Context(), audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_network_decision", Task: r.rootTask, Conversation: r.ID, Target: input.Domain, Risk: "network", Decision: kind, Detail: "观测台页面"}); err != nil {
+	if err := audit.Write(req.Context(), audit.Record{Actor: "user", User: current(req).Name, Tenant: r.Tenant, Event: "user_network_decision", Task: r.rootTask, Conversation: r.ID, Target: input.Domain, Risk: "network", Decision: kind, Detail: detail}); err != nil {
 		http.Error(w, "审计日志写入失败："+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	r.add(event{Kind: kind, Text: input.Domain})
+	var body json.RawMessage
+	if always {
+		if err := s.alwaysAllow(current(req), input.Domain); err != nil {
+			http.Error(w, "无法写入个人设置："+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		body = json.RawMessage(`{"always":true}`)
+	}
+	r.add(event{Kind: kind, Text: input.Domain, Body: body})
 	// B0：如果 agent 正在等这个域名的审批，当场回复；它会在本轮接着执行。否则只记下来，下一轮续聊时作为 -net-allow 传入。
 	r.mu.Lock()
 	conn, waiting := r.conn, r.approvals[input.Domain]
@@ -1620,12 +1644,15 @@ func (s *server) listAudit(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// 当前允许的域名：按时间顺序处理 allow/deny，后一次决定覆盖前一次。
+// 当前允许的域名：从开始时设置里的白名单出发，按时间顺序处理 allow/deny，后一次决定覆盖前一次。
 func (r *run) netAllow() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	list := []string{}
 	for _, e := range r.events {
+		if e.Kind == "start" {
+			list = append(list, e.NetAllow...)
+		}
 		if e.Kind == "allow" && !slices.Contains(list, e.Text) {
 			list = append(list, e.Text)
 		}

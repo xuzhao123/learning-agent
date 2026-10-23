@@ -22,9 +22,10 @@ export function mathLoaded() { if (ui.run) render(); }
 export function md(text, visual) {
   const lines = String(text || "").split("\n"), out = [];
   // 行内代码和公式先换成占位符：里面的地址不变成链接、* 不变成粗体，代码两边的 ** 仍能配成粗体。
+  // 行内代码照 CommonMark：两边是一样长的一串反引号，里面可以有更短的反引号（`` `x` ``）；内容两头都是空格时各去掉一个。
   const inline = (s) => {
     const codes = [], maths = [];
-    s = String(s).replace(/`([^`]+)`/g, (_, code) => `${codes.push(code) - 1}`)
+    s = String(s).replace(/(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)/g, (_, tick, code) => `${codes.push(/^ .*[^ ].* $/.test(code) ? code.slice(1, -1) : code) - 1}`)
       .replace(MD_MATH, (_, a, b, c, d) => `\uE001${maths.push([a ?? b ?? c ?? d, b !== undefined || c !== undefined]) - 1}\uE001`);
     return esc(s)
       .replace(MD_LINK, (_, label, href, angled, bare) => {
@@ -41,9 +42,10 @@ export function md(text, visual) {
   for (let i = 0; i < lines.length;) {
     const line = lines[i];
     if (line.startsWith("```")) {
-      const code = [];
-      for (i++; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
-      const closed = i++ < lines.length, info = line.slice(3).trim(); // 流式输出中未闭合的块先按代码显示
+      // 围栏照 CommonMark：结束行只有反引号、不比开头短，所以 ```` 围起来的块里可以写 ``` 开头的示例。
+      const fence = line.match(/^`+/)[0], code = [];
+      for (i++; i < lines.length && !(/^`+$/.test(lines[i].trim()) && lines[i].trim().length >= fence.length); i++) code.push(lines[i]);
+      const closed = i++ < lines.length, info = line.slice(fence.length).trim(); // 流式输出中未闭合的块先按代码显示
       const kind = info === "echarts" ? "echarts" : /^html\b.*\btype=["']?renderer\b/.test(info) ? "renderer" : "";
       if (visual && closed && kind) out.push(vizSlot(kind, code.join("\n")));
       else out.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`);

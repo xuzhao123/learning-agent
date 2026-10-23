@@ -172,6 +172,25 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 代理还需覆盖重定向、子资源和实际使用协议；HTTP(S)代理规则不会自动约束浏览器另走的WebSocket、其他连接或MCP服务。
 
+### 新域名的审批放在代理里
+
+白名单没覆盖的域名有两种处理方式：代理立即拒绝，让模型读到错误后调用申请工具、人批准后再重跑命令；或者代理挂起这条连接，当场向界面发审批，批准后同一条命令接着跑（Claude Code 的做法）。后者少两次模型请求，模型也没有机会换一条命令绕路。代理里的状态大致是：
+
+```text
+连接 host:port
+  ├ 端口不是 80/443、host 是 IP          → 拒绝（批准了也没用，不问）
+  ├ host 在白名单                        → 解析、核查地址、直连
+  ├ 本轮里人拒绝过或没答复               → 直接按上次结果拒绝
+  ├ 已有同一 host 的审批在等             → 等同一个答复
+  └ 发起审批（先写审计），等待 ≤ 上限
+        allow → 加进白名单 → 解析、核查、直连
+        deny / 超时 / 没有界面 → 拒绝，原因按类别写进命令结果
+```
+
+两个容易漏的地方：一是**命令时限要扣掉等人的时间**，否则人还没点，命令先被超时杀掉；可以记录“有审批在等”的区间，到点时把这段时间顺延。二是**审批的理由由程序写**（哪条命令、连哪个主机和端口），不能用模型给的文字，否则模型可以在理由里误导人。
+
+批准的范围分本次连接、本次会话、永久三档。永久放行写进用户自己的设置，以后的会话都继承，白名单只会越来越大，所以要看得见、删得掉、有审计，常用包源可由管理员统一预置。
+
 ### 权限数据不要交给模型自行判定
 
 检索权限最好在候选可见前执行，并与数据对象绑定；不能把所有私有标题送进模型后再要求它“不要回答”。
@@ -182,7 +201,7 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 执行器里的关口（来源标记、允许列表、高风险确认、私有数据标记、结果日志）、多租户登录与审计，单独在 [17 · 权限、确认与审计](17-permissions-approval-audit.md) 展开，那里有对照源码与当前缺口。本篇只保留与沙箱和网络相关的部分。
 
-[bwrapArgs与run](../internal/sandbox/sandbox.go)、[网络代理与dialChecked](../internal/sandbox/network.go)、[seccompProgram](../internal/sandbox/seccomp.go)提供当前边界；[browser.guard](../internal/browser/browser.go)检查页面请求。
+[bwrapArgs与run](../internal/sandbox/sandbox.go)、[网络代理与dialChecked](../internal/sandbox/network.go)、[seccompProgram](../internal/sandbox/seccomp.go)提供当前边界；[browser.guard](../internal/browser/browser.go)检查页面请求。10-22 起代理里的 `askProxy` 对不在白名单的域名当场发起审批（与 `request_network_access` 共用 `askUser`），`execute` 的命令时限扣掉等待时间；观测台审批多了“始终允许”，写进个人设置的 `net_allow`。
 
 当前seccomp是黑名单、共享内核；没有systemd用户会话时资源限制会降级，工作目录无总配额。浏览器未纳入同一出口沙箱、DNS重绑定/WebSocket仍有缺口。更强策略需要按威胁模型实现与验证，不能从这些片段推导“已经完备”。
 
@@ -210,6 +229,9 @@ func appendInsn(out []byte, code uint16, jt, jf uint8, k uint32) []byte {
 
 3. Shell 默认断网，为什么还要看浏览器权限？  
    模型能在工具之间搬运信息，浏览器可能成为另一条外发通道。
+
+4. 代理当场问人时，为什么命令时限要扣掉等待时间？  
+   命令正停在代理里等人答复，如果照常计时，人还没点它就被超时杀掉，批准等于白做；扣掉等待区间后，批准了命令还能接着跑完。
 
 ## 延伸阅读
 

@@ -1,6 +1,6 @@
 import { show } from "./follow.js";
 import { md } from "./md.js";
-import { TOOL_INFO, loadSettings, newChat, syncComposer } from "./shell.js";
+import { TOOL_INFO, loadModels, loadSettings, newChat, syncComposer } from "./shell.js";
 import { $, MEM_KIND, MEM_SOURCE, MEM_STATUS, el, fold, ui } from "./util.js";
 $("memory").onclick = () => openMemory();
 // D21：审计日志只读。服务端每次从头校验哈希链；页面只展示，不提供修改或删除。
@@ -84,6 +84,9 @@ const SET_SOURCE = { builtin: "内置默认", platform: "平台", user: "你" };
 export async function openSettings() {
   const panel = await openHubPage("设置", "打开的工具在新对话里都会带上，模型自己决定用不用；每个对话只选模型和工作区。改动只影响之后的新对话，进行中的对话沿用开始时的快照。保存在 .data/settings.json。");
   if (!panel) return;
+  // 两级下拉（供应商、具体模型）的选项都来自 /models：它由启动时的 loadModels 异步取回，没回来就先取一次，
+  // 否则设置页会只剩一个“ark”，看起来像没有第二级。
+  if (!ui.models) await loadModels();
   let data;
   try { data = await (await hubCall("GET", "/settings")).json(); }
   catch (err) { panel.lastChild.replaceWith(el("div", "err", "读取失败：" + err.message)); return; }
@@ -146,9 +149,26 @@ export async function openSettings() {
     grid.append(el("span", "meta", label), wrap);
   };
   const line = (label, node, key) => { const wrap = el("span"); wrap.append(node, document.createTextNode(" "), tag(key)); grid.append(el("span", "meta", label), wrap); };
+  const cell = (node, key) => { const wrap = el("span"); wrap.append(node, document.createTextNode(" "), tag(key)); return wrap; };
   // 选项与输入框同一份（/models）；没配好的供应商标出来，开对话时 agent 会报出缺什么。
   const providers = [...(ui.models?.values() || [])].map((p) => [p.name, (p.label || p.name) + (p.error ? "（未配置）" : "")]);
-  line("默认模型", select("provider", providers.length ? providers : [[values.provider, values.provider]]), "provider");
+  // 一级是供应商与接口，二级才是具体模型，与输入框旁的两个下拉叫法一致（模型清单只在 llm 包里，这里读 /models）。
+  const providerPick = select("provider", providers.length ? providers : [[values.provider, values.provider]]);
+  providerPick.title = "供应商与接口：选的是哪家服务、走哪种协议，不是具体模型";
+  const modelPick = el("select"), modelCell = el("span");
+  modelPick.title = "具体模型：空表示用这家供应商的默认值；开对话时页面上没选就以这里为准";
+  const fillModels = () => {
+    const spec = ui.models?.get(values.provider), models = (spec?.models || []).map((m) => m.name);
+    const opts = [["", "供应商默认（" + (spec?.default || "按 .env 与路由表") + "）"], ...models.map((m) => [m, m])];
+    modelPick.replaceChildren(...opts.map(([v, text]) => new Option(text, v)));
+    modelPick.value = opts.some(([v]) => v === values.model) ? values.model ?? "" : "";
+    values.model = modelPick.value;
+  };
+  providerPick.onchange = () => { values.provider = providerPick.value; values.model = ""; fillModels(); };
+  modelPick.onchange = () => { values.model = modelPick.value; };
+  fillModels();
+  modelCell.append(modelPick);
+  grid.append(el("span", "meta", "默认供应商"), cell(providerPick, "provider"), el("span", "meta", "默认具体模型"), cell(modelCell, "model"));
   line("默认工作区", select("workspace", [["", "无工作区"], ...e.workspaces.map((w) => [w.name, w.name])]), "workspace");
   num("max_steps", "模型请求预算", "每轮最多多少次模型请求；0 表示不限，靠重复动作与无进展熔断、停止按钮收住");
   num("context_window", "上下文窗口", "token；0 表示按模型（取路由表里核对过的输入上限，不知道时 262144）。工具全开时每次请求要带全部工具定义，窗口小会很快压缩");
@@ -159,7 +179,13 @@ export async function openSettings() {
   rules.oninput = () => { values.permission_rules = rules.value; };
   const rulesWrap = el("span"); rulesWrap.append(rules, tag("permission_rules"));
   grid.append(el("span", "meta", "权限规则"), rulesWrap);
-  panel.append(grid, el("p", "meta", "权限模式在每条对话的输入框旁边还能换（每轮生效）；规则在对话开始时拍进快照。D20 的高风险确认（删除记忆、破坏性 MCP、含私有数据后的外发、续跑重做）在全权以外的模式下都询问；全权模式同 Claude Code、Codex，不再询问，由程序放行并写审计（续跑重做不自动做，回填结果未知）。"));
+  // 沙箱联网白名单：开对话时拍进快照（-net-allow）。审批时点“始终允许”会加到这里（你的个人设置）。
+  const nets = el("textarea"); nets.rows = 3; nets.style.width = "100%"; nets.value = values.net_allow;
+  nets.placeholder = "一行一个域名，含子域名，如：\npypi.org\nfiles.pythonhosted.org\nregistry.npmjs.org";
+  nets.oninput = () => { values.net_allow = nets.value; };
+  const netsWrap = el("span"); netsWrap.append(nets, tag("net_allow"));
+  grid.append(el("span", "meta", "沙箱联网白名单"), netsWrap);
+  panel.append(grid, el("p", "meta", "沙箱里的命令只能经代理访问白名单里的域名；连到别的域名时代理当场问你，命令等你答复。审批时点“始终允许”会把域名加进你的个人设置。"), el("p", "meta","权限模式在每条对话的输入框旁边还能换（每轮生效）；规则在对话开始时拍进快照。D20 的高风险确认（删除记忆、破坏性 MCP、含私有数据后的外发、续跑重做）在全权以外的模式下都询问；全权模式同 Claude Code、Codex，不再询问，由程序放行并写审计（续跑重做不自动做，回填结果未知）。"));
   // D26：hooks 在本机以观测台的身份运行命令，不在沙箱里，所以只有平台账号能改；个人设置里不生效。
   panel.append(el("h3", "", "Hooks"), el("p", "meta", "在固定时刻运行本机命令：用户提交（UserPromptSubmit）、工具执行前（PreToolUse）、工具成功后（PostToolUse）、模型准备结束（Stop）。格式同 Claude Code 的 hooks 段；填配置原文，或相对 agent 目录的文件路径（如 hooks/hooks.json）。对话开始时读成原文拍进快照。命令不在沙箱里运行，只有平台账号能设置。"));
   const hooksBox = el("textarea"); hooksBox.rows = 3; hooksBox.style.width = "100%"; hooksBox.value = values.hooks;

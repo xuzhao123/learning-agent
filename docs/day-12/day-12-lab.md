@@ -28,10 +28,10 @@ bash(command)
 | 隔离工具 | bubblewrap + seccomp，与 Codex、Claude Code 在 Linux 上的路线相同；不需要 Docker |
 | 文件系统 | `/usr` 只读，`/etc` 只挂动态库缓存、证书、时区等，passwd/group/hosts 用生成的最小版本；`/workspace` = `.data/sandbox/<对话第一轮的检查点ID>`，同一对话的各轮续聊、续跑共用，子 agent 与回放分叉各有目录（见 3.7）；`/tmp` 是 64MB 内存盘，每次调用都是空的；最后把根目录改成只读 |
 | 看不到的 | 家目录、项目目录（默认）、`.env`、宿主机进程、宿主机的环境变量 |
-| 资源 | cgroup：内存 512M、不用 swap、CPU 100%、进程数 256（原为 64；进程数按线程算，无头 Chrome 加载一个页面就要 100 个左右，10-19 放宽）；时长跟随 `-tool-timeout`（写进工具描述与提示词）；超时用 `systemctl --user kill` 按 cgroup 杀掉 |
+| 资源 | cgroup：内存 512M、不用 swap、CPU 100%、进程数 256（原为 64；进程数按线程算，无头 Chrome 加载一个页面就要 100 个左右，10-19 放宽）；时长跟随 `-tool-timeout`（写进工具描述与提示词；10-22 起不算命令停在代理里等人批准联网的时间）；超时用 `systemctl --user kill` 按 cgroup 杀掉 |
 | 系统调用 | 纯 Go 拼出的经典 BPF：先查架构，再对黑名单返回 EPERM（没有 C 编译器，不用 libseccomp） |
 | 网络 | 沙箱只有回环接口；宿主机代理（unix socket）检查白名单、只开 80/443、拒绝解析到内网的地址，并直接连接检查过的 IP |
-| 白名单 | `-net-allow` 或观测台上点“允许”；模型只能调用 `request_network_access` 发起请求 |
+| 白名单 | `-net-allow`，观测台由设置里的 `net_allow` 与审批生成；不在白名单的域名由代理当场请人批准（10-22），模型也可以先调用 `request_network_access`；两条路都只能由人批准 |
 | 工具结果 | 退出码非 0 不算工具失败，照常交给模型；输出保留开头和结尾各 8KB（D30 起放宽到各 128KB，长输出由上下文存成文件）；被代理拒绝的主机列在 `network_denied` |
 | 运行时 | bash 不在 `repeatable` 里，不自动重做；同一批里的 bash 调用按顺序依次执行。超时或任务被停止时，沙箱把整条命令杀掉、等进程退出，再返回 `killed`（原因）与终止前的输出：后台不会还在跑，所以不记成“结果未知”（10-20 前是），但终止前做了的事可能已经生效 |
 | 浏览器 | CDP Fetch 拦截标签页的每个请求（跳转、子资源），解析到内网就让请求失败 |
@@ -84,6 +84,7 @@ put(retK, 0, 0, retAllow)
 ```go
 func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
 	// 端口 80/443？域名在白名单？解析出的地址都不是内网？
+	// 不在白名单的域名：askProxy 挂起这条连接，当场请人批准（10-22）
 	// 通过后直接连接解析出的 IP，不再让别人解析一次
 }
 ```
@@ -93,13 +94,19 @@ func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
 ### 2.4 审批
 
 ```text
-模型 request_network_access(domain, reason)
-  └ agent 打印 Network request [调用ID]: domain=… reason=…   （只是请求）
+发起（两条路，都只是请求）
+  ├ 代理 askProxy：命令连到不在白名单的域名，连接挂起；理由由程序写“沙箱里的命令要连接 host:443”
+  └ 模型 request_network_access(domain, reason)
+      └ 都进 askUser：先写审计 → network/requestApproval → 等 ≤ 4 分钟
 观测台
-  └ 网络审批卡片：允许 / 拒绝 → POST /runs/{id}/network → 对话记录里追加 allow/deny 事件
-续聊
-  └ 观测台把允许的域名作为 -net-allow 传给新的 agent 进程（子 agent 继承）
+  └ 卡片（代理发起的跟在那条 bash 后面）：允许 / 始终允许 / 拒绝 → POST /runs/{id}/network
+      ├ 对话记录追加 allow/deny 事件；“始终允许”另把域名写进个人设置 net_allow
+      └ agent 在等就当场回复：批准后加进白名单，命令接着跑
+新对话 / 续聊
+  └ 设置里的 net_allow + 本对话批准过的，作为 -net-allow 传给 agent（子 agent 继承）
 ```
+
+代理发起时要处理的几件事都在 [network.go](../../internal/sandbox/network.go) 的 `askProxy`：同一域名并发的连接只问一次；本轮里拒绝过或超时的记在 `settled`，再连直接拒绝；没有界面（命令行、队列）时不发请求，立即拒绝。等待的时间由 `paused` 累计，`execute` 到点时把它顺延，所以命令的 30 秒时限不会在人还没点的时候把命令杀掉；执行器给 bash 的单次时限相应多留一次审批的等待。
 
 审批事件追加在 `exit` 之后，所以 `canContinue` 判断“最后一个事件是不是 exit”时要跳过它们。
 
@@ -156,7 +163,7 @@ Sandbox net: deny host=example.com port=443 reason=域名不在白名单
                                                   → curl: (7) CONNECT tunnel failed, response 403
 ```
 
-工具结果里带着 `network_denied: ["example.com"]` 和提示，模型据此知道该请求批准，而不是去猜网络出了什么问题。10-21 起提示按每个主机被拒的原因写：只有“不在白名单”建议申请批准；端口不对、解析到内网或解析失败的，写明批准了也打不开。之前一律写“不在白名单”，模型会为一个 8787 端口的内网地址去申请联网，人批准了也没用。
+工具结果里带着 `network_denied: ["example.com"]` 和提示，模型据此知道该请求批准，而不是去猜网络出了什么问题。10-21 起提示按每个主机被拒的原因写：只有“不在白名单”建议申请批准；端口不对、解析到内网或解析失败的，写明批准了也打不开。之前一律写“不在白名单”，模型会为一个 8787 端口的内网地址去申请联网，人批准了也没用。10-22 起分四类：没有界面可问（建议 `request_network_access`）、人拒绝了（别再申请）、人没答复（之后批准下一轮起可用）、批准了也打不开（端口、IP 地址、内网、解析失败）。
 
 ### 3.5 在观测台审批
 
@@ -213,11 +220,30 @@ No retry […]: reason=permanent attempts=1 error=页面请求了本机或内网
 
 回放分叉用新目录这一条，只按代码确认（分叉检查点不带 `continues`），没有用真实回放运行验证。第四轮触发了上下文压缩，模型按摘要把前几轮的目标又做了一遍，这是摘要本身的行为，和本节改动无关。
 
+### 3.8 代理当场审批与“始终允许”（10-22）
+
+参考 Claude Code 的沙箱代理（见笔记 4.1）：命令连到不在白名单的域名时，不再立即拒绝、让模型去申请，而是挂起连接当场问人。用 qa 账号另起新代码的观测台，Coconut deepseek flash 真实运行，不挂工作区：
+
+| 场景 | 结果 |
+|---|---|
+| curl pypi.org，审批发出后等 40 秒才批准（超过 30 秒的命令时限） | 命令没被杀，批准后接着跑完，200，用时 43 秒；整轮 2 次模型请求（调用 bash、回答），模型不知道中间等过人。审计：program 发起、qa 经界面答复 |
+| curl registry.npmjs.org，点“始终允许” | 命令接着跑完；存档的 allow 事件带 `always`；qa 的个人设置多了 `net_allow`，设置页来源显示“你” |
+| 新对话，同一域名 + example.org 两次 | 开始事件快照 `net_allow: [registry.npmjs.org]`，第一条直接放行；example.org 发起审批、点拒绝，提示“用户拒绝了这个域名”；第三条同一域名 52 ms 被拒，没有再问 |
+| 全权模式（10-22 补，命令行） | example.org 不问直接放行，审计记 `allow_mode`；`http://169.254.169.254/` 照常拒绝（IP 地址）。同 Claude Code 的 bypassPermissions |
+| 命令行（没有界面） | 57 ms 立即拒绝，提示建议 `request_network_access`；不发请求、不多写审计（第一次实现时每次被拒都写两条审计，已改） |
+| 页面 | 无头 Chrome 打开这几条对话：卡片“命令要联网”分别显示已允许、已始终允许、已拒绝；运行中的卡片有“允许 / 始终允许 / 拒绝”，点“允许”后命令跑完；设置页显示白名单输入框；没有脚本异常 |
+
+验证后把 qa 的个人设置恢复为继承（验证前它没有个人设置），对话记录保留。终端客户端（`go run . chat`）的审批协议没变，代理发起的请求同样显示“沙箱请求访问 …”，没有单独跑。
+
 ## 4. 已知边界
 
 - 共享宿主机内核：内核漏洞可以逃出沙箱。需要 gVisor 或微虚拟机。
 - seccomp 是黑名单，不是白名单。
-- 白名单内的域名可以收发任意数据；白名单按域名放行，同一域名下的所有路径都可访问。
+- 白名单内的域名可以收发任意数据；白名单按域名放行，同一域名下的所有路径都可访问。“始终允许”让白名单只增不减，要在设置页里手动删。
+- 代理分不出是哪个沙箱连进来的：代理发起的审批挂在最近启动的那条命令下面；后台命令（D32）连网时，卡片可能跟在之后启动的前台命令后面，等待时间也会顺延那条前台命令的时限。
+- 审批超时后人再点“允许”，agent 已经不在等了：只记进对话、从下一轮起生效，本轮里这个域名按超时直接拒绝。
+- 沙箱里的无头 Chrome 一启动就在后台连 www.google.com、www.gstatic.com、clients2.google.com、update.googleapis.com 等，代理会为每个域名各问一次（每轮第一次）。实测 `--disable-background-networking` 加 puppeteer 默认的那组关闭参数仍剩 4 个域名，参数解决不了（全权模式下直接放行，不会弹）；其余模式可选的办法是 Claude Code 的拒绝名单（`deniedDomains`：名单里的直接拒绝、不问），尚未实现。
+- “始终允许”写的是个人层：以当时对这个账号生效的白名单为底追加，之后平台层再改白名单，已经有个人层白名单的账号不会跟着变（和其他设置项一样）。
 - 只有 HTTP(S) 走代理；不支持其他协议，也不提供 DNS（工具都通过代理解析）。
 - 内网判断最初只用 Go 的 `IsLoopback/IsPrivate/IsLinkLocalUnicast/IsUnspecified`，漏掉了 `100.64.0.0/10`（运营商级 NAT，阿里云元数据服务 `100.100.100.200` 就在其中）和 `198.18.0.0/15` 等特殊地址段。现在代理与浏览器共用 [netguard](../../internal/netguard/netguard.go)，按 IANA 特殊用途地址表只放行公网全局单播地址。见 [Q18](../deep-questions.md#q18)。
 - 浏览器的 Fetch 拦截挡不住 DNS 重绑定（检查时是公网、Chrome 自己解析时变成内网），也不拦截 WebSocket。浏览器没有纳入 Bash 沙箱；当前代码默认保留 Chrome 自身沙箱，显式设置 `CHROME_NO_SANDBOX=1` 才会关闭它。

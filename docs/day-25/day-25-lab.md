@@ -10,6 +10,7 @@
  → 用户规则  deny › ask › allow            -deny / -ask / -allow，或观测台设置
  → 权限模式默认  plan · ask · edit · full   -permission-mode，或输入框旁的“权限”
  → D20 高风险规则                          照常判断；full 模式由程序放行（写审计），其余模式询问
+ → 沙箱联网（不在白名单的域名）            full 模式由程序放行（写审计 allow_mode，10-22 补）；其余模式由代理当场问人
  → 确认（tool/requestApproval，只由界面上的人回答）
  → 执行（bash 在沙箱里，工作区按模式挂成可写或只读）
 ```

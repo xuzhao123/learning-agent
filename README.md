@@ -54,7 +54,7 @@ go build -o bin/learning-agent .
 
 豆包的地址有两套，不能混用：默认的 `.../api/coding/v3` 是方舟 Coding Plan 订阅入口，模型名用套餐里的 Model Name（如 `doubao-seed-2.1-pro`、`doubao-seed-2.1-lite`、`kimi-k3`、`glm-5.3`）或 `ark-code-latest`（跟随控制台“开通管理”的模型选择，切换后 3–5 分钟生效）；`.../api/v3` 是按量付费入口，模型名带日期版本号（如 `doubao-seed-2-1-pro-260628`）。方舟文档说明 `.../api/v3` 不消耗套餐额度、照按量计费，所以地址不能混用；模型名按文档用 Model Name——套餐入口实测也接受带日期版本号的旧名字，但文档没有列出，是否计入套餐以控制台用量为准。`ark-code-latest` 的响应里 `model` 是 `auto`（实测），看不出实际是哪个模型回答的，评测与归因要固定模型时选具体名字。`.env` 里的 `LLM_API_URL`、`LLM_MODEL` 会覆盖默认值，以前填过老地址老模型的要一起改掉或删掉这两行；启动输出里的 `Model: provider=ark model=... upstream=...` 可以核对实际用的地址与模型。套餐额度按 5 小时、周、月分档，用完返回 429（`hour / week / month allocated quota exceeded`），不是地址配错。
 
-方舟套餐里的模型可以换：命令行用 `-model kimi-k3`（`.env` 或环境变量里的 `LLM_MODEL` 改的是不加 `-model` 时的默认值）；观测台在新对话里先选“豆包”，旁边的第二级下拉再选具体模型，只有一个模型的供应商不显示这一级。清单在路由表 `llm.Provider.Models`，经 `GET /models` 给页面，14 个名字 2026-10-20 逐个真实调用过（含一次工具调用）。观测台以 `-model` 传给 agent，它和其他启动参数一起写进检查点，所以一条对话固定一个模型：续聊、中断续跑、归因回放和子 agent 都用同一个。上下文窗口仍取设置里的值，不随模型变；换窗口更小的模型时把设置调小。
+方舟套餐里的模型可以换：命令行用 `-model kimi-k3`（`.env` 或环境变量里的 `LLM_MODEL` 改的是不加 `-model` 时的默认值）；观测台分两级选：一级是供应商与接口（豆包、DeepSeek、DeepSeek 的 Anthropic 接口、Coconut），二级才是具体模型，只有一个模型的供应商不显示第二级。设置页的“默认值”里同样是这两级（`provider`、`model`，`model` 空表示用供应商默认值），新对话在输入框不选就用它；页面另选以页面为准。清单在路由表 `llm.Provider.Models`，经 `GET /models` 给页面，14 个名字 2026-10-20 逐个真实调用过（含一次工具调用）。观测台以 `-model` 传给 agent，它和其他启动参数一起写进检查点，所以一条对话固定一个模型：续聊、中断续跑、归因回放和子 agent 都用同一个。上下文窗口默认按模型（取路由表里这个模型核对过的输入上限），在设置里填了值就以设置里的为准，所以换窗口更小的模型时要检查这一项。
 
 默认使用原生 Tool Calling：工具定义在请求的 `tools` 字段，模型返回 `tool_calls`，回答不限制文本格式。普通任务只启用 calculator、get_current_datetime、search_notes；检索、记忆、MCP、Skills、子 agent、浏览器、DeepSeek 搜索和 Bash 按需开启。`-disallowed-tools` 去掉其中单个工具（逗号分隔，也可以去掉浏览器的 web_search 或 open_page；名字与 Claude Code 的 `--disallowed-tools` 一致，但只认工具名，按调用拦截用 `-deny` 规则）；观测台在设置里逐个开关，默认关 search_notes 和 web_search，搜索用 ds_search，打开网页用 open_page。
 
@@ -105,6 +105,7 @@ go build -o bin/learning-agent .
 | Day 38 | 影响下一步的状态收在一处 | [笔记](docs/day-38/day-38-notes.md) | [实践](docs/day-38/day-38-lab.md) | — |
 | Day 39 | 子 agent 的控制面 | [笔记](docs/day-39/day-39-notes.md) | [实践](docs/day-39/day-39-lab.md) | — |
 | Day 40 | 只追加的会话记录 | [笔记](docs/day-40/day-40-notes.md) | [实践](docs/day-40/day-40-lab.md) | — |
+| Day 41 | 实战：harness 自己实现图片输入 | [设计](docs/image-input-design.md) | [实现与验证](docs/image-input-design.md#9-实现进度) · [自用复查](docs/selfuse-review-2026-10-20.md) | — |
 | 扩展 | Agent Skills | [笔记](docs/bonus-skills/skills-notes.md) | [实践](docs/bonus-skills/skills-lab.md) | — |
 | 扩展 | 子 agent | [笔记](docs/bonus-subagents/subagents-notes.md) | [实践](docs/bonus-subagents/subagents-lab.md) | — |
 | 扩展 | 模型路由 | [笔记](docs/bonus-routing/routing-notes.md) | [实践](docs/bonus-routing/routing-lab.md) | — |
@@ -217,7 +218,7 @@ go build -o bin/learning-agent .
 | `-allow` / `-ask` / `-deny` | 空 | D25：权限规则，可重复，如 `-allow "Bash(go build *)"`、`-deny "Bash(git push *)"`、`-ask "Edit(internal/agent/**)"`；顺序 deny › ask › allow；子 agent 继承 |
 | `-hooks` | 空 | D26：生命周期 hooks 配置（Claude Code 的 hooks 格式），JSON 原文或文件路径，如 `-hooks hooks/hooks.json`；命令在宿主机上运行，只由用户提供；子 agent 继承。问题以 `/名字` 开头时按 `commands/`、工作区 `.agents/commands/` 的模板展开 |
 | `-bash-project-ro` | false | 配合 `-bash`：项目只读挂到 `/project`（`.env`、`.data`、`.git`、`bin` 除外） |
-| `-net-allow` | 空 | 配合 `-bash`：沙箱可经代理访问的域名（含子域名，可重复），由用户批准后添加 |
+| `-net-allow` | 空 | 配合 `-bash`：沙箱可经代理访问的域名（含子域名，可重复），由用户批准后添加；观测台由设置里的“沙箱联网白名单”（`net_allow`）和审批生成。不在白名单的域名，有界面时代理当场请人批准 |
 | `-browser` | false | Day 11：增加 web_search 与 open_page，用无头 Chrome 查资料；环境变量 `CHROME_PATH` 指定浏览器，系统不支持 Chrome 沙箱时设 `CHROME_NO_SANDBOX=1` |
 | `-ds-search` | false | 增加 ds_search 与 ds_fetch，调用 DeepSeek 的 Search/Fetch API（服务端执行，没有画面）；子 agent 继承。说明见 [Day 11 实践 §5](docs/day-11/day-11-lab.md#5-补充deepseek-搜索-api) |
 | `-tool-format` / `-coding-prompt` / `-todo` / `-clear-old-results` | json / default / false / false | D37 消融开关，默认值就是现在的做法：工具结果发给模型时用纯文本、编码提示词的 minimal 或 extended 写法、上下文内的 todo 清单、续聊时清理之前各轮的工具结果；见 [Day 37 实践](docs/day-37/day-37-lab.md) |
